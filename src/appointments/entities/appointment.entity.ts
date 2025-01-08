@@ -1,4 +1,13 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, OneToMany, CreateDateColumn, UpdateDateColumn, OneToOne } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  ManyToOne,
+  OneToMany,
+  CreateDateColumn,
+  UpdateDateColumn,
+  OneToOne,
+} from 'typeorm';
 import { Client } from '../../clients/entities/client.entity';
 import { User } from '../../users/entities/user.entity';
 import { Service } from '../../services/entities/service.entity';
@@ -10,13 +19,13 @@ export enum AppointmentStatus {
   PENDING = 'PENDING',
   CONFIRMED = 'CONFIRMED',
   COMPLETED = 'COMPLETED',
-  CANCELLED = 'CANCELLED'
+  CANCELLED = 'CANCELLED',
 }
 
 export enum PaymentStatus {
   PENDING = 'PENDING',
   PAID = 'PAID',
-  REFUNDED = 'REFUNDED'
+  REFUNDED = 'REFUNDED',
 }
 
 @Entity('appointments')
@@ -24,13 +33,16 @@ export class Appointment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => Client, client => client.appointments)
+  @Column({ name: 'owner_id', type: 'uuid', nullable: false })
+  ownerId: string;
+
+  @ManyToOne(() => Client, (client) => client.appointments)
   client: Client;
 
-  @ManyToOne(() => User, user => user.appointments)
+  @ManyToOne(() => User, (user) => user.appointments)
   professional: User;
 
-  @ManyToOne(() => Service, service => service.appointments)
+  @ManyToOne(() => Service, (service) => service.appointments)
   service: Service;
 
   @Column('timestamp with time zone')
@@ -39,14 +51,14 @@ export class Appointment {
   @Column({
     type: 'enum',
     enum: AppointmentStatus,
-    default: AppointmentStatus.PENDING
+    default: AppointmentStatus.PENDING,
   })
   status: AppointmentStatus;
 
   @Column({
     type: 'enum',
     enum: PaymentStatus,
-    default: PaymentStatus.PENDING
+    default: PaymentStatus.PENDING,
   })
   payment_status: PaymentStatus;
 
@@ -71,13 +83,12 @@ export class Appointment {
   })
   updated_at: Date;
 
-  @OneToOne(() => TimeBlock, timeBlock => timeBlock.appointment)
+  @OneToOne(() => TimeBlock, (timeBlock) => timeBlock.appointment)
   timeBlock: TimeBlock;
 
-  @OneToMany(() => Payment, payment => payment.appointment)
+  @OneToMany(() => Payment, (payment) => payment.appointment)
   payments: Payment[];
 
-  @OneToMany(() => Review, review => review.appointment)
+  @OneToMany(() => Review, (review) => review.appointment)
   reviews: Review[];
-
 }

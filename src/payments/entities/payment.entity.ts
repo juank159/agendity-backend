@@ -1,4 +1,11 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  ManyToOne,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Appointment } from '../../appointments/entities/appointment.entity';
 
 export enum PaymentMethod {
@@ -6,7 +13,7 @@ export enum PaymentMethod {
   CREDIT_CARD = 'CREDIT_CARD',
   DEBIT_CARD = 'DEBIT_CARD',
   TRANSFER = 'TRANSFER',
-  ONLINE = 'ONLINE'
+  ONLINE = 'ONLINE',
 }
 
 export enum PaymentStatus {
@@ -14,7 +21,7 @@ export enum PaymentStatus {
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
   REFUNDED = 'REFUNDED',
-  CANCELLED = 'CANCELLED'
+  CANCELLED = 'CANCELLED',
 }
 
 @Entity('payments')
@@ -22,7 +29,10 @@ export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => Appointment, appointment => appointment.payments)
+  @Column({ name: 'owner_id', type: 'uuid', nullable: false })
+  ownerId: string;
+
+  @ManyToOne(() => Appointment, (appointment) => appointment.payments)
   appointment: Appointment;
 
   @Column('decimal', { precision: 10, scale: 2 })
@@ -30,14 +40,14 @@ export class Payment {
 
   @Column({
     type: 'enum',
-    enum: PaymentMethod
+    enum: PaymentMethod,
   })
   payment_method: PaymentMethod;
 
   @Column({
     type: 'enum',
     enum: PaymentStatus,
-    default: PaymentStatus.PENDING
+    default: PaymentStatus.PENDING,
   })
   status: PaymentStatus;
 

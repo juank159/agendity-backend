@@ -1,4 +1,4 @@
-export interface AppointmentErrorHandlerOptions {
+export interface ErrorHandlerOptions {
   entity: 'la cita' | 'las citas';
   operation:
     | 'crear'

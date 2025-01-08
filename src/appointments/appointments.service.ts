@@ -5,29 +5,18 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Not } from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { ClientsService } from '../clients/clients.service';
 import { UsersService } from '../users/users.service';
 import { ServicesService } from '../services/services.service';
-import { User } from 'src/users/entities/user.entity';
-import { AppointmentFindOptions } from './interfaces/appointment-find-options.interface';
-import { AppointmentErrorHandlerOptions } from './interfaces/error-handler-options.interface';
+import { RELATIONS, RELATION_GROUPS } from './constants/relations.constants';
+import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 
 @Injectable()
 export class AppointmentsService {
-  private RELATIONS = {
-    default: ['client', 'professional', 'service'],
-    full: ['client', 'professional', 'service', 'service.category'],
-    minimal: ['professional', 'service'],
-  } as {
-    default: string[];
-    full: string[];
-    minimal: string[];
-  };
-
   constructor(
     @InjectRepository(Appointment)
     private readonly appointmentRepository: Repository<Appointment>,
@@ -36,10 +25,7 @@ export class AppointmentsService {
     private readonly servicesService: ServicesService,
   ) {}
 
-  private handleError(
-    error: any,
-    options: AppointmentErrorHandlerOptions,
-  ): never {
+  private handleError(error: any, options: ErrorHandlerOptions): never {
     console.error(`Error al ${options.operation} ${options.entity}:`, error);
 
     if (
@@ -50,104 +36,35 @@ export class AppointmentsService {
     }
 
     throw new InternalServerErrorException(
-      `Error al ${options.operation} ${options.entity}. ${options.detail || 'Por favor, intenta nuevamente.'}`,
+      `Error al ${options.operation} ${options.entity}. Por favor, intenta nuevamente.`,
     );
-  }
-
-  private async findAppointment(
-    options: AppointmentFindOptions,
-  ): Promise<Appointment> {
-    const {
-      id,
-      professionalId,
-      date,
-      excludeId,
-      loadRelations = true,
-    } = options;
-
-    try {
-      const queryBuilder =
-        this.appointmentRepository.createQueryBuilder('appointment');
-
-      if (loadRelations) {
-        this.RELATIONS.default.forEach((relation) => {
-          queryBuilder.leftJoinAndSelect(`appointment.${relation}`, relation);
-        });
-      }
-
-      if (id) {
-        queryBuilder.andWhere('appointment.id = :id', { id });
-      }
-
-      if (professionalId) {
-        queryBuilder.andWhere('appointment.professional.id = :professionalId', {
-          professionalId,
-        });
-      }
-
-      if (date) {
-        queryBuilder.andWhere('appointment.date = :date', { date });
-      }
-
-      if (excludeId) {
-        queryBuilder.andWhere('appointment.id != :excludeId', { excludeId });
-      }
-
-      const appointment = await queryBuilder.getOne();
-
-      if (!appointment && id) {
-        throw new NotFoundException(`Cita con ID ${id} no encontrada`);
-      }
-
-      return appointment;
-    } catch (error) {
-      this.handleError(error, {
-        entity: 'la cita',
-        operation: 'buscar',
-      });
-    }
-  }
-
-  private async checkAvailability(
-    professionalId: string,
-    date: Date,
-    excludeAppointmentId?: string,
-  ): Promise<boolean> {
-    const existingAppointment = await this.findAppointment({
-      professionalId,
-      date,
-      excludeId: excludeAppointmentId,
-      loadRelations: false,
-    });
-
-    return !existingAppointment;
   }
 
   async create(
     createAppointmentDto: CreateAppointmentDto,
+    userId: string,
   ): Promise<Appointment> {
-    const {
-      client_id,
-      professional_id,
-      service_id,
-      owner_id,
-      ...appointmentData
-    } = createAppointmentDto;
-
     try {
+      const { client_id, professional_id, service_id, ...appointmentData } =
+        createAppointmentDto;
+
       // Verificar todas las entidades necesarias
       const [client, professional, service] = await Promise.all([
-        this.clientsService.findOne(client_id),
+        this.clientsService.findOne(client_id, userId),
         this.usersService.findOne({ id: professional_id }),
-        this.servicesService.findOne(service_id, owner_id),
+        this.servicesService.findOne(service_id, userId),
       ]);
 
       // Verificar disponibilidad
-      const isAvailable = await this.checkAvailability(
-        professional_id,
-        appointmentData.date,
-      );
-      if (!isAvailable) {
+      const existingAppointment = await this.appointmentRepository.findOne({
+        where: {
+          professional: { id: professional_id },
+          date: appointmentData.date,
+          ownerId: userId,
+        },
+      });
+
+      if (existingAppointment) {
         throw new BadRequestException(
           'El profesional no está disponible en ese horario',
         );
@@ -156,8 +73,9 @@ export class AppointmentsService {
       const appointment = this.appointmentRepository.create({
         ...appointmentData,
         client,
-        professional: professional as User,
+        professional,
         service,
+        ownerId: userId,
       });
 
       return await this.appointmentRepository.save(appointment);
@@ -169,10 +87,11 @@ export class AppointmentsService {
     }
   }
 
-  async findAll(): Promise<Appointment[]> {
+  async findAll(userId: string): Promise<Appointment[]> {
     try {
       return await this.appointmentRepository.find({
-        relations: this.RELATIONS.default,
+        where: { ownerId: userId },
+        relations: RELATION_GROUPS.default,
       });
     } catch (error) {
       this.handleError(error, {
@@ -182,36 +101,53 @@ export class AppointmentsService {
     }
   }
 
-  async findOne(id: string): Promise<Appointment> {
-    return await this.findAppointment({ id });
+  async findOne(id: string, userId: string): Promise<Appointment> {
+    const appointment = await this.appointmentRepository.findOne({
+      where: { id, ownerId: userId },
+      relations: RELATION_GROUPS.default,
+    });
+
+    if (!appointment) {
+      throw new NotFoundException(`Cita con ID ${id} no encontrada`);
+    }
+
+    return appointment;
   }
 
   async update(
     id: string,
     updateAppointmentDto: UpdateAppointmentDto,
+    userId: string,
   ): Promise<Appointment> {
     try {
-      const appointment = await this.findOne(id);
+      const appointment = await this.findOne(id, userId);
 
       if (updateAppointmentDto.date) {
-        const isAvailable = await this.checkAvailability(
-          appointment.professional.id,
-          updateAppointmentDto.date,
-          id,
-        );
-        if (!isAvailable) {
+        const existingAppointment = await this.appointmentRepository
+          .createQueryBuilder('appointment')
+          .where('appointment.professional_id = :professionalId', {
+            professionalId: appointment.professional.id,
+          })
+          .andWhere('appointment.date = :date', {
+            date: updateAppointmentDto.date,
+          })
+          .andWhere('appointment.id != :id', { id })
+          .andWhere('appointment.owner_id = :ownerId', { ownerId: userId })
+          .getOne();
+
+        if (existingAppointment) {
           throw new BadRequestException(
             'El profesional no está disponible en ese horario',
           );
         }
       }
 
-      const updatedAppointment = this.appointmentRepository.create({
+      const updatedAppointment = await this.appointmentRepository.save({
         ...appointment,
         ...updateAppointmentDto,
       });
 
-      return await this.appointmentRepository.save(updatedAppointment);
+      return updatedAppointment;
     } catch (error) {
       this.handleError(error, {
         entity: 'la cita',
@@ -220,9 +156,9 @@ export class AppointmentsService {
     }
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, userId: string): Promise<void> {
     try {
-      const appointment = await this.findOne(id);
+      const appointment = await this.findOne(id, userId);
       await this.appointmentRepository.remove(appointment);
     } catch (error) {
       this.handleError(error, {
@@ -235,14 +171,16 @@ export class AppointmentsService {
   async findByProfessionalAndDate(
     professionalId: string,
     date: Date,
+    userId: string,
   ): Promise<Appointment[]> {
     try {
       return await this.appointmentRepository.find({
         where: {
           professional: { id: professionalId },
           date,
+          ownerId: userId,
         },
-        relations: ['professional', 'service'],
+        relations: RELATION_GROUPS.minimal,
       });
     } catch (error) {
       this.handleError(error, {

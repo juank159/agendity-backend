@@ -1,4 +1,11 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  ManyToOne,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Client } from '../../clients/entities/client.entity';
 import { User } from '../../users/entities/user.entity';
 import { Appointment } from '../../appointments/entities/appointment.entity';
@@ -8,13 +15,16 @@ export class Review {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => Appointment, appointment => appointment.reviews)
+  @Column({ name: 'owner_id', type: 'uuid', nullable: false })
+  ownerId: string;
+
+  @ManyToOne(() => Appointment, (appointment) => appointment.reviews)
   appointment: Appointment;
 
-  @ManyToOne(() => Client, client => client.reviews)
+  @ManyToOne(() => Client, (client) => client.reviews)
   client: Client;
 
-  @ManyToOne(() => User, user => user.reviews)
+  @ManyToOne(() => User, (user) => user.reviews)
   professional: User;
 
   @Column('int')

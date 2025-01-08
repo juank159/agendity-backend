@@ -35,7 +35,7 @@ export class UsersController {
     private readonly cloudinaryService: CloudinaryService,
   ) {}
 
-  @hasRoles(JwtRoles.Admin)
+  @hasRoles(JwtRoles.Owner)
   @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Get()
   findAll() {

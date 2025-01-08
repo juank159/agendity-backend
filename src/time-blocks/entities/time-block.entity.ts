@@ -1,37 +1,39 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn, UpdateDateColumn, OneToOne, JoinColumn } from 'typeorm';
-import { User } from '../../users/entities/user.entity';
-import { Appointment } from '../../appointments/entities/appointment.entity';
+import { BadRequestException } from '@nestjs/common';
+import { Appointment } from 'src/appointments/entities/appointment.entity';
+import { User } from 'src/users/entities/user.entity';
+import { Column, Entity, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { ERROR_MESSAGES } from '../constants/time-block.constants';
 
-@Entity('time_blocks')
+@Entity()
 export class TimeBlock {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => User, user => user.timeBlocks)
-  user: User;
-
-  @OneToOne(() => Appointment)
-  @JoinColumn()
-  appointment: Appointment;
-
-  @Column('timestamptz')
+  @Column({ type: 'timestamp' })
   start_datetime: Date;
 
-  @Column('timestamptz')
+  @Column({ type: 'timestamp' })
   end_datetime: Date;
 
-  @Column('text', { nullable: true })
+  @Column({ nullable: true })
   notes?: string;
 
-  @CreateDateColumn({
-    type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
-  created_at: Date;
+  @ManyToOne(() => User)
+  user: User;
 
-  @UpdateDateColumn({
-    type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
-  updated_at: Date;
+  @ManyToOne(() => Appointment, { nullable: true })
+  appointment?: Appointment;
+
+  static validateDateRange(start: Date, end: Date): void {
+    if (start >= end) {
+      throw new BadRequestException(ERROR_MESSAGES.INVALID_DATE_RANGE);
+    }
+  }
+
+  update(props: Partial<TimeBlock>): void {
+    if (props.start_datetime && props.end_datetime) {
+      TimeBlock.validateDateRange(props.start_datetime, props.end_datetime);
+    }
+    Object.assign(this, props);
+  }
 }

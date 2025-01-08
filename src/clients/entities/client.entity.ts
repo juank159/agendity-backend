@@ -1,7 +1,16 @@
-// src/clients/entities/client.entity.ts
-import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  OneToMany,
+  ManyToOne,
+  JoinColumn,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Appointment } from '../../appointments/entities/appointment.entity';
 import { Review } from '../../reviews/entities/review.entity';
+import { User } from '../../users/entities/user.entity';
 
 @Entity('clients')
 export class Client {
@@ -26,6 +35,9 @@ export class Client {
   @Column('text', { nullable: true })
   address?: string;
 
+  @Column('uuid', { name: 'owner_id' })
+  ownerId: string;
+
   @CreateDateColumn({
     type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',
@@ -39,6 +51,10 @@ export class Client {
   updated_at: Date;
 
   // Relaciones
+  @ManyToOne(() => User, (user) => user.clients)
+  @JoinColumn({ name: 'owner_id' })
+  owner: User;
+
   @OneToMany(() => Appointment, (appointment) => appointment.client)
   appointments: Appointment[];
 
