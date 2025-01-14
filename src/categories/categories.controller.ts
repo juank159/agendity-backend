@@ -51,7 +51,7 @@ export class CategoriesController {
     return this.categoriesService.create(createCategoryDto, user.id);
   }
 
-  @hasRoles(JwtRoles.Admin)
+  @hasRoles(JwtRoles.Owner)
   @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Get()
   @ApiOperation({ summary: 'Obtener todas las categorías' })

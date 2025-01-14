@@ -1,4 +1,13 @@
-import { IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateServiceDto {
@@ -6,7 +15,7 @@ export class CreateServiceDto {
     description: 'Nombre del servicio',
     example: 'pestañas pelo a pelo',
     required: true,
-    maxLength: 100
+    maxLength: 100,
   })
   @IsNotEmpty()
   @IsString()
@@ -17,7 +26,7 @@ export class CreateServiceDto {
     description: 'Descripción detallada del servicio',
     example: 'Pestañas pelo a pelo tecnica 3D',
     required: false,
-    nullable: true
+    nullable: true,
   })
   @IsOptional()
   @IsString()
@@ -27,7 +36,7 @@ export class CreateServiceDto {
     description: 'Precio del servicio',
     example: 35.99,
     minimum: 0,
-    required: true
+    required: true,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -38,7 +47,7 @@ export class CreateServiceDto {
     description: 'Duración del servicio en minutos',
     example: 60,
     minimum: 1,
-    required: true
+    required: true,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -49,9 +58,20 @@ export class CreateServiceDto {
     description: 'ID de la categoría a la que pertenece el servicio',
     example: 'e7cd5752-9c12-4d4b-9c9f-3c0b93b9c467',
     required: true,
-    format: 'uuid'
+    format: 'uuid',
   })
   @IsNotEmpty()
   @IsUUID()
   categoryId: string;
+
+  @ApiProperty({
+    description: 'Descripción detallada del servicio',
+    example: 'Pestañas pelo a pelo tecnica 3D',
+    required: false,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/) // Validar que sea un color hexadecimal
+  color?: string;
 }

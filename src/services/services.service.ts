@@ -104,6 +104,7 @@ export class ServicesService {
       const service = this.serviceRepository.create({
         ...createServiceDto,
         ownerId: userId,
+        color: createServiceDto.color || '#1c94f4',
       });
 
       return await this.serviceRepository.save(service);

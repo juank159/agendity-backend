@@ -75,6 +75,14 @@ export class Service {
   categoryId: string;
 
   @ApiProperty({
+    description: 'Nombre del servicio',
+    example: 'Pestañas pelo a pelo',
+    maxLength: 100,
+  })
+  @Column({ type: 'varchar', length: 100 })
+  color: string;
+
+  @ApiProperty({
     description: 'Estado del servicio',
     example: 'true',
     format: 'boolean',
