@@ -60,6 +60,7 @@ export class AuthService {
     const payload: JwtPayload = {
       id: user.id,
       name: user.name,
+      email: user.email,
       roles: user.roles.map((role) => role.name),
       tenant_id: user.tenant_id,
       owner_id: user.owner?.id,

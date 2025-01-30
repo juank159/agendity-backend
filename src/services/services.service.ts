@@ -84,6 +84,7 @@ export class ServicesService {
     userId: string,
   ): Promise<Service> {
     try {
+      // Verificar si ya existe un servicio con el mismo nombre y propietario
       const existingService = await this.findService({
         name: createServiceDto.name,
         ownerId: userId,
@@ -99,16 +100,23 @@ export class ServicesService {
         );
       }
 
+      // Validar que la categoría exista
       await this.categoriesService.findOne(createServiceDto.categoryId, userId);
 
+      // Crear el servicio con valores predeterminados para los campos opcionales
       const service = this.serviceRepository.create({
         ...createServiceDto,
         ownerId: userId,
         color: createServiceDto.color || '#1c94f4',
+        priceType: createServiceDto.priceType || 'Precio fijo',
+        onlineBooking: createServiceDto.onlineBooking ?? true,
+        deposit: createServiceDto.deposit ?? 0,
+        image: createServiceDto.image || null,
       });
 
       return await this.serviceRepository.save(service);
     } catch (error) {
+      // Manejo de errores con detalle específico
       this.handleError(error, {
         entity: 'el servicio',
         operation: 'crear',
@@ -151,44 +159,104 @@ export class ServicesService {
     }
   }
 
+  // async update(
+  //   id: string,
+  //   updateServiceDto: UpdateServiceDto,
+  //   userId: string,
+  // ): Promise<Service> {
+  //   try {
+  //     const currentService = await this.findService({ id, ownerId: userId });
+
+  //     if (updateServiceDto.categoryId) {
+  //       await this.categoriesService.findOne(
+  //         updateServiceDto.categoryId,
+  //         userId,
+  //       );
+  //     }
+
+  //     if (updateServiceDto.name) {
+  //       const existingService = await this.findService({
+  //         name: updateServiceDto.name,
+  //         ownerId: userId,
+  //         loadRelations: false,
+  //       }).catch((error) => {
+  //         if (error instanceof NotFoundException) return null;
+  //         throw error;
+  //       });
+
+  //       if (existingService && existingService.id !== id) {
+  //         throw new ConflictException(
+  //           `Ya existe un servicio con el nombre '${updateServiceDto.name}'`,
+  //         );
+  //       }
+  //     }
+
+  //     const updatedService = this.serviceRepository.create({
+  //       ...currentService,
+  //       ...updateServiceDto,
+  //     });
+
+  //     return await this.serviceRepository.save(updatedService);
+  //   } catch (error) {
+  //     this.handleError(error, {
+  //       entity: 'el servicio',
+  //       operation: 'actualizar',
+  //     });
+  //   }
+  // }
+
+  // async update(
+  //   id: string,
+  //   updateServiceDto: UpdateServiceDto,
+  //   userId: string,
+  // ): Promise<Service> {
+  //   try {
+  //     const currentService = await this.findService({ id, ownerId: userId });
+
+  //     if (updateServiceDto.categoryId) {
+  //       await this.categoriesService.findOne(
+  //         updateServiceDto.categoryId,
+  //         userId,
+  //       );
+  //       currentService.categoryId = updateServiceDto.categoryId;
+  //     }
+
+  //     const updatedService = await this.serviceRepository.save({
+  //       ...currentService,
+  //       ...updateServiceDto,
+  //     });
+
+  //     return updatedService;
+  //   } catch (error) {
+  //     this.handleError(error, {
+  //       entity: 'el servicio',
+  //       operation: 'actualizar',
+  //     });
+  //   }
+  // }
+
   async update(
     id: string,
     updateServiceDto: UpdateServiceDto,
     userId: string,
   ): Promise<Service> {
     try {
-      const currentService = await this.findService({ id, ownerId: userId });
+      let currentService = await this.findService({ id, ownerId: userId });
 
       if (updateServiceDto.categoryId) {
-        await this.categoriesService.findOne(
+        const category = await this.categoriesService.findOne(
           updateServiceDto.categoryId,
           userId,
         );
+
+        currentService = {
+          ...currentService,
+          ...updateServiceDto,
+          category, // Incluir la nueva categoría en la respuesta
+        };
       }
 
-      if (updateServiceDto.name) {
-        const existingService = await this.findService({
-          name: updateServiceDto.name,
-          ownerId: userId,
-          loadRelations: false,
-        }).catch((error) => {
-          if (error instanceof NotFoundException) return null;
-          throw error;
-        });
-
-        if (existingService && existingService.id !== id) {
-          throw new ConflictException(
-            `Ya existe un servicio con el nombre '${updateServiceDto.name}'`,
-          );
-        }
-      }
-
-      const updatedService = this.serviceRepository.create({
-        ...currentService,
-        ...updateServiceDto,
-      });
-
-      return await this.serviceRepository.save(updatedService);
+      return await this.serviceRepository.save(currentService);
     } catch (error) {
       this.handleError(error, {
         entity: 'el servicio',

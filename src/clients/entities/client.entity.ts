@@ -38,6 +38,18 @@ export class Client {
   @Column('uuid', { name: 'owner_id' })
   ownerId: string;
 
+  @Column('boolean', { default: false })
+  isFromDevice: boolean;
+
+  @Column('text', { nullable: true })
+  deviceContactId?: string;
+
+  @Column('timestamptz', { nullable: true })
+  lastVisit?: Date;
+
+  @Column('boolean', { default: true })
+  isActive: boolean;
+
   @CreateDateColumn({
     type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',

@@ -58,6 +58,19 @@ export class Service {
   price: number;
 
   @ApiProperty({
+    description: 'Tipo de precio del servicio (Fijo o Variable)',
+    example: 'Precio fijo',
+    enum: ['Precio fijo', 'Precio variable'],
+    default: 'Precio fijo',
+  })
+  @Column({
+    type: 'enum',
+    enum: ['Precio fijo', 'Precio variable'],
+    default: 'Precio fijo',
+  })
+  priceType: 'Precio fijo' | 'Precio variable';
+
+  @ApiProperty({
     description: 'Duración del servicio en minutos',
     example: 60,
     type: 'integer',
@@ -81,6 +94,36 @@ export class Service {
   })
   @Column({ type: 'varchar', length: 100 })
   color: string;
+
+  @ApiProperty({
+    description: 'URL de la imagen del servicio',
+    example: 'https://example.com/imagen.png',
+    nullable: true,
+  })
+  @Column({
+    type: 'varchar',
+    nullable: true,
+  })
+  image: string;
+
+  @ApiProperty({
+    description: 'Indica si el servicio está disponible para reservas online',
+    example: true,
+    default: false,
+  })
+  @Column({ type: 'boolean', default: false })
+  onlineBooking: boolean;
+
+  @ApiProperty({
+    description: 'Abono requerido para reservar el servicio',
+    example: 0,
+    default: 0,
+  })
+  @Column({
+    type: 'int',
+    default: 0,
+  })
+  deposit: number;
 
   @ApiProperty({
     description: 'Estado del servicio',
