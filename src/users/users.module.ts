@@ -7,9 +7,15 @@ import { AuthModule } from 'src/auth/auth.module';
 import { StaticModule } from 'src/static/static.module';
 import { Role } from 'src/roles/entities/role.entity';
 import { UsersService } from './users.service';
+import { UploadModule } from 'src/common/upload/upload.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Role]), AuthModule, StaticModule],
+  imports: [
+    TypeOrmModule.forFeature([User, Role]),
+    AuthModule,
+    StaticModule,
+    UploadModule,
+  ],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService, TypeOrmModule],

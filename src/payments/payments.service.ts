@@ -6,11 +6,12 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Payment, PaymentStatus } from './entities/payment.entity';
+import { Payment } from './entities/payment.entity';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AppointmentStatus, PaymentStatus } from '../common/enums/status.enum';
 import {
   NotificationType,
   ReceiverType,
@@ -98,6 +99,16 @@ export class PaymentsService {
       });
 
       const savedPayment = await this.paymentRepository.save(payment);
+
+      // Actualizar el estado de la cita
+      await this.appointmentsService.update(
+        appointment.id,
+        {
+          status: AppointmentStatus.CONFIRMED,
+          payment_status: PaymentStatus.COMPLETED,
+        },
+        userId,
+      );
 
       await this.sendPaymentNotification({
         receiver_id: appointment.client.id,
@@ -192,6 +203,15 @@ export class PaymentsService {
       payment.refund_reason = refundDto.refund_reason;
 
       const refundedPayment = await this.paymentRepository.save(payment);
+
+      // Actualizar el estado de la cita cuando se hace un reembolso
+      await this.appointmentsService.update(
+        payment.appointment.id,
+        {
+          payment_status: PaymentStatus.REFUNDED,
+        },
+        userId,
+      );
 
       await this.sendPaymentNotification(
         {

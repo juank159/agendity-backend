@@ -1,7 +1,7 @@
 import { PartialType } from '@nestjs/swagger';
 import { CreateAppointmentDto } from './create-appointment.dto';
 import { IsEnum, IsOptional, IsString } from 'class-validator';
-import { AppointmentStatus, PaymentStatus } from '../entities/appointment.entity';
+import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 
 export class UpdateAppointmentDto extends PartialType(CreateAppointmentDto) {
   @IsOptional()

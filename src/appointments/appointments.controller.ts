@@ -8,13 +8,9 @@ import {
   Delete,
   UseGuards,
   ParseUUIDPipe,
+  Query,
+  BadRequestException,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-} from '@nestjs/swagger';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
@@ -26,8 +22,6 @@ import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
 
-@ApiTags('Citas')
-@ApiBearerAuth()
 @Controller('appointments')
 @UseGuards(JwtAuthGuard, JwtRolesGuard)
 export class AppointmentsController {
@@ -35,71 +29,88 @@ export class AppointmentsController {
 
   @Post()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  @ApiOperation({ summary: 'Crear una nueva cita' })
-  @ApiResponse({
-    status: 201,
-    description: 'Cita creada exitosamente',
-    type: Appointment,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Datos inválidos o profesional no disponible',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Cliente, profesional o servicio no encontrado',
-  })
-  create(
+  async create(
     @Body() createAppointmentDto: CreateAppointmentDto,
     @GetUser() user: User,
   ) {
+    console.log('=== CREATE APPOINTMENT DEBUG ===');
+    console.log('Fecha recibida:', createAppointmentDto.date);
+    console.log('DTO completo:', createAppointmentDto);
+
+    // Validar formato ISO 8601
+    const date = new Date(createAppointmentDto.date);
+    if (isNaN(date.getTime())) {
+      throw new BadRequestException('Invalid date format');
+    }
+
+    console.log('Fecha parseada:', date);
     return this.appointmentsService.create(createAppointmentDto, user.id);
   }
 
   @Get()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  @ApiOperation({ summary: 'Obtener todas las citas' })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de citas del negocio',
-    type: [Appointment],
-  })
-  findAll(@GetUser() user: User) {
-    return this.appointmentsService.findAll(user.id);
+  async findAll(
+    @GetUser() user: User,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    try {
+      console.log('Received request with params:', {
+        userId: user.id,
+        startDate,
+        endDate,
+      });
+
+      let parsedStartDate: Date | undefined;
+      let parsedEndDate: Date | undefined;
+
+      if (startDate && endDate) {
+        parsedStartDate = new Date(startDate);
+        parsedEndDate = new Date(endDate);
+
+        // Validar que las fechas sean válidas
+        if (
+          isNaN(parsedStartDate.getTime()) ||
+          isNaN(parsedEndDate.getTime())
+        ) {
+          throw new BadRequestException('Fechas inválidas');
+        }
+
+        // Validar que startDate no sea mayor que endDate
+        if (parsedStartDate > parsedEndDate) {
+          throw new BadRequestException(
+            'La fecha inicial no puede ser mayor que la fecha final',
+          );
+        }
+
+        console.log('Parsed dates:', {
+          parsedStartDate,
+          parsedEndDate,
+        });
+      }
+
+      const appointments = await this.appointmentsService.findAll(
+        user.id,
+        parsedStartDate,
+        parsedEndDate,
+      );
+
+      console.log(`Returning ${appointments.length} appointments`);
+      return appointments;
+    } catch (error) {
+      console.error('Error in findAll controller:', error);
+      throw error;
+    }
   }
 
   @Get(':id')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  @ApiOperation({ summary: 'Obtener una cita por ID' })
-  @ApiResponse({
-    status: 200,
-    description: 'Cita encontrada',
-    type: Appointment,
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Cita no encontrada',
-  })
   findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
     return this.appointmentsService.findOne(id, user.id);
   }
 
   @Patch(':id')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  @ApiOperation({ summary: 'Actualizar una cita' })
-  @ApiResponse({
-    status: 200,
-    description: 'Cita actualizada',
-    type: Appointment,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Datos inválidos o profesional no disponible',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Cita no encontrada',
-  })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateAppointmentDto: UpdateAppointmentDto,
@@ -110,15 +121,6 @@ export class AppointmentsController {
 
   @Delete(':id')
   @hasRoles(JwtRoles.Owner)
-  @ApiOperation({ summary: 'Eliminar una cita' })
-  @ApiResponse({
-    status: 200,
-    description: 'Cita eliminada',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Cita no encontrada',
-  })
   remove(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
     return this.appointmentsService.remove(id, user.id);
   }

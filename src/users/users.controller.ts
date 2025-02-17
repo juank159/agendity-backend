@@ -10,9 +10,6 @@ import {
   BadRequestException,
   UseInterceptors,
   UploadedFile,
-  ParseFilePipe,
-  MaxFileSizeValidator,
-  FileTypeValidator,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
@@ -27,12 +24,13 @@ import { CloudinaryService } from 'src/static/cloudinary.service';
 import { JwtRolesGuard } from 'src/auth/jwt/jwt.roles.guard';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
+import { UploadService } from 'src/common/upload/upload.service';
 
 @Controller('users')
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
-    private readonly cloudinaryService: CloudinaryService,
+    private readonly uploadService: UploadService,
   ) {}
 
   @hasRoles(JwtRoles.Owner)
@@ -66,95 +64,47 @@ export class UsersController {
     return this.usersService.update(id, updateUserDto);
   }
 
-  @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.usersService.remove(id);
-  }
-
   @Post('image')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: './uploads', // Carpeta temporal para almacenar imágenes
-        filename: (req, file, callback) => {
-          const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-          const ext = path.extname(file.originalname);
-          callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-        },
-      }),
-      fileFilter: (req, file, callback) => {
-        if (!file.mimetype.startsWith('image/')) {
-          return callback(
-            new BadRequestException('Tipo de Imagen no Aceptada'),
-            false,
-          );
-        }
-        callback(null, true);
-      },
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async uploadImage(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('No se proporcionó ningún archivo');
-    }
-
-    const filePath = file.path;
-
-    try {
-      const response = await this.cloudinaryService.uploadImage(filePath, {
-        folder: 'ecommerce', // Carpeta en Cloudinary
-        deleteThenUpload: true, // Elimina el archivo local tras subirlo
-      });
-      return {
-        message: 'Imagen Cargada con Exito',
-        url: response.secure_url, // URL segura de la imagen en Cloudinary
-      };
-    } catch (error) {
-      throw new BadRequestException(error.message);
-    }
+    const result = await this.uploadService.uploadImage(file, {
+      folder: 'users',
+    });
+    return {
+      message: 'Imagen cargada con éxito',
+      url: result.url,
+    };
   }
 
   @Patch(':id/image')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: './uploads',
-        filename: (req, file, callback) => {
-          const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-          const ext = path.extname(file.originalname);
-          callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-        },
-      }),
-      fileFilter: (req, file, callback) => {
-        if (!file.mimetype.startsWith('image/')) {
-          return callback(
-            new BadRequestException('Tipo de archivo no Aceptado'),
-            false,
-          );
-        }
-        callback(null, true);
-      },
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async updateUserImage(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
-    if (!file) {
-      throw new BadRequestException('No se proporcionó ningún archivo');
+    try {
+      const result = await this.uploadService.uploadImage(file, {
+        folder: 'users',
+      });
+      const updatedUser = await this.usersService.updateUserImage(
+        id,
+        result.url,
+      );
+
+      return {
+        message: 'Imagen actualizada con éxito',
+        url: result.url,
+        user: updatedUser,
+      };
+    } catch (error) {
+      throw new BadRequestException(
+        `Error al actualizar imagen de usuario: ${error.message}`,
+      );
     }
+  }
 
-    const filePath = file.path;
-    const response = await this.cloudinaryService.uploadImage(filePath, {
-      folder: 'ecommerce',
-      deleteThenUpload: true,
-    });
-
-    await this.usersService.updateUserImage(id, response.secure_url);
-
-    return {
-      message: 'Imagen Actualizada con Exito',
-      url: response.secure_url,
-    };
+  @Delete(':id')
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.remove(id);
   }
 }

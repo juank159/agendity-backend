@@ -1,18 +1,24 @@
-// src/appointments/constants/relations.constants.ts
 export const RELATIONS = {
   CLIENT: 'client',
   PROFESSIONAL: 'professional',
-  SERVICE: 'service',
-  CATEGORY: 'service.category',
+  SERVICES: 'services', // Cambiado de SERVICE a SERVICES
+  CATEGORY: 'services.category', // Actualizado para reflejar la nueva estructura
 };
 
 export const RELATION_GROUPS = {
-  default: [RELATIONS.CLIENT, RELATIONS.PROFESSIONAL, RELATIONS.SERVICE],
+  default: [
+    RELATIONS.CLIENT,
+    RELATIONS.PROFESSIONAL,
+    RELATIONS.SERVICES, // Actualizado a SERVICES
+  ],
   full: [
     RELATIONS.CLIENT,
     RELATIONS.PROFESSIONAL,
-    RELATIONS.SERVICE,
+    RELATIONS.SERVICES, // Actualizado a SERVICES
     RELATIONS.CATEGORY,
   ],
-  minimal: [RELATIONS.PROFESSIONAL, RELATIONS.SERVICE],
+  minimal: [
+    RELATIONS.PROFESSIONAL,
+    RELATIONS.SERVICES, // Actualizado a SERVICES
+  ],
 };

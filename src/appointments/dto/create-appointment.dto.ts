@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsNotEmpty,
   IsUUID,
@@ -7,11 +8,10 @@ import {
   IsOptional,
   IsString,
   IsEnum,
+  IsArray,
+  ArrayMinSize,
+  IsISO8601,
 } from 'class-validator';
-import {
-  AppointmentStatus,
-  PaymentStatus,
-} from '../entities/appointment.entity';
 
 export class CreateAppointmentDto {
   @ApiProperty({
@@ -31,12 +31,12 @@ export class CreateAppointmentDto {
   professional_id: string;
 
   @ApiProperty({
-    example: '123e4567-e89b-12d3-a456-426614174000',
+    example: ['123e4567-e89b-12d3-a456-426614174000'],
     description: 'ID del servicio',
   })
-  @IsNotEmpty()
-  @IsUUID()
-  service_id: string;
+  @IsArray()
+  @IsUUID('4', { each: true })
+  service_ids: string[];
 
   @ApiProperty({
     example: '123e4567-e89b-12d3-a456-426614174000',
@@ -46,21 +46,13 @@ export class CreateAppointmentDto {
   @IsUUID()
   owner_id: string;
 
-  @ApiProperty({
-    example: '2024-12-25T14:30:00.000Z',
-    description: 'Fecha y hora de la cita',
-  })
   @IsNotEmpty()
-  @IsDateString()
-  date: Date;
-
+  @IsISO8601()
   @ApiProperty({
-    example: 100.0,
-    description: 'Precio total de la cita',
+    example: '2025-02-17T15:30:00',
+    description: 'Fecha y hora de la cita en hora local',
   })
-  @IsNotEmpty()
-  @IsNumber()
-  total_price: number;
+  date: string;
 
   @ApiProperty({
     example: 'Cliente solicita música relajante',

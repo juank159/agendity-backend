@@ -7,22 +7,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Appointment } from '../../appointments/entities/appointment.entity';
-
-export enum PaymentMethod {
-  CASH = 'CASH',
-  CREDIT_CARD = 'CREDIT_CARD',
-  DEBIT_CARD = 'DEBIT_CARD',
-  TRANSFER = 'TRANSFER',
-  ONLINE = 'ONLINE',
-}
-
-export enum PaymentStatus {
-  PENDING = 'PENDING',
-  COMPLETED = 'COMPLETED',
-  FAILED = 'FAILED',
-  REFUNDED = 'REFUNDED',
-  CANCELLED = 'CANCELLED',
-}
+import { PaymentMethod, PaymentStatus } from 'src/common/enums/status.enum';
 
 @Entity('payments')
 export class Payment {

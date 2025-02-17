@@ -1,19 +1,27 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsUUID, IsEnum, IsNumber, IsOptional, IsString, IsObject } from 'class-validator';
-import { PaymentMethod } from '../entities/payment.entity';
+import {
+  IsNotEmpty,
+  IsUUID,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsObject,
+} from 'class-validator';
+import { PaymentMethod } from 'src/common/enums/status.enum';
 
 export class CreatePaymentDto {
   @ApiProperty({
     example: '123e4567-e89b-12d3-a456-426614174000',
-    description: 'ID de la cita'
+    description: 'ID de la cita',
   })
   @IsNotEmpty()
   @IsUUID()
   appointment_id: string;
 
   @ApiProperty({
-    example: 100.50,
-    description: 'Monto del pago'
+    example: 100.5,
+    description: 'Monto del pago',
   })
   @IsNotEmpty()
   @IsNumber()
@@ -22,7 +30,7 @@ export class CreatePaymentDto {
   @ApiProperty({
     enum: PaymentMethod,
     example: PaymentMethod.CREDIT_CARD,
-    description: 'Método de pago'
+    description: 'Método de pago',
   })
   @IsNotEmpty()
   @IsEnum(PaymentMethod)
@@ -31,7 +39,7 @@ export class CreatePaymentDto {
   @ApiProperty({
     example: 'TRX123456',
     description: 'ID de transacción del procesador de pago',
-    required: false
+    required: false,
   })
   @IsOptional()
   @IsString()
@@ -40,7 +48,7 @@ export class CreatePaymentDto {
   @ApiProperty({
     example: { cardLast4: '4242', brand: 'visa' },
     description: 'Detalles adicionales del pago',
-    required: false
+    required: false,
   })
   @IsOptional()
   @IsObject()

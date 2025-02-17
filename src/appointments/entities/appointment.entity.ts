@@ -7,6 +7,9 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToOne,
+  ManyToMany,
+  JoinTable,
+  JoinColumn,
 } from 'typeorm';
 import { Client } from '../../clients/entities/client.entity';
 import { User } from '../../users/entities/user.entity';
@@ -14,19 +17,7 @@ import { Service } from '../../services/entities/service.entity';
 import { TimeBlock } from 'src/time-blocks/entities/time-block.entity';
 import { Payment } from 'src/payments/entities/payment.entity';
 import { Review } from 'src/reviews/entities/review.entity';
-
-export enum AppointmentStatus {
-  PENDING = 'PENDING',
-  CONFIRMED = 'CONFIRMED',
-  COMPLETED = 'COMPLETED',
-  CANCELLED = 'CANCELLED',
-}
-
-export enum PaymentStatus {
-  PENDING = 'PENDING',
-  PAID = 'PAID',
-  REFUNDED = 'REFUNDED',
-}
+import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 
 @Entity('appointments')
 export class Appointment {
@@ -39,18 +30,34 @@ export class Appointment {
   @ManyToOne(() => Client, (client) => client.appointments)
   client: Client;
 
+  @Column({ name: 'professional_id', type: 'uuid' })
+  professionalId: string;
+
   @ManyToOne(() => User, (user) => user.appointments)
+  @JoinColumn({ name: 'professional_id' })
   professional: User;
 
-  @ManyToOne(() => Service, (service) => service.appointments)
-  service: Service;
+  @ManyToMany(() => Service, (service) => service.appointments)
+  @JoinTable({
+    name: 'appointment_services',
+    joinColumn: {
+      name: 'appointment_id',
+      referencedColumnName: 'id',
+    },
+    inverseJoinColumn: {
+      name: 'service_id',
+      referencedColumnName: 'id',
+    },
+  })
+  services: Service[];
 
-  @Column('timestamp with time zone')
+  @Column('timestamp', { name: 'date' })
   date: Date;
 
   @Column({
     type: 'enum',
     enum: AppointmentStatus,
+    name: 'status',
     default: AppointmentStatus.PENDING,
   })
   status: AppointmentStatus;
@@ -58,29 +65,24 @@ export class Appointment {
   @Column({
     type: 'enum',
     enum: PaymentStatus,
+    name: 'payment_status',
     default: PaymentStatus.PENDING,
   })
   payment_status: PaymentStatus;
 
-  @Column('decimal', { precision: 10, scale: 2 })
+  @Column({ name: 'total_price', type: 'numeric' })
   total_price: number;
 
-  @Column('text', { nullable: true })
+  @Column('text', { nullable: true, name: 'notes' })
   notes?: string;
 
-  @Column('text', { nullable: true })
+  @Column('text', { nullable: true, name: 'cancellation_reason' })
   cancellation_reason?: string;
 
-  @CreateDateColumn({
-    type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
+  @CreateDateColumn({ name: 'created_at' })
   created_at: Date;
 
-  @UpdateDateColumn({
-    type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
+  @UpdateDateColumn({ name: 'updated_at' })
   updated_at: Date;
 
   @OneToOne(() => TimeBlock, (timeBlock) => timeBlock.appointment)

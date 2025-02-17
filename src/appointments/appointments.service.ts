@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not } from 'typeorm';
+import { Repository, Not, Between } from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
@@ -14,6 +14,7 @@ import { UsersService } from '../users/users.service';
 import { ServicesService } from '../services/services.service';
 import { RELATIONS, RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
+import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 
 @Injectable()
 export class AppointmentsService {
@@ -45,58 +46,141 @@ export class AppointmentsService {
     userId: string,
   ): Promise<Appointment> {
     try {
-      const { client_id, professional_id, service_id, ...appointmentData } =
-        createAppointmentDto;
+      console.log('Datos recibidos:', createAppointmentDto);
 
-      // Verificar todas las entidades necesarias
-      const [client, professional, service] = await Promise.all([
+      const {
+        client_id,
+        professional_id,
+        service_ids,
+        date,
+        ...appointmentData
+      } = createAppointmentDto;
+
+      const [client, professional] = await Promise.all([
         this.clientsService.findOne(client_id, userId),
         this.usersService.findOne({ id: professional_id }),
-        this.servicesService.findOne(service_id, userId),
       ]);
 
-      // Verificar disponibilidad
-      const existingAppointment = await this.appointmentRepository.findOne({
-        where: {
-          professional: { id: professional_id },
-          date: appointmentData.date,
-          ownerId: userId,
-        },
-      });
+      console.log('Cliente:', client);
+      console.log('Profesional:', professional);
 
-      if (existingAppointment) {
-        throw new BadRequestException(
-          'El profesional no está disponible en ese horario',
-        );
+      if (!client || !professional) {
+        throw new NotFoundException('Cliente o profesional no encontrado');
       }
 
-      const appointment = this.appointmentRepository.create({
-        ...appointmentData,
-        client,
-        professional,
-        service,
-        ownerId: userId,
-      });
+      const services = await Promise.all(
+        service_ids.map((id) => this.servicesService.findOne(id, userId)),
+      );
 
-      return await this.appointmentRepository.save(appointment);
+      console.log('Servicios:', services);
+
+      if (services.some((service) => !service)) {
+        throw new NotFoundException('Uno o más servicios no encontrados');
+      }
+
+      const appointmentDate = new Date(date);
+      console.log('Fecha convertida:', appointmentDate);
+
+      const existingAppointment = await this.appointmentRepository
+        .createQueryBuilder('appointment')
+        .where('appointment.professional_id = :professionalId', {
+          professionalId: professional_id,
+        })
+        .andWhere('appointment.date = :appointmentDate', {
+          appointmentDate,
+        })
+        .andWhere('appointment.ownerId = :userId', {
+          // Cambiado de owner_id a ownerId
+          userId,
+        })
+        .getOne();
+
+      if (existingAppointment) {
+        throw new BadRequestException('Horario no disponible');
+      }
+
+      const appointmentToSave = {
+        ownerId: userId, // Cambiado de owner_id a ownerId
+        professionalId: professional_id, // Cambiado a professionalId para coincidir con la entidad
+        date: new Date(createAppointmentDto.date),
+        total_price: services.reduce(
+          (sum, service) => sum + Number(service.price),
+          0,
+        ),
+        status: AppointmentStatus.PENDING,
+        payment_status: PaymentStatus.PENDING,
+        notes: appointmentData.notes || '',
+        client: client,
+        professional: professional,
+        services: services,
+      };
+
+      console.log('Objeto a guardar:', appointmentToSave);
+
+      const savedAppointment =
+        await this.appointmentRepository.save(appointmentToSave);
+      console.log('Cita guardada:', savedAppointment);
+
+      return savedAppointment;
     } catch (error) {
-      this.handleError(error, {
-        entity: 'la cita',
-        operation: 'crear',
-      });
+      console.error('Error en create:', error);
+      if (
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Error al crear la cita');
     }
   }
 
-  async findAll(userId: string): Promise<Appointment[]> {
+  async findAllByDateRange(
+    userId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<Appointment[]> {
     try {
       return await this.appointmentRepository.find({
-        where: { ownerId: userId },
-        relations: RELATION_GROUPS.default,
+        where: {
+          ownerId: userId,
+          date: Between(startDate, endDate),
+        },
+        relations: ['client', 'professional', 'services'], // Aquí también
+        order: {
+          date: 'ASC',
+        },
       });
     } catch (error) {
       this.handleError(error, {
         entity: 'las citas',
         operation: 'listar',
+        detail: 'por rango de fechas',
+      });
+    }
+  }
+
+  async findAll(
+    userId: string,
+    startDate?: Date,
+    endDate?: Date,
+  ): Promise<Appointment[]> {
+    try {
+      if (startDate && endDate) {
+        return this.findAllByDateRange(userId, startDate, endDate);
+      }
+
+      return await this.appointmentRepository.find({
+        where: { ownerId: userId },
+        relations: ['client', 'professional', 'services'], // Explícitamente definir las relaciones
+        order: {
+          date: 'ASC',
+        },
+      });
+    } catch (error) {
+      this.handleError(error, {
+        entity: 'las citas',
+        operation: 'listar',
+        detail: startDate && endDate ? 'filtrado por fechas' : 'todas',
       });
     }
   }

@@ -1,55 +1,52 @@
 // src/clients/dto/create-client.dto.ts
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsEmail,
+  IsString,
+  IsOptional,
+  Matches,
+  IsBoolean,
+  IsISO8601,
+} from 'class-validator';
 
 export class CreateClientDto {
-  @ApiProperty({
-    example: 'Juan',
-    description: 'Nombre del cliente'
-  })
-  @IsNotEmpty()
   @IsString()
   name: string;
 
-  @ApiProperty({
-    example: 'Pérez',
-    description: 'Apellido del cliente'
-  })
-  @IsNotEmpty()
   @IsString()
   lastname: string;
 
-  @ApiProperty({
-    example: 'juan.perez@example.com',
-    description: 'Correo electrónico del cliente'
-  })
-  @IsNotEmpty()
   @IsEmail()
-  email: string;
+  @IsOptional()
+  email?: string;
 
-  @ApiProperty({
-    example: '+573101234567',
-    description: 'Número de teléfono del cliente'
-  })
-  @IsNotEmpty()
   @IsString()
+  @Matches(/^\+?[\d\s-]+$/, {
+    message:
+      'El teléfono solo puede contener números, espacios, guiones y el símbolo +',
+  })
   phone: string;
 
-  @ApiProperty({
-    example: 'https://example.com/image.jpg',
-    description: 'URL de la imagen del cliente',
-    required: false
-  })
+  @IsString()
+  @IsOptional()
+  address?: string;
+
   @IsOptional()
   @IsString()
   image?: string;
 
-  @ApiProperty({
-    example: 'Calle 123 #45-67',
-    description: 'Dirección del cliente',
-    required: false
-  })
-  @IsOptional()
   @IsString()
-  address?: string;
+  @IsOptional()
+  deviceContactId?: string;
+
+  @IsString()
+  @IsOptional()
+  notes?: string;
+
+  @IsOptional()
+  @IsISO8601()
+  birthday?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  showNotes?: boolean;
 }

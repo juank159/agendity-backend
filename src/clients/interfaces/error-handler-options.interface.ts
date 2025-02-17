@@ -1,5 +1,11 @@
-export interface ErrorHandlerOptions {
-  entity: 'el cliente' | 'los clientes';
-  operation: 'crear' | 'actualizar' | 'eliminar' | 'buscar' | 'listar';
+interface ErrorHandlerOptions {
+  entity: string;
+  operation:
+    | 'crear'
+    | 'actualizar'
+    | 'eliminar'
+    | 'buscar'
+    | 'listar'
+    | 'batch'; // Agregar 'batch'
   detail?: string;
 }

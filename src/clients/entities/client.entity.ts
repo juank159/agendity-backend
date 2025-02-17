@@ -23,7 +23,7 @@ export class Client {
   @Column('text')
   lastname: string;
 
-  @Column('text', { unique: true })
+  @Column('text')
   email: string;
 
   @Column('text', { unique: true })
@@ -49,6 +49,15 @@ export class Client {
 
   @Column('boolean', { default: true })
   isActive: boolean;
+
+  @Column('text', { nullable: true })
+  notes?: string;
+
+  @Column('timestamptz', { nullable: true })
+  birthday?: Date;
+
+  @Column('boolean', { default: false })
+  showNotes: boolean;
 
   @CreateDateColumn({
     type: 'timestamptz',

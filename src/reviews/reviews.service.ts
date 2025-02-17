@@ -10,11 +10,11 @@ import { Review } from './entities/review.entity';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { UpdateReviewDto } from './dto/update-review.dto';
 import { AppointmentsService } from '../appointments/appointments.service';
-import { AppointmentStatus } from '../appointments/entities/appointment.entity';
 import { RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { ProfessionalRating } from './interfaces/professional-rating.interface';
 import { ReviewFindOptions } from './interfaces/review-find-options.interface';
+import { AppointmentStatus } from 'src/common/enums/status.enum';
 
 @Injectable()
 export class ReviewsService {

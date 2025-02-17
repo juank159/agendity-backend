@@ -5,6 +5,7 @@ import {
   ManyToOne,
   JoinColumn,
   OneToMany,
+  ManyToMany,
 } from 'typeorm';
 import { Category } from '../../categories/entities/category.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
@@ -178,6 +179,6 @@ export class Service {
   @OneToMany(() => UserService, (userService) => userService.service)
   userServices: UserService[];
 
-  @OneToMany(() => Appointment, (appointment) => appointment.service)
+  @ManyToMany(() => Appointment, (appointment) => appointment.services)
   appointments: Appointment[];
 }

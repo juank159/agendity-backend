@@ -125,8 +125,28 @@ export class UsersService {
   }
 
   async updateUserImage(userId: string, imageUrl: string): Promise<User> {
-    const user = await this.findOne({ id: userId });
-    user.image = imageUrl;
-    return this.usersRepository.save(user);
+    try {
+      const user = await this.findOne({ id: userId });
+
+      if (!user) {
+        throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+      }
+
+      const updatedUser = await this.usersRepository.save({
+        ...user,
+        image: imageUrl,
+      });
+
+      // Omitimos el password en la respuesta
+      const { password, ...userWithoutPassword } = updatedUser;
+      return userWithoutPassword as User;
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new InternalServerErrorException(
+        `Error al actualizar la imagen del usuario: ${error.message}`,
+      );
+    }
   }
 }
