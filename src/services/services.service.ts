@@ -128,7 +128,7 @@ export class ServicesService {
   async findAll(userId: string): Promise<Service[]> {
     try {
       return await this.serviceRepository.find({
-        where: { ownerId: userId },
+        where: { ownerId: userId, isActive: true },
         relations: RELATION_GROUPS.default,
       });
     } catch (error) {
@@ -158,82 +158,6 @@ export class ServicesService {
       });
     }
   }
-
-  // async update(
-  //   id: string,
-  //   updateServiceDto: UpdateServiceDto,
-  //   userId: string,
-  // ): Promise<Service> {
-  //   try {
-  //     const currentService = await this.findService({ id, ownerId: userId });
-
-  //     if (updateServiceDto.categoryId) {
-  //       await this.categoriesService.findOne(
-  //         updateServiceDto.categoryId,
-  //         userId,
-  //       );
-  //     }
-
-  //     if (updateServiceDto.name) {
-  //       const existingService = await this.findService({
-  //         name: updateServiceDto.name,
-  //         ownerId: userId,
-  //         loadRelations: false,
-  //       }).catch((error) => {
-  //         if (error instanceof NotFoundException) return null;
-  //         throw error;
-  //       });
-
-  //       if (existingService && existingService.id !== id) {
-  //         throw new ConflictException(
-  //           `Ya existe un servicio con el nombre '${updateServiceDto.name}'`,
-  //         );
-  //       }
-  //     }
-
-  //     const updatedService = this.serviceRepository.create({
-  //       ...currentService,
-  //       ...updateServiceDto,
-  //     });
-
-  //     return await this.serviceRepository.save(updatedService);
-  //   } catch (error) {
-  //     this.handleError(error, {
-  //       entity: 'el servicio',
-  //       operation: 'actualizar',
-  //     });
-  //   }
-  // }
-
-  // async update(
-  //   id: string,
-  //   updateServiceDto: UpdateServiceDto,
-  //   userId: string,
-  // ): Promise<Service> {
-  //   try {
-  //     const currentService = await this.findService({ id, ownerId: userId });
-
-  //     if (updateServiceDto.categoryId) {
-  //       await this.categoriesService.findOne(
-  //         updateServiceDto.categoryId,
-  //         userId,
-  //       );
-  //       currentService.categoryId = updateServiceDto.categoryId;
-  //     }
-
-  //     const updatedService = await this.serviceRepository.save({
-  //       ...currentService,
-  //       ...updateServiceDto,
-  //     });
-
-  //     return updatedService;
-  //   } catch (error) {
-  //     this.handleError(error, {
-  //       entity: 'el servicio',
-  //       operation: 'actualizar',
-  //     });
-  //   }
-  // }
 
   async update(
     id: string,

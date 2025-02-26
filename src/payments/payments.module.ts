@@ -5,15 +5,18 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
 import { AppointmentsModule } from 'src/appointments/appointments.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Payment } from './entities/payment.entity';
+import { CustomPaymentMethod } from './entities/custom-payment-method.entity';
+import { CustomPaymentMethodsController } from './custom-payment-methods.controller';
+import { CustomPaymentMethodsService } from './custom-payment-methods.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Payment]),
+    TypeOrmModule.forFeature([Payment, CustomPaymentMethod]),
     AppointmentsModule,
-    NotificationsModule
+    NotificationsModule,
   ],
-  controllers: [PaymentsController],
-  providers: [PaymentsService],
-  exports: [PaymentsService]
+  controllers: [PaymentsController, CustomPaymentMethodsController],
+  providers: [PaymentsService, CustomPaymentMethodsService],
+  exports: [PaymentsService, CustomPaymentMethodsService],
 })
 export class PaymentsModule {}
