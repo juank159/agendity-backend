@@ -10,6 +10,7 @@ import {
   ParseUUIDPipe,
   Query,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
@@ -26,6 +27,7 @@ import { AppointmentReminderService } from './appointment-reminder.service';
 @Controller('appointments')
 @UseGuards(JwtAuthGuard, JwtRolesGuard)
 export class AppointmentsController {
+  private readonly logger = new Logger(AppointmentsController.name);
   constructor(
     private readonly appointmentsService: AppointmentsService,
     private readonly appointmentReminderService: AppointmentReminderService,
@@ -120,6 +122,14 @@ export class AppointmentsController {
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
     return this.appointmentsService.findOne(id, user.id);
+  }
+
+  @Get('check-reminders')
+  @UseGuards(JwtAuthGuard)
+  async checkReminders(@GetUser() user: User) {
+    this.logger.log(`Manual reminder check requested by user ${user.id}`);
+    await this.appointmentReminderService.checkAndScheduleReminders();
+    return { message: 'Reminder check completed' };
   }
 
   @Patch(':id')

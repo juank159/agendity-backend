@@ -53,6 +53,31 @@ export class WhatsappService {
     }
   }
 
+  private formatPhoneNumber(phone: string): string {
+    // Eliminar espacios, guiones y paréntesis
+    let cleanNumber = phone.replace(/[\s\-()]/g, '');
+
+    // Si comienza con '+', eliminar el '+'
+    if (cleanNumber.startsWith('+')) {
+      cleanNumber = cleanNumber.substring(1);
+      return cleanNumber; // Ya incluye código de país
+    }
+
+    // Si comienza con '57', asumimos que ya tiene código de país
+    if (cleanNumber.startsWith('57') && cleanNumber.length >= 11) {
+      return cleanNumber;
+    }
+
+    // Los números colombianos típicamente tienen 10 dígitos
+    // Si solo tiene 10 dígitos, agregamos el código de país '57'
+    if (cleanNumber.length === 10) {
+      return `57${cleanNumber}`;
+    }
+
+    // Si nada de lo anterior aplica, devolvemos el número limpio
+    return cleanNumber;
+  }
+
   // Encontrar configuración por ownerId
   async findByOwnerId(ownerId: string): Promise<WhatsappConfiguration> {
     const config = await this.whatsappConfigRepository.findOne({
@@ -122,9 +147,11 @@ export class WhatsappService {
       const encodedMessage = encodeURIComponent(message);
 
       // Formatear el número del cliente (eliminar '+' si existe)
-      const formattedPhone = phoneNumber.startsWith('+')
-        ? phoneNumber.substring(1)
-        : phoneNumber;
+      //   const formattedPhone = phoneNumber.startsWith('+')
+      //     ? phoneNumber.substring(1)
+      //     : phoneNumber;
+
+      const formattedPhone = this.formatPhoneNumber(phoneNumber);
 
       // Construir URL de CallMeBot
       const apiUrl = `https://api.callmebot.com/whatsapp.php?phone=${config.phoneNumber}&text=${encodedMessage}&apikey=${config.apiKey}`;
