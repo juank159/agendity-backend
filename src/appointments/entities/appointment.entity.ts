@@ -85,6 +85,15 @@ export class Appointment {
   @UpdateDateColumn({ name: 'updated_at' })
   updated_at: Date;
 
+  @Column('boolean', { default: false, name: 'reminder_sent' })
+  reminderSent: boolean;
+
+  @Column('timestamptz', { nullable: true, name: 'reminder_sent_at' })
+  reminderSentAt: Date;
+
+  @Column('boolean', { default: true, name: 'send_reminder' })
+  sendReminder: boolean;
+
   @OneToOne(() => TimeBlock, (timeBlock) => timeBlock.appointment)
   timeBlock: TimeBlock;
 

@@ -70,6 +70,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   JoinColumn,
+  BeforeInsert,
 } from 'typeorm';
 import { Appointment } from '../../appointments/entities/appointment.entity';
 import { PaymentMethod, PaymentStatus } from 'src/common/enums/status.enum';
@@ -122,15 +123,33 @@ export class Payment {
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   refund_amount?: number;
 
-  @CreateDateColumn({
+  @Column({
+    name: 'created_at',
     type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP',
+    //default: () => 'CURRENT_TIMESTAMP',
   })
   created_at: Date;
 
-  @UpdateDateColumn({
+  @Column({
+    name: 'updated_at',
     type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP',
+    //default: () => 'CURRENT_TIMESTAMP',
   })
   updated_at: Date;
+
+  @BeforeInsert()
+  setCreatedAt() {
+    // Crear fecha explícitamente en tu zona horaria
+    const now = new Date();
+
+    // Opción 1: Ajustar la hora para tu zona horaria (GMT-6)
+    // Importante: cambia el -6 a tu offset correcto
+    const offset = -6; // Para GMT-6
+    const utcDate = new Date(now.getTime() + offset * 60 * 60 * 1000);
+
+    this.created_at = utcDate;
+    this.updated_at = utcDate;
+
+    console.log('Fecha configurada en entidad:', this.created_at);
+  }
 }

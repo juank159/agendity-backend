@@ -12,7 +12,6 @@ import {
   BadRequestException,
   Query,
 } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from 'src/auth/jwt/jwt.auth.guard';
 import { GetUser } from 'src/common/decorators/get-user.decorator';
 import { Client } from './entities/client.entity';
@@ -26,7 +25,6 @@ import { UploadService } from 'src/common/upload/upload.service';
 import { diskStorage } from 'multer';
 import * as path from 'path';
 
-@ApiTags('Clientes')
 @Controller('clients')
 export class ClientsController {
   constructor(
@@ -36,24 +34,12 @@ export class ClientsController {
 
   @Post()
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Crear un nuevo cliente' })
-  @ApiResponse({
-    status: 201,
-    description: 'Cliente creado exitosamente',
-    type: Client,
-  })
   create(@Body() createClientDto: CreateClientDto, @GetUser() user: User) {
     return this.clientsService.create(createClientDto, user.id);
   }
 
   @Post('batch')
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Importar múltiples clientes' })
-  @ApiResponse({
-    status: 201,
-    description: 'Clientes importados exitosamente',
-    type: [Client],
-  })
   async importBatch(
     @Body() importClientsDto: ImportClientsDto,
     @GetUser() user: User,
@@ -63,21 +49,18 @@ export class ClientsController {
 
   @Get()
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Obtener todos los clientes' })
   findAll(@GetUser() user: User) {
     return this.clientsService.findAll(user.id);
   }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Obtener un cliente por ID' })
   findOne(@Param('id') id: string, @GetUser() user: User) {
     return this.clientsService.findOne(id, user.id);
   }
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Actualizar un cliente' })
   update(
     @Param('id') id: string,
     @Body() updateClientDto: UpdateClientDto,
@@ -88,7 +71,6 @@ export class ClientsController {
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Eliminar un cliente' })
   remove(@Param('id') id: string, @GetUser() user: User) {
     return this.clientsService.remove(id, user.id);
   }

@@ -16,6 +16,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
 import { TimeBlocksModule } from './time-blocks/time-blocks.module';
 import { DataSourceConfig } from './config/data.postgres.source';
+import { WhatsappModule } from './whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -55,6 +56,8 @@ import { DataSourceConfig } from './config/data.postgres.source';
     PaymentsModule,
 
     TimeBlocksModule,
+
+    WhatsappModule,
   ],
 })
 export class AppModule {}

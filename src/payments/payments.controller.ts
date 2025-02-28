@@ -294,4 +294,10 @@ export class PaymentsController {
       limit,
     );
   }
+
+  @Get('diagnose-timezone')
+  @UseGuards(JwtAuthGuard)
+  async diagnoseTimezone(@GetUser('id') userId: string) {
+    return this.paymentsService.diagnoseTimezoneProblem();
+  }
 }

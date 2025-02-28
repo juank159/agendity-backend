@@ -21,11 +21,15 @@ import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
+import { AppointmentReminderService } from './appointment-reminder.service';
 
 @Controller('appointments')
 @UseGuards(JwtAuthGuard, JwtRolesGuard)
 export class AppointmentsController {
-  constructor(private readonly appointmentsService: AppointmentsService) {}
+  constructor(
+    private readonly appointmentsService: AppointmentsService,
+    private readonly appointmentReminderService: AppointmentReminderService,
+  ) {}
 
   @Post()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
@@ -45,6 +49,15 @@ export class AppointmentsController {
 
     console.log('Fecha parseada:', date);
     return this.appointmentsService.create(createAppointmentDto, user.id);
+  }
+
+  @Post(':id/send-reminder')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  async sendAppointmentReminder(
+    @Param('id') id: string,
+    @GetUser() user: User,
+  ) {
+    return this.appointmentReminderService.sendManualReminder(id, user.id);
   }
 
   @Get()

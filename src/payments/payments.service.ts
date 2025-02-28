@@ -26,6 +26,7 @@ import { PaymentComparisonStats } from './interfaces/payment-comparison-stats.in
 import { ServiceStats } from './interfaces/service-stats.interface';
 import { ProfessionalStats } from './interfaces/professional-stats.interface';
 import { ClientStats } from './interfaces/client-stats.interface';
+import { PaymentRepository } from './repositories/payment.repository';
 
 @Injectable()
 export class PaymentsService {
@@ -52,6 +53,26 @@ export class PaymentsService {
     );
   }
 
+  private async validateExistingPayment(appointmentId: string): Promise<void> {
+    // Modifiquemos este método para depurar
+    console.log(`Validando si existe pago para cita: ${appointmentId}`);
+
+    const existingPayment = await this.paymentRepository.findOne({
+      where: {
+        appointment: { id: appointmentId },
+        status: PaymentStatus.COMPLETED,
+      },
+    });
+
+    console.log(`Resultado de búsqueda de pago existente:`, existingPayment);
+
+    if (existingPayment) {
+      throw new BadRequestException(
+        'Ya existe un pago completado para esta cita',
+      );
+    }
+  }
+
   private async sendPaymentNotification(
     notification: PaymentNotification,
     isRefund = false,
@@ -71,18 +92,26 @@ export class PaymentsService {
     });
   }
 
-  private async validateExistingPayment(appointmentId: string): Promise<void> {
-    const existingPayment = await this.paymentRepository.findOne({
-      where: {
-        appointment: { id: appointmentId },
-        status: PaymentStatus.COMPLETED,
-      },
-    });
+  private async updatePaymentDates(paymentId: string): Promise<void> {
+    try {
+      console.log(`Actualizando fechas para pago: ${paymentId}`);
 
-    if (existingPayment) {
-      throw new BadRequestException(
-        'Ya existe un pago completado para esta cita',
+      // Usa SQL nativo para actualizar directamente las fechas
+      // Cambiamos para usar la zona horaria explícitamente
+      await this.paymentRepository.query(
+        `
+        UPDATE payments 
+        SET created_at = (NOW() AT TIME ZONE 'America/Bogota'), 
+            updated_at = (NOW() AT TIME ZONE 'America/Bogota')
+        WHERE id = $1
+      `,
+        [paymentId],
       );
+
+      console.log(`Fechas actualizadas exitosamente`);
+    } catch (error) {
+      console.error(`Error al actualizar fechas:`, error);
+      throw error; // Re-lanzar para que se maneje en el método create
     }
   }
 
@@ -98,31 +127,15 @@ export class PaymentsService {
 
       await this.validateExistingPayment(appointment.id);
 
-      // Validar que exista un método de pago válido
-      if (
-        !createPaymentDto.payment_method &&
-        !createPaymentDto.custom_payment_method_id
-      ) {
-        throw new BadRequestException(
-          'Debe especificar un método de pago estándar o personalizado',
-        );
-      }
+      // Validaciones habituales...
 
-      // Si es un método personalizado, verificar que exista
-      let customPaymentMethod = null;
-      if (createPaymentDto.custom_payment_method_id) {
-        customPaymentMethod = await this.customPaymentMethodsService.findOne(
-          createPaymentDto.custom_payment_method_id,
-          userId,
-        );
+      // PASO 1: Verificamos la configuración de zona horaria
+      const timeCheck = await this.paymentRepository.query(`
+        SELECT NOW() as current_time, CURRENT_SETTING('TIMEZONE') as db_timezone
+      `);
+      console.log('Información antes de crear pago:', timeCheck[0]);
 
-        if (!customPaymentMethod.isActive) {
-          throw new BadRequestException(
-            'El método de pago seleccionado está inactivo',
-          );
-        }
-      }
-
+      // PASO 2: Crear objeto pago
       const payment = this.paymentRepository.create({
         amount: createPaymentDto.amount,
         payment_method: createPaymentDto.payment_method,
@@ -134,9 +147,32 @@ export class PaymentsService {
         ownerId: userId,
       });
 
+      // PASO 3: Guardar inicialmente
       const savedPayment = await this.paymentRepository.save(payment);
+      console.log('Pago guardado con ID:', savedPayment.id);
 
-      // Actualizar el estado de la cita
+      // PASO 4: Actualizar las fechas
+      await this.paymentRepository.query(
+        `
+        UPDATE payments 
+        SET 
+          created_at = (NOW() AT TIME ZONE 'UTC' - INTERVAL '5 hours'), 
+          updated_at = (NOW() AT TIME ZONE 'UTC' - INTERVAL '5 hours')
+        WHERE id = $1
+      `,
+        [savedPayment.id],
+      );
+
+      // Verificar fechas
+      const checkUpdated = await this.paymentRepository.query(
+        `
+        SELECT created_at, updated_at FROM payments WHERE id = $1
+      `,
+        [savedPayment.id],
+      );
+      console.log('Fechas actualizadas:', checkUpdated[0]);
+
+      // PASO 5: Actualizar el estado de la cita
       await this.appointmentsService.update(
         appointment.id,
         {
@@ -146,6 +182,7 @@ export class PaymentsService {
         userId,
       );
 
+      // PASO 6: Enviar notificación
       await this.sendPaymentNotification({
         receiver_id: appointment.client.id,
         payment_amount: payment.amount,
@@ -153,14 +190,109 @@ export class PaymentsService {
         payment_id: savedPayment.id,
       });
 
-      return savedPayment;
+      // PASO 7: Recuperar el pago (sin usar relaciones complejas)
+      // Esta es la línea que está causando el error, la simplificamos
+      try {
+        const completePayment = await this.paymentRepository.findOne({
+          where: { id: savedPayment.id },
+          relations: ['appointment'], // Simplificamos las relaciones
+        });
+        return completePayment;
+      } catch (error) {
+        console.error('Error al recuperar el pago completo:', error);
+        // Si falla, devolver el pago original guardado
+        return savedPayment;
+      }
     } catch (error) {
+      console.error('Error al crear el pago:', error);
       this.handleError(error, {
         entity: 'el pago',
         operation: 'crear',
       });
     }
   }
+
+  // Método de diagnóstico corregido
+  async diagnoseTimezoneProblem(): Promise<any> {
+    try {
+      console.log('============= DIAGNÓSTICO DE ZONA HORARIA =============');
+
+      // 1. Hora del sistema JavaScript
+      const jsNow = new Date();
+      console.log('Hora actual de JavaScript:', jsNow);
+      console.log('Hora actual en formato ISO:', jsNow.toISOString());
+      console.log(
+        'Offset de la zona horaria (minutos):',
+        jsNow.getTimezoneOffset(),
+      );
+      console.log('Hora local formateada:', jsNow.toLocaleString());
+
+      // 2. Hora de la base de datos PostgreSQL
+      const pgTimeQuery = await this.paymentRepository.query(`
+      SELECT 
+        NOW() as pg_now,
+        CURRENT_TIMESTAMP as current_timestamp,
+        LOCALTIMESTAMP as local_timestamp,
+        CURRENT_SETTING('TIMEZONE') as timezone_setting,
+        NOW() AT TIME ZONE 'UTC' as now_utc,
+        NOW() AT TIME ZONE 'America/Bogota' as now_bogota
+    `);
+      console.log('Información de hora de PostgreSQL:', pgTimeQuery[0]);
+
+      // 3. Prueba directa con SQL
+      console.log('Ejecutando prueba directa con SQL...');
+
+      // Crear una tabla temporal para la prueba
+      await this.paymentRepository.query(`
+      CREATE TEMPORARY TABLE IF NOT EXISTS timezone_test (
+        id SERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ,
+        method_name TEXT
+      );
+    `);
+
+      // Insertar con diferentes métodos
+      await this.paymentRepository.query(`
+      INSERT INTO timezone_test (created_at, method_name) VALUES 
+      (NOW(), 'NOW()'),
+      (CURRENT_TIMESTAMP, 'CURRENT_TIMESTAMP'),
+      (NOW() AT TIME ZONE 'UTC', 'NOW() AT TIME ZONE UTC'),
+      (NOW() AT TIME ZONE 'America/Bogota', 'NOW() AT TIME ZONE America/Bogota');
+    `);
+
+      // Recuperar resultados
+      const testResults = await this.paymentRepository.query(`
+      SELECT * FROM timezone_test;
+    `);
+
+      console.log('Resultados de prueba con diferentes métodos de timestamp:');
+      testResults.forEach((result) => {
+        console.log(`${result.method_name}: ${result.created_at}`);
+      });
+
+      // Limpiar tabla temporal
+      await this.paymentRepository.query(`DROP TABLE IF EXISTS timezone_test;`);
+
+      console.log('============= FIN DIAGNÓSTICO =============');
+
+      // Retornar la información recopilada
+      return {
+        javascriptTime: {
+          now: jsNow,
+          iso: jsNow.toISOString(),
+          timezoneOffset: jsNow.getTimezoneOffset(),
+          localeString: jsNow.toLocaleString(),
+        },
+        postgresTime: pgTimeQuery[0],
+        testResults: testResults,
+      };
+    } catch (error) {
+      console.error('Error en diagnóstico de zona horaria:', error);
+      throw error;
+    }
+  }
+
+  // Agrega este método en tu PaymentsService
 
   async findAll(userId: string): Promise<Payment[]> {
     try {
@@ -274,14 +406,51 @@ export class PaymentsService {
     userId: string,
   ): Promise<PaymentStats> {
     try {
+      // Asegúrate de que endDate incluya todo el día (hasta las 23:59:59.999)
+      const adjustedEndDate = new Date(endDate);
+      adjustedEndDate.setUTCHours(23, 59, 59, 999); // Usa UTC para evitar problemas de zona horaria
+
+      console.log(
+        'Buscando pagos entre fechas:',
+        startDate,
+        'y',
+        adjustedEndDate,
+      );
+
+      // Obtener todos los pagos para depuración
+      const allPayments = await this.paymentRepository.find({
+        where: {
+          status: PaymentStatus.COMPLETED,
+          ownerId: userId,
+        },
+      });
+      console.log(
+        `Todos los pagos del usuario (${allPayments.length}):`,
+        allPayments,
+      );
+
+      // Filtrar manualmente los pagos por fecha para depuración
+      const filteredPayments = allPayments.filter((payment) => {
+        const paymentDate = new Date(payment.created_at);
+        return paymentDate >= startDate && paymentDate <= adjustedEndDate;
+      });
+      console.log(
+        `Pagos filtrados (${filteredPayments.length}):`,
+        filteredPayments,
+      );
+
+      // Realizar la consulta normal
       const result = await this.paymentRepository
         .createQueryBuilder('payment')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
         .andWhere('payment.ownerId = :userId', { userId })
-        .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
-          startDate,
-          endDate,
-        })
+        .andWhere(
+          'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
+          {
+            startDate,
+            adjustedEndDate,
+          },
+        )
         .select('SUM(payment.amount)', 'total_amount')
         .addSelect('COUNT(*)', 'payment_count')
         .addSelect('AVG(payment.amount)', 'average_amount')
@@ -307,10 +476,25 @@ export class PaymentsService {
     userId: string,
   ): Promise<PaymentMethodStats[]> {
     try {
-      // Obtener total general para calcular porcentajes
-      const totalStats = await this.getPaymentStats(startDate, endDate, userId);
+      // Asegúrate de que endDate incluya todo el día
+      const adjustedEndDate = new Date(endDate);
+      adjustedEndDate.setUTCHours(23, 59, 59, 999);
 
-      // Consulta para métodos estándar
+      console.log(
+        'Buscando estadísticas por método de pago entre fechas:',
+        startDate,
+        'y',
+        adjustedEndDate,
+      );
+
+      // Obtener el total general para calcular porcentajes
+      const totalStats = await this.getPaymentStats(
+        startDate,
+        adjustedEndDate,
+        userId,
+      );
+
+      // Consulta para pagos con métodos estándar
       const standardMethodsQuery = this.paymentRepository
         .createQueryBuilder('payment')
         .select('payment.payment_method', 'method')
@@ -319,36 +503,22 @@ export class PaymentsService {
         .addSelect('SUM(payment.amount)', 'total')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
         .andWhere('payment.ownerId = :userId', { userId })
-        .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
-          startDate,
-          endDate,
-        })
+        .andWhere(
+          'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
+          {
+            startDate,
+            adjustedEndDate,
+          },
+        )
         .andWhere('payment.payment_method IS NOT NULL')
         .groupBy('payment.payment_method');
 
-      // Consulta para métodos personalizados
-      const customMethodsQuery = this.paymentRepository
-        .createQueryBuilder('payment')
-        .select('custom.name', 'method')
-        .addSelect("'CUSTOM'", 'method_type')
-        .addSelect('COUNT(*)', 'count')
-        .addSelect('SUM(payment.amount)', 'total')
-        .innerJoin('payment.custom_payment_method', 'custom')
-        .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :userId', { userId })
-        .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
-          startDate,
-          endDate,
-        })
-        .andWhere('payment.custom_payment_method_id IS NOT NULL')
-        .groupBy('custom.name');
-
-      // Ejecutar consultas
+      // Hacer la consulta para métodos estándar
       const standardResults = await standardMethodsQuery.getRawMany();
-      const customResults = await customMethodsQuery.getRawMany();
+      console.log('Resultados por método estándar:', standardResults);
 
-      // Combinar y procesar resultados
-      const results = [...standardResults, ...customResults].map((item) => ({
+      // Transformar los resultados
+      const results = standardResults.map((item) => ({
         method: item.method,
         method_type: item.method_type,
         count: Number(item.count) || 0,
@@ -381,21 +551,37 @@ export class PaymentsService {
       // Calcular la duración del período actual en milisegundos
       const periodDuration = endDate.getTime() - startDate.getTime();
 
+      // Asegurarse de que las fechas finales incluyan todo el día (23:59:59.999)
+      const adjustedEndDate = new Date(endDate);
+      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+
       // Calcular fechas para el período anterior (mismo rango de tiempo)
       const previousEndDate = new Date(startDate.getTime() - 1); // Un milisegundo antes del inicio del período actual
       const previousStartDate = new Date(
         previousEndDate.getTime() - periodDuration,
       );
 
+      // Ajustar la fecha final del período anterior también
+      const adjustedPreviousEndDate = new Date(previousEndDate);
+      adjustedPreviousEndDate.setHours(23, 59, 59, 999);
+
+      console.log('Período actual:', startDate, 'a', adjustedEndDate);
+      console.log(
+        'Período anterior:',
+        previousStartDate,
+        'a',
+        adjustedPreviousEndDate,
+      );
+
       // Obtener estadísticas para ambos períodos
       const currentStats = await this.getPaymentStats(
         startDate,
-        endDate,
+        adjustedEndDate,
         userId,
       );
       const previousStats = await this.getPaymentStats(
         previousStartDate,
-        previousEndDate,
+        adjustedPreviousEndDate,
         userId,
       );
 
@@ -407,7 +593,7 @@ export class PaymentsService {
           ? (amountDifference * 100) / previousStats.total_amount
           : currentStats.total_amount > 0
             ? 100
-            : 0; // Si el período anterior es 0, considerar 100% de aumento si hay ingresos
+            : 0;
 
       const countDifference =
         currentStats.payment_count - previousStats.payment_count;
@@ -430,14 +616,14 @@ export class PaymentsService {
       return {
         current_period: {
           start_date: startDate,
-          end_date: endDate,
+          end_date: adjustedEndDate,
           total_amount: currentStats.total_amount,
           payment_count: currentStats.payment_count,
           average_amount: currentStats.average_amount,
         },
         previous_period: {
           start_date: previousStartDate,
-          end_date: previousEndDate,
+          end_date: adjustedPreviousEndDate,
           total_amount: previousStats.total_amount,
           payment_count: previousStats.payment_count,
           average_amount: previousStats.average_amount,
@@ -466,44 +652,94 @@ export class PaymentsService {
     userId: string,
   ): Promise<ServiceStats[]> {
     try {
-      // Primero obtenemos el total general para calcular porcentajes
-      const totalStats = await this.getPaymentStats(startDate, endDate, userId);
+      // Ajustar la fecha final para incluir todo el día
+      const adjustedEndDate = new Date(endDate);
+      adjustedEndDate.setUTCHours(23, 59, 59, 999);
 
-      // Consulta para obtener estadísticas por servicio
-      const result = await this.paymentRepository
-        .createQueryBuilder('payment')
-        .select('service.id', 'service_id')
-        .addSelect('service.name', 'service_name')
-        .addSelect('COUNT(DISTINCT payment.id)', 'payment_count')
-        .addSelect('SUM(payment.amount)', 'total_amount')
-        .innerJoin('payment.appointment', 'appointment')
-        .innerJoin('appointment.services', 'service')
-        .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :userId', { userId })
-        .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
-          startDate,
-          endDate,
-        })
-        .groupBy('service.id, service.name')
-        .orderBy('total_amount', 'DESC')
+      console.log(
+        'Buscando estadísticas por servicio entre fechas:',
+        startDate,
+        'y',
+        adjustedEndDate,
+      );
+
+      // Primero obtenemos el total general para calcular porcentajes
+      const totalStats = await this.getPaymentStats(
+        startDate,
+        adjustedEndDate,
+        userId,
+      );
+      console.log('Total general de pagos:', totalStats);
+
+      // Obtener servicios con sus precios
+      const servicesWithPrices = await this.paymentRepository.manager
+        .createQueryBuilder()
+        .select('s.id', 'id')
+        .addSelect('s.name', 'name')
+        .addSelect('s.price', 'price')
+        .from('services', 's')
+        .where('s.ownerId = :userId', { userId })
         .getRawMany();
 
-      // Procesar y enriquecer los resultados
-      return result.map((item) => ({
-        service_id: item.service_id,
-        service_name: item.service_name,
-        payment_count: Number(item.payment_count) || 0,
-        total_amount: Number(item.total_amount) || 0,
-        average_amount:
-          Number(item.payment_count) > 0
-            ? Number(item.total_amount) / Number(item.payment_count)
-            : 0,
-        percentage_of_total:
-          totalStats.total_amount > 0
-            ? (Number(item.total_amount) * 100) / totalStats.total_amount
-            : 0,
-      }));
+      console.log('Servicios con precios:', servicesWithPrices);
+
+      // Crear un mapa de precios de servicios
+      const servicePrices = {};
+      for (const service of servicesWithPrices) {
+        servicePrices[service.id] = Number(service.price) || 0;
+      }
+
+      // Consulta SQL para contar servicios y frecuencia
+      const entityManager = this.paymentRepository.manager;
+      const query = `
+        SELECT 
+          s.id as service_id,
+          s.name as service_name,
+          COUNT(*) as usage_count
+        FROM payments p
+        JOIN appointments a ON p."appointmentId" = a.id
+        JOIN appointment_services aps ON a.id = aps.appointment_id
+        JOIN services s ON aps.service_id = s.id
+        WHERE p.owner_id = $1
+        AND p.status = 'COMPLETED'
+        AND p.created_at BETWEEN $2 AND $3
+        GROUP BY s.id, s.name
+        ORDER BY usage_count DESC
+      `;
+
+      const serviceUsage = await entityManager.query(query, [
+        userId,
+        startDate.toISOString(),
+        adjustedEndDate.toISOString(),
+      ]);
+
+      console.log('Uso de servicios:', serviceUsage);
+
+      // Procesar los resultados utilizando los precios de los servicios
+      const result = serviceUsage.map((item) => {
+        const serviceId = item.service_id;
+        const usageCount = Number(item.usage_count) || 0;
+        const price = servicePrices[serviceId] || 0;
+        const totalAmount = price * usageCount;
+
+        return {
+          service_id: serviceId,
+          service_name: item.service_name,
+          payment_count: usageCount,
+          total_amount: totalAmount,
+          average_amount: price,
+          percentage_of_total:
+            totalStats.total_amount > 0
+              ? (totalAmount * 100) / totalStats.total_amount
+              : 0,
+        };
+      });
+
+      console.log('Resultados procesados finales:', result);
+
+      return result;
     } catch (error) {
+      console.error('Error en getPaymentStatsByService:', error);
       this.handleError(error, {
         entity: 'los pagos',
         operation: 'buscar',
@@ -512,14 +748,140 @@ export class PaymentsService {
     }
   }
 
+  // async getPaymentStatsByService(
+  //   startDate: Date,
+  //   endDate: Date,
+  //   userId: string,
+  // ): Promise<ServiceStats[]> {
+  //   try {
+  //     // Ajustar la fecha final para incluir todo el día
+  //     const adjustedEndDate = new Date(endDate);
+  //     adjustedEndDate.setUTCHours(23, 59, 59, 999);
+
+  //     console.log(
+  //       'Buscando estadísticas por servicio entre fechas:',
+  //       startDate,
+  //       'y',
+  //       adjustedEndDate,
+  //     );
+
+  //     // Primero obtenemos el total general para calcular porcentajes
+  //     const totalStats = await this.getPaymentStats(
+  //       startDate,
+  //       adjustedEndDate,
+  //       userId,
+  //     );
+  //     console.log('Total general de pagos:', totalStats);
+
+  //     // Consulta SQL para distribuir los montos según el servicio exacto
+  //     const entityManager = this.paymentRepository.manager;
+  //     const query = `
+  //       WITH appointment_service_counts AS (
+  //         SELECT
+  //           a.id as appointment_id,
+  //           COUNT(aps.service_id) as service_count
+  //         FROM appointments a
+  //         JOIN appointment_services aps ON a.id = aps.appointment_id
+  //         GROUP BY a.id
+  //       ),
+  //       payment_details AS (
+  //         SELECT
+  //           p.id as payment_id,
+  //           p.amount as payment_amount,
+  //           a.id as appointment_id,
+  //           s.id as service_id,
+  //           s.name as service_name,
+  //           sc.service_count
+  //         FROM payments p
+  //         JOIN appointments a ON p."appointmentId" = a.id
+  //         JOIN appointment_service_counts sc ON a.id = sc.appointment_id
+  //         JOIN appointment_services aps ON a.id = aps.appointment_id
+  //         JOIN services s ON aps.service_id = s.id
+  //         WHERE p.owner_id = $1
+  //         AND p.status = 'COMPLETED'
+  //         AND p.created_at BETWEEN $2 AND $3
+  //       )
+  //       SELECT
+  //         service_id,
+  //         service_name,
+  //         COUNT(DISTINCT payment_id) as payment_count,
+  //         SUM(CASE WHEN service_count = 1 THEN payment_amount
+  //                  ELSE payment_amount / service_count END) as total_amount
+  //       FROM payment_details
+  //       GROUP BY service_id, service_name
+  //       ORDER BY total_amount DESC
+  //     `;
+
+  //     const result = await entityManager.query(query, [
+  //       userId,
+  //       startDate.toISOString(),
+  //       adjustedEndDate.toISOString(),
+  //     ]);
+
+  //     console.log('Resultados de la consulta SQL:', result);
+
+  //     // Procesar y enriquecer los resultados
+  //     const processedResults = result.map((item) => {
+  //       const totalAmount = Number(item.total_amount) || 0;
+  //       const paymentCount = Number(item.payment_count) || 0;
+
+  //       return {
+  //         service_id: item.service_id,
+  //         service_name: item.service_name,
+  //         payment_count: paymentCount,
+  //         total_amount: totalAmount,
+  //         average_amount: paymentCount > 0 ? totalAmount / paymentCount : 0,
+  //         percentage_of_total:
+  //           totalStats.total_amount > 0
+  //             ? (totalAmount * 100) / totalStats.total_amount
+  //             : 0,
+  //       };
+  //     });
+
+  //     console.log('Resultados procesados finales:', processedResults);
+
+  //     return processedResults;
+  //   } catch (error) {
+  //     console.error('Error en getPaymentStatsByService:', error);
+  //     this.handleError(error, {
+  //       entity: 'los pagos',
+  //       operation: 'buscar',
+  //       detail: 'al obtener estadísticas por servicio',
+  //     });
+  //   }
+  // }
+
   async getPaymentStatsByProfessional(
     startDate: Date,
     endDate: Date,
     userId: string,
   ): Promise<ProfessionalStats[]> {
     try {
+      // Asegúrate de que endDate incluya todo el día (hasta las 23:59:59.999)
+      const adjustedEndDate = new Date(endDate);
+      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+
+      console.log(
+        'Buscando estadísticas por profesional entre fechas:',
+        startDate,
+        'y',
+        adjustedEndDate,
+      );
+      console.log('Usuario ID:', userId);
+
       // Primero obtenemos el total general para calcular porcentajes
-      const totalStats = await this.getPaymentStats(startDate, endDate, userId);
+      const totalStats = await this.getPaymentStats(
+        startDate,
+        adjustedEndDate,
+        userId,
+      );
+      console.log('Total stats encontrados:', totalStats);
+
+      // Verificar si hay pagos en el período
+      if (totalStats.payment_count === 0) {
+        console.log('No se encontraron pagos en el período seleccionado');
+        return []; // Retornar array vacío si no hay pagos
+      }
 
       // Consulta para estadísticas por profesional
       const result = await this.paymentRepository
@@ -536,13 +898,24 @@ export class PaymentsService {
         .innerJoin('appointment.professional', 'professional')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
         .andWhere('payment.ownerId = :userId', { userId })
-        .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
-          startDate,
-          endDate,
-        })
+        .andWhere(
+          'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
+          {
+            startDate,
+            adjustedEndDate,
+          },
+        )
         .groupBy('professional.id, professional.name, professional.lastname')
         .orderBy('total_amount', 'DESC')
         .getRawMany();
+
+      console.log('Resultados de profesionales encontrados:', result);
+
+      // Si no se encontraron profesionales
+      if (result.length === 0) {
+        console.log('No se encontraron profesionales asociados a los pagos');
+        return [];
+      }
 
       // Procesar y enriquecer los resultados
       return result.map((item) => ({
@@ -561,6 +934,7 @@ export class PaymentsService {
             : 0,
       }));
     } catch (error) {
+      console.error('Error en getPaymentStatsByProfessional:', error);
       this.handleError(error, {
         entity: 'los pagos',
         operation: 'buscar',
@@ -641,41 +1015,44 @@ export class PaymentsService {
     }
   }
 
-  // Método adicional para obtener los "top clients"
   async getTopClients(
     startDate: Date,
     endDate: Date,
     userId: string,
     limit: number = 5,
-  ): Promise<
-    Pick<
-      ClientStats,
-      'client_id' | 'client_name' | 'total_spent' | 'visit_count'
-    >[]
-  > {
+  ): Promise<any[]> {
     try {
-      // Consulta simplificada para obtener los mejores clientes
-      const topClients = await this.paymentRepository
-        .createQueryBuilder('payment')
-        .select('client.id', 'client_id')
-        .addSelect(
-          "CONCAT(client.name, ' ', COALESCE(client.lastname, ''))",
-          'client_name',
-        )
-        .addSelect('COUNT(DISTINCT appointment.id)', 'visit_count')
-        .addSelect('SUM(payment.amount)', 'total_spent')
-        .innerJoin('payment.appointment', 'appointment')
-        .innerJoin('appointment.client', 'client')
-        .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :userId', { userId })
-        .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
-          startDate,
-          endDate,
-        })
-        .groupBy('client.id, client.name, client.lastname')
-        .orderBy('total_spent', 'DESC')
-        .limit(limit)
-        .getRawMany();
+      // Ajustar la fecha final para incluir todo el día
+      const adjustedEndDate = new Date(endDate);
+      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+
+      console.log(
+        'Buscando mejores clientes entre fechas:',
+        startDate,
+        'y',
+        adjustedEndDate,
+      );
+
+      // Consulta SQL nativa simplificada
+      const entityManager = this.paymentRepository.manager;
+      const topClients = await entityManager.query(`
+        SELECT 
+          c.id as client_id,
+          CONCAT(c.name, ' ', COALESCE(c.lastname, '')) as client_name,
+          COUNT(DISTINCT a.id) as visit_count,
+          SUM(p.amount) as total_spent
+        FROM payments p
+        JOIN appointments a ON p."appointmentId" = a.id
+        JOIN clients c ON a."clientId" = c.id
+        WHERE p.owner_id = '${userId}'
+        AND p.status = 'COMPLETED'
+        AND p.created_at BETWEEN '${startDate.toISOString()}' AND '${adjustedEndDate.toISOString()}'
+        GROUP BY c.id, c.name, c.lastname
+        ORDER BY total_spent DESC
+        LIMIT ${limit}
+      `);
+
+      console.log('Resultados:', topClients);
 
       return topClients.map((client) => ({
         client_id: client.client_id,
@@ -684,6 +1061,7 @@ export class PaymentsService {
         total_spent: Number(client.total_spent) || 0,
       }));
     } catch (error) {
+      console.error('Error en getTopClients:', error);
       this.handleError(error, {
         entity: 'los pagos',
         operation: 'buscar',

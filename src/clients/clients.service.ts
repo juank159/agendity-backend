@@ -281,35 +281,6 @@ export class ClientsService {
     }
   }
 
-  // async update(
-  //   id: string,
-  //   updateClientDto: UpdateClientDto,
-  //   userId: string,
-  // ): Promise<Client> {
-  //   try {
-  //     console.log('Updating client with data:', {
-  //       id,
-  //       updateClientDto,
-  //       userId,
-  //     });
-  //     const currentClient = await this.findClient({ id, ownerId: userId });
-  //     await this.validateUniqueFields(updateClientDto, id);
-
-  //     const updatedClient = this.clientRepository.create({
-  //       ...currentClient,
-  //       ...updateClientDto,
-  //     });
-
-  //     console.log('Final update object:', updatedClient);
-  //     return await this.clientRepository.save(updatedClient);
-  //   } catch (error) {
-  //     this.handleError(error, {
-  //       entity: 'el cliente',
-  //       operation: 'actualizar',
-  //     });
-  //   }
-  // }
-
   async update(
     id: string,
     updateClientDto: UpdateClientDto,
