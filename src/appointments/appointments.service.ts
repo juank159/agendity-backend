@@ -15,6 +15,7 @@ import { ServicesService } from '../services/services.service';
 import { RELATIONS, RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
 export class AppointmentsService {
@@ -24,6 +25,7 @@ export class AppointmentsService {
     private readonly clientsService: ClientsService,
     private readonly usersService: UsersService,
     private readonly servicesService: ServicesService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
@@ -120,6 +122,9 @@ export class AppointmentsService {
       const savedAppointment =
         await this.appointmentRepository.save(appointmentToSave);
       console.log('Cita guardada:', savedAppointment);
+
+      // Emitir el evento después de guardar la cita
+      this.eventEmitter.emit('appointment.created', savedAppointment);
 
       return savedAppointment;
     } catch (error) {

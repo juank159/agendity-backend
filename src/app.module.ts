@@ -17,6 +17,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { TimeBlocksModule } from './time-blocks/time-blocks.module';
 import { DataSourceConfig } from './config/data.postgres.source';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
@@ -28,6 +29,8 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
       ...DataSourceConfig,
       autoLoadEntities: true,
     }),
+
+    EventEmitterModule.forRoot(),
 
     UsersModule,
 

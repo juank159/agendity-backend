@@ -9,6 +9,7 @@ import { CronJob } from 'cron';
 import { format, subHours, isAfter, addHours, subMinutes } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { AppointmentStatus } from '../common/enums/status.enum';
+import { OnEvent } from '@nestjs/event-emitter';
 
 @Injectable()
 export class AppointmentReminderService {
@@ -24,6 +25,34 @@ export class AppointmentReminderService {
 
     // Inicializar recordatorios al inicio de la aplicación
     this.initializeReminders();
+  }
+
+  @OnEvent('appointment.created')
+  async handleAppointmentCreatedEvent(appointment: Appointment) {
+    this.logger.log(
+      `Nueva cita creada, programando recordatorio: ${appointment.id}`,
+    );
+
+    try {
+      // Asegurarse de que la cita tiene todas las relaciones necesarias
+      if (!appointment.client || !appointment.services) {
+        const fullAppointment = await this.appointmentsRepository.findOne({
+          where: { id: appointment.id },
+          relations: ['client', 'professional', 'services'],
+        });
+
+        if (fullAppointment) {
+          await this.scheduleAppointmentReminder(fullAppointment);
+        }
+      } else {
+        await this.scheduleAppointmentReminder(appointment);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Error al programar recordatorio para nueva cita ${appointment.id}: ${error.message}`,
+        error.stack,
+      );
+    }
   }
 
   // Se ejecuta cuando arranca la aplicación
@@ -116,9 +145,12 @@ export class AppointmentReminderService {
     }
   }
 
-  // Programa un recordatorio para una cita específica
-  private async scheduleAppointmentReminder(appointment: Appointment) {
+  // src/appointments/appointment-reminder.service.ts
+  // Modifica el método scheduleAppointmentReminder
+
+  public async scheduleAppointmentReminder(appointment: Appointment) {
     try {
+      // Verificar si la cita tiene cliente
       if (!appointment.client?.phone) {
         this.logger.warn(
           `Cannot schedule reminder for appointment ${appointment.id}: Client has no phone number`,
@@ -129,48 +161,48 @@ export class AppointmentReminderService {
       // Calcular la hora del recordatorio (5 minutos antes de la cita)
       const appointmentDate = new Date(appointment.date);
       const reminderTime = subMinutes(appointmentDate, 5);
+      const now = new Date();
 
-      this.logger.log(`Cita programada para: ${appointmentDate.toISOString()}`);
       this.logger.log(
-        `Recordatorio programado para: ${reminderTime.toISOString()}`,
+        `Cita ${appointment.id} programada para: ${appointmentDate.toISOString()}`,
       );
-      this.logger.log(`Hora actual: ${new Date().toISOString()}`);
+      this.logger.log(
+        `Recordatorio para cita ${appointment.id} calculado para: ${reminderTime.toISOString()}`,
+      );
+      this.logger.log(`Hora actual: ${now.toISOString()}`);
 
-      // Si la hora del recordatorio ya pasó, verificar si podemos enviar ahora
-      if (isAfter(new Date(), reminderTime)) {
-        this.logger.log(
-          `Hora de recordatorio ya pasó para cita ${appointment.id}, verificando si podemos enviar ahora`,
+      // VERIFICACIÓN CRÍTICA: Si el recordatorio ya pasó o está muy cerca
+      if (
+        reminderTime <= now ||
+        reminderTime.getTime() - now.getTime() < 60000
+      ) {
+        // Menos de 1 minuto en el futuro
+        this.logger.warn(
+          `El tiempo de recordatorio para la cita ${appointment.id} ya pasó o está muy cerca (${reminderTime.toISOString()}). No se programará un cron job.`,
         );
 
-        const now = new Date();
-        const diffMs = appointmentDate.getTime() - now.getTime();
-        const diffMinutes = Math.floor(diffMs / 60000);
-
-        this.logger.log(`La cita es en ${diffMinutes} minutos`);
-
-        // Si faltan menos de 15 minutos pero más de 0 para la cita, enviar ahora
-        if (diffMinutes <= 15 && diffMinutes > 0) {
+        // Si la cita aún no ha ocurrido, enviar el recordatorio inmediatamente
+        if (appointmentDate > now) {
           this.logger.log(
-            `Enviando recordatorio inmediatamente para cita ${appointment.id}`,
+            `Enviando recordatorio inmediatamente para cita próxima ${appointment.id}`,
           );
           await this.sendReminderNow(appointment);
         } else {
           this.logger.log(
-            `No se enviará recordatorio para cita ${appointment.id}: ${diffMinutes} minutos restantes`,
+            `La cita ${appointment.id} ya pasó, no se enviará recordatorio`,
           );
         }
+
         return;
       }
 
-      // Crear un nombre único para este trabajo
+      // Verificamos si ya existe un trabajo programado para esta cita
       const jobName = `reminder-${appointment.id}`;
-
-      // Verificar si ya existe un trabajo programado para esta cita
       try {
         const existingJob = this.schedulerRegistry.getCronJob(jobName);
         if (existingJob) {
           this.logger.log(
-            `Recordatorio ya programado para cita ${appointment.id}`,
+            `Recordatorio ya programado para cita ${appointment.id}, se omitirá`,
           );
           return;
         }
@@ -181,31 +213,64 @@ export class AppointmentReminderService {
         );
       }
 
-      // Crear un nuevo trabajo programado
-      const job = new CronJob(reminderTime, async () => {
-        this.logger.log(
-          `Ejecutando recordatorio programado para cita ${appointment.id}`,
-        );
-        await this.sendReminderNow(appointment);
-
-        // Eliminar el trabajo después de su ejecución
-        try {
-          this.schedulerRegistry.deleteCronJob(jobName);
-          this.logger.log(`Trabajo ${jobName} eliminado después de ejecución`);
-        } catch (e) {
-          this.logger.error(
-            `Error removiendo trabajo ${jobName}: ${e.message}`,
-          );
-        }
-      });
-
-      // Registrar y comenzar el trabajo
-      this.schedulerRegistry.addCronJob(jobName, job);
-      job.start();
+      // Crear una expresión cron usando la fecha específica
+      // Formato: segundo minuto hora día mes día-semana
+      const cronExpression = `${reminderTime.getSeconds()} ${reminderTime.getMinutes()} ${reminderTime.getHours()} ${reminderTime.getDate()} ${reminderTime.getMonth() + 1} *`;
 
       this.logger.log(
-        `Recordatorio programado para cita ${appointment.id} a las ${reminderTime.toISOString()}`,
+        `Expresión cron generada para cita ${appointment.id}: ${cronExpression}`,
       );
+
+      try {
+        // Crear un nuevo trabajo cron usando la expresión
+        const job = new CronJob(cronExpression, async () => {
+          this.logger.log(
+            `Ejecutando recordatorio programado para cita ${appointment.id}`,
+          );
+          await this.sendReminderNow(appointment);
+
+          // Eliminar el trabajo después de su ejecución
+          try {
+            this.schedulerRegistry.deleteCronJob(jobName);
+            this.logger.log(
+              `Trabajo ${jobName} eliminado después de ejecución`,
+            );
+          } catch (e) {
+            this.logger.error(
+              `Error removiendo trabajo ${jobName}: ${e.message}`,
+            );
+          }
+        });
+
+        // Registrar y comenzar el trabajo
+        this.schedulerRegistry.addCronJob(jobName, job);
+        job.start();
+
+        this.logger.log(
+          `Recordatorio programado para cita ${appointment.id} a las ${reminderTime.toISOString()}`,
+        );
+      } catch (cronError) {
+        this.logger.error(
+          `Error al programar cron job para cita ${appointment.id}: ${cronError.message}`,
+        );
+
+        // Si hay un error al programar el cron pero la cita aún está en el futuro,
+        // intentamos un enfoque alternativo con setTimeout
+        if (appointmentDate > now) {
+          const timeUntilReminder = reminderTime.getTime() - now.getTime();
+          if (timeUntilReminder > 0) {
+            this.logger.log(
+              `Usando setTimeout como alternativa para cita ${appointment.id}`,
+            );
+            setTimeout(async () => {
+              this.logger.log(
+                `Ejecutando recordatorio con setTimeout para cita ${appointment.id}`,
+              );
+              await this.sendReminderNow(appointment);
+            }, timeUntilReminder);
+          }
+        }
+      }
     } catch (error) {
       this.logger.error(
         `Error programando recordatorio para cita ${appointment.id}: ${error.message}`,
