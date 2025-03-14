@@ -75,9 +75,27 @@ export class User {
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 
+  @Column({ default: false })
+  is_google_account: boolean;
+
   // Tenant ID para multitenant
   @Column({ name: 'tenant_id', type: 'uuid', nullable: true })
   tenant_id: string;
+
+  @Column({ default: false })
+  is_email_verified: boolean;
+
+  @Column({ nullable: true })
+  verification_code: string;
+
+  @Column({ nullable: true })
+  reset_password_code: string;
+
+  @Column({ nullable: true })
+  reset_password_expires: Date;
+
+  @Column({ nullable: true })
+  verification_code_expires: Date;
 
   // Relación Owner-Employee
   @ManyToOne(() => User, (user) => user.employees, {

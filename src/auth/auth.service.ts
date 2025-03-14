@@ -14,14 +14,25 @@ import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from './interfaces';
 import { Role } from 'src/roles/entities/role.entity';
 import { v4 as uuid } from 'uuid';
+import { OAuth2Client } from 'google-auth-library';
+import { ConfigService } from '@nestjs/config';
+import { EmailService } from 'src/email/email.service';
 
 @Injectable()
 export class AuthService {
+  private googleClient: OAuth2Client;
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
     @InjectRepository(Role) private readonly roleRepository: Repository<Role>,
     private readonly jwtService: JwtService,
-  ) {}
+    private readonly configService: ConfigService,
+    private readonly emailService: EmailService,
+  ) {
+    // Inicializar cliente de Google con tu Client ID
+    this.googleClient = new OAuth2Client(
+      this.configService.get('GOOGLE_CLIENT_ID'),
+    );
+  }
 
   private async validateUserExists(email: string, phone: string) {
     const existingUser = await this.userRepository.findOne({
@@ -152,6 +163,180 @@ export class AuthService {
     }
   }
 
+  async googleLogin(token: string) {
+    try {
+      // Verificar el token con Google
+      const ticket = await this.googleClient.verifyIdToken({
+        idToken: token,
+        audience: this.configService.get('GOOGLE_CLIENT_ID'),
+      });
+
+      const payload = ticket.getPayload();
+
+      if (!payload) {
+        throw new UnauthorizedException('Token inválido');
+      }
+
+      const { email, name, picture } = payload;
+
+      // Buscar si el usuario ya existe
+      let user = await this.userRepository.findOne({
+        where: { email },
+        relations: ['roles', 'owner'],
+      });
+
+      if (!user) {
+        // Si no existe, crear nuevo usuario
+        const ownerRole = await this.getRole('Owner');
+
+        // Extraer nombre y apellido del nombre completo
+        const [firstName, ...lastNameParts] = name.split(' ');
+        const lastName = lastNameParts.join(' ');
+
+        user = this.userRepository.create({
+          email,
+          name: firstName || '',
+          lastname: lastName || '',
+          phone: '', // Este campo podría ser solicitado después
+          password: await this.hashPassword(uuid()), // Generar contraseña aleatoria
+          is_google_account: true,
+          is_email_verified: true, // Los emails de Google ya están verificados
+          roles: [ownerRole],
+          tenant_id: uuid(),
+        });
+
+        await this.userRepository.save(user);
+      }
+
+      // Generar token y retornar usuario
+      return {
+        user: this.transformUserResponse(user),
+        token: this.generateToken(user),
+      };
+    } catch (error) {
+      throw new UnauthorizedException(
+        'Error en autenticación con Google: ' + error.message,
+      );
+    }
+  }
+
+  async generateVerificationCode(email: string) {
+    try {
+      const user = await this.userRepository.findOne({ where: { email } });
+
+      if (!user) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      // Generar código de 6 dígitos
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+      // Establecer expiración (10 minutos)
+      const expires = new Date();
+      expires.setMinutes(expires.getMinutes() + 10);
+
+      // Guardar en el usuario
+      user.verification_code = code;
+      user.verification_code_expires = expires;
+      await this.userRepository.save(user);
+
+      // Enviar email
+      const emailSent = await this.emailService.sendVerificationCode(
+        email,
+        code,
+      );
+
+      if (!emailSent) {
+        throw new InternalServerErrorException(
+          'Error al enviar el código de verificación',
+        );
+      }
+
+      return { message: 'Código de verificación enviado' };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // async verifyEmail(email: string, code: string) {
+  //   try {
+  //     const user = await this.userRepository.findOne({ where: { email } });
+
+  //     if (!user) {
+  //       throw new NotFoundException('Usuario no encontrado');
+  //     }
+
+  //     // Verificar si el código es válido y no ha expirado
+  //     if (user.verification_code !== code) {
+  //       throw new UnauthorizedException('Código de verificación inválido');
+  //     }
+
+  //     if (new Date() > user.verification_code_expires) {
+  //       throw new UnauthorizedException(
+  //         'El código de verificación ha expirado',
+  //       );
+  //     }
+
+  //     // Marcar email como verificado
+  //     user.is_email_verified = true;
+  //     user.verification_code = null;
+  //     user.verification_code_expires = null;
+  //     await this.userRepository.save(user);
+
+  //     return {
+  //       message: 'Email verificado correctamente',
+  //       is_verified: true,
+  //     };
+  //   } catch (error) {
+  //     throw error;
+  //   }
+  // }
+
+  async verifyEmail(email: string, code: string) {
+    try {
+      const user = await this.userRepository.findOne({ where: { email } });
+
+      if (!user) {
+        console.log(`Usuario no encontrado para email: ${email}`);
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      console.log(
+        `Código almacenado: ${user.verification_code}, Código ingresado: ${code}`,
+      );
+      console.log(
+        `Fecha de expiración: ${user.verification_code_expires}, Fecha actual: ${new Date()}`,
+      );
+
+      // Verificar si el código es válido y no ha expirado
+      if (user.verification_code !== code) {
+        console.log('Código inválido');
+        throw new UnauthorizedException('Código de verificación inválido');
+      }
+
+      if (new Date() > user.verification_code_expires) {
+        console.log('Código expirado');
+        throw new UnauthorizedException(
+          'El código de verificación ha expirado',
+        );
+      }
+
+      // Marcar email como verificado
+      user.is_email_verified = true;
+      user.verification_code = null;
+      user.verification_code_expires = null;
+      await this.userRepository.save(user);
+
+      return {
+        message: 'Email verificado correctamente',
+        is_verified: true,
+      };
+    } catch (error) {
+      console.error('Error en verificación de email:', error);
+      throw error;
+    }
+  }
+
   async getEmployeesByOwner(ownerId: string) {
     return await this.userRepository.find({
       where: { owner: { id: ownerId } },
@@ -177,5 +362,88 @@ export class AuthService {
 
   private getJwtToken(payload: JwtPayload): string {
     return this.jwtService.sign(payload);
+  }
+
+  async generatePasswordResetCode(email: string) {
+    try {
+      const user = await this.userRepository.findOne({ where: { email } });
+
+      if (!user) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      // Generar código de 6 dígitos
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+      // Establecer expiración (30 minutos)
+      const expires = new Date();
+      expires.setMinutes(expires.getMinutes() + 30);
+
+      // Guardar en el usuario
+      user.reset_password_code = code;
+      user.reset_password_expires = expires;
+      await this.userRepository.save(user);
+
+      // Enviar email
+      const emailSent = await this.emailService.sendPasswordResetCode(
+        email,
+        code,
+      );
+
+      if (!emailSent) {
+        throw new InternalServerErrorException(
+          'Error al enviar el código de recuperación',
+        );
+      }
+
+      return { message: 'Código de recuperación enviado' };
+    } catch (error) {
+      console.error('Error generando código de recuperación:', error);
+      throw error;
+    }
+  }
+
+  async resetPassword(email: string, code: string, newPassword: string) {
+    try {
+      const user = await this.userRepository.findOne({ where: { email } });
+
+      if (!user) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      console.log(
+        `Código almacenado: ${user.reset_password_code}, Código ingresado: ${code}`,
+      );
+      console.log(
+        `Fecha de expiración: ${user.reset_password_expires}, Fecha actual: ${new Date()}`,
+      );
+
+      // Verificar si el código es válido y no ha expirado
+      if (user.reset_password_code !== code) {
+        throw new UnauthorizedException('Código de recuperación inválido');
+      }
+
+      if (
+        !user.reset_password_expires ||
+        new Date() > user.reset_password_expires
+      ) {
+        throw new UnauthorizedException(
+          'El código de recuperación ha expirado',
+        );
+      }
+
+      // Actualizar la contraseña
+      user.password = await this.hashPassword(newPassword);
+      user.reset_password_code = null;
+      user.reset_password_expires = null;
+      await this.userRepository.save(user);
+
+      return {
+        message: 'Contraseña actualizada correctamente',
+      };
+    } catch (error) {
+      console.error('Error restableciendo contraseña:', error);
+      throw error;
+    }
   }
 }

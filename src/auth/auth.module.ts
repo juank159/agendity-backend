@@ -8,6 +8,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtStrategy } from './jwt/jwt.strategy';
 import { RolesModule } from 'src/roles/roles.module';
+import { EmailModule } from 'src/email/email.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { RolesModule } from 'src/roles/roles.module';
         signOptions: { expiresIn: '1d' },
       }),
     }),
+    EmailModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
