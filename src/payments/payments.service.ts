@@ -646,6 +646,109 @@ export class PaymentsService {
     }
   }
 
+  // RENDIMIENTO POR SERVICIO
+  // async getPaymentStatsByService(
+  //   startDate: Date,
+  //   endDate: Date,
+  //   userId: string,
+  // ): Promise<ServiceStats[]> {
+  //   try {
+  //     // Ajustar la fecha final para incluir todo el día
+  //     const adjustedEndDate = new Date(endDate);
+  //     adjustedEndDate.setUTCHours(23, 59, 59, 999);
+
+  //     console.log(
+  //       'Buscando estadísticas por servicio entre fechas:',
+  //       startDate,
+  //       'y',
+  //       adjustedEndDate,
+  //     );
+
+  //     // Primero obtenemos el total general para calcular porcentajes
+  //     const totalStats = await this.getPaymentStats(
+  //       startDate,
+  //       adjustedEndDate,
+  //       userId,
+  //     );
+  //     console.log('Total general de pagos:', totalStats);
+
+  //     // Obtener servicios con sus precios
+  //     const servicesWithPrices = await this.paymentRepository.manager
+  //       .createQueryBuilder()
+  //       .select('s.id', 'id')
+  //       .addSelect('s.name', 'name')
+  //       .addSelect('s.price', 'price')
+  //       .from('services', 's')
+  //       .where('s.ownerId = :userId', { userId })
+  //       .getRawMany();
+
+  //     console.log('Servicios con precios:', servicesWithPrices);
+
+  //     // Crear un mapa de precios de servicios
+  //     const servicePrices = {};
+  //     for (const service of servicesWithPrices) {
+  //       servicePrices[service.id] = Number(service.price) || 0;
+  //     }
+
+  //     // Consulta SQL para contar servicios y frecuencia
+  //     const entityManager = this.paymentRepository.manager;
+  //     const query = `
+  //       SELECT
+  //         s.id as service_id,
+  //         s.name as service_name,
+  //         COUNT(*) as usage_count
+  //       FROM payments p
+  //       JOIN appointments a ON p."appointmentId" = a.id
+  //       JOIN appointment_services aps ON a.id = aps.appointment_id
+  //       JOIN services s ON aps.service_id = s.id
+  //       WHERE p.owner_id = $1
+  //       AND p.status = 'COMPLETED'
+  //       AND p.created_at BETWEEN $2 AND $3
+  //       GROUP BY s.id, s.name
+  //       ORDER BY usage_count DESC
+  //     `;
+
+  //     const serviceUsage = await entityManager.query(query, [
+  //       userId,
+  //       startDate.toISOString(),
+  //       adjustedEndDate.toISOString(),
+  //     ]);
+
+  //     console.log('Uso de servicios:', serviceUsage);
+
+  //     // Procesar los resultados utilizando los precios de los servicios
+  //     const result = serviceUsage.map((item) => {
+  //       const serviceId = item.service_id;
+  //       const usageCount = Number(item.usage_count) || 0;
+  //       const price = servicePrices[serviceId] || 0;
+  //       const totalAmount = price * usageCount;
+
+  //       return {
+  //         service_id: serviceId,
+  //         service_name: item.service_name,
+  //         payment_count: usageCount,
+  //         total_amount: totalAmount,
+  //         average_amount: price,
+  //         percentage_of_total:
+  //           totalStats.total_amount > 0
+  //             ? (totalAmount * 100) / totalStats.total_amount
+  //             : 0,
+  //       };
+  //     });
+
+  //     console.log('Resultados procesados finales:', result);
+
+  //     return result;
+  //   } catch (error) {
+  //     console.error('Error en getPaymentStatsByService:', error);
+  //     this.handleError(error, {
+  //       entity: 'los pagos',
+  //       operation: 'buscar',
+  //       detail: 'al obtener estadísticas por servicio',
+  //     });
+  //   }
+  // }
+
   async getPaymentStatsByService(
     startDate: Date,
     endDate: Date,
@@ -663,7 +766,7 @@ export class PaymentsService {
         adjustedEndDate,
       );
 
-      // Primero obtenemos el total general para calcular porcentajes
+      // Obtener el total general de pagos para calcular porcentajes
       const totalStats = await this.getPaymentStats(
         startDate,
         adjustedEndDate,
@@ -735,7 +838,12 @@ export class PaymentsService {
         };
       });
 
-      console.log('Resultados procesados finales:', result);
+      console.log('Resultados procesados finales (antes de ordenar):', result);
+
+      // Ordenar por total_amount de mayor a menor
+      result.sort((a, b) => b.total_amount - a.total_amount);
+
+      console.log('Resultados ordenados finales:', result);
 
       return result;
     } catch (error) {
@@ -747,109 +855,6 @@ export class PaymentsService {
       });
     }
   }
-
-  // async getPaymentStatsByService(
-  //   startDate: Date,
-  //   endDate: Date,
-  //   userId: string,
-  // ): Promise<ServiceStats[]> {
-  //   try {
-  //     // Ajustar la fecha final para incluir todo el día
-  //     const adjustedEndDate = new Date(endDate);
-  //     adjustedEndDate.setUTCHours(23, 59, 59, 999);
-
-  //     console.log(
-  //       'Buscando estadísticas por servicio entre fechas:',
-  //       startDate,
-  //       'y',
-  //       adjustedEndDate,
-  //     );
-
-  //     // Primero obtenemos el total general para calcular porcentajes
-  //     const totalStats = await this.getPaymentStats(
-  //       startDate,
-  //       adjustedEndDate,
-  //       userId,
-  //     );
-  //     console.log('Total general de pagos:', totalStats);
-
-  //     // Consulta SQL para distribuir los montos según el servicio exacto
-  //     const entityManager = this.paymentRepository.manager;
-  //     const query = `
-  //       WITH appointment_service_counts AS (
-  //         SELECT
-  //           a.id as appointment_id,
-  //           COUNT(aps.service_id) as service_count
-  //         FROM appointments a
-  //         JOIN appointment_services aps ON a.id = aps.appointment_id
-  //         GROUP BY a.id
-  //       ),
-  //       payment_details AS (
-  //         SELECT
-  //           p.id as payment_id,
-  //           p.amount as payment_amount,
-  //           a.id as appointment_id,
-  //           s.id as service_id,
-  //           s.name as service_name,
-  //           sc.service_count
-  //         FROM payments p
-  //         JOIN appointments a ON p."appointmentId" = a.id
-  //         JOIN appointment_service_counts sc ON a.id = sc.appointment_id
-  //         JOIN appointment_services aps ON a.id = aps.appointment_id
-  //         JOIN services s ON aps.service_id = s.id
-  //         WHERE p.owner_id = $1
-  //         AND p.status = 'COMPLETED'
-  //         AND p.created_at BETWEEN $2 AND $3
-  //       )
-  //       SELECT
-  //         service_id,
-  //         service_name,
-  //         COUNT(DISTINCT payment_id) as payment_count,
-  //         SUM(CASE WHEN service_count = 1 THEN payment_amount
-  //                  ELSE payment_amount / service_count END) as total_amount
-  //       FROM payment_details
-  //       GROUP BY service_id, service_name
-  //       ORDER BY total_amount DESC
-  //     `;
-
-  //     const result = await entityManager.query(query, [
-  //       userId,
-  //       startDate.toISOString(),
-  //       adjustedEndDate.toISOString(),
-  //     ]);
-
-  //     console.log('Resultados de la consulta SQL:', result);
-
-  //     // Procesar y enriquecer los resultados
-  //     const processedResults = result.map((item) => {
-  //       const totalAmount = Number(item.total_amount) || 0;
-  //       const paymentCount = Number(item.payment_count) || 0;
-
-  //       return {
-  //         service_id: item.service_id,
-  //         service_name: item.service_name,
-  //         payment_count: paymentCount,
-  //         total_amount: totalAmount,
-  //         average_amount: paymentCount > 0 ? totalAmount / paymentCount : 0,
-  //         percentage_of_total:
-  //           totalStats.total_amount > 0
-  //             ? (totalAmount * 100) / totalStats.total_amount
-  //             : 0,
-  //       };
-  //     });
-
-  //     console.log('Resultados procesados finales:', processedResults);
-
-  //     return processedResults;
-  //   } catch (error) {
-  //     console.error('Error en getPaymentStatsByService:', error);
-  //     this.handleError(error, {
-  //       entity: 'los pagos',
-  //       operation: 'buscar',
-  //       detail: 'al obtener estadísticas por servicio',
-  //     });
-  //   }
-  // }
 
   async getPaymentStatsByProfessional(
     startDate: Date,

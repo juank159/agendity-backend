@@ -11,6 +11,7 @@ import {
   Query,
   BadRequestException,
   Logger,
+  UseInterceptors,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
@@ -23,6 +24,8 @@ import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
 import { AppointmentReminderService } from './appointment-reminder.service';
+import { SubscriptionLimitsGuard } from 'src/subscriptions/guards/subscription-limits.guard';
+import { SubscriptionLimitInterceptor } from '../subscriptions/interceptors/subscription-limit.interceptor';
 
 @Controller('appointments')
 @UseGuards(JwtAuthGuard, JwtRolesGuard)
@@ -34,6 +37,8 @@ export class AppointmentsController {
   ) {}
 
   @Post()
+  //@UseGuards(JwtAuthGuard, JwtRolesGuard, SubscriptionLimitsGuard)
+  //@UseInterceptors(SubscriptionLimitInterceptor)
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async create(
     @Body() createAppointmentDto: CreateAppointmentDto,

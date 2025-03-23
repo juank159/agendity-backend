@@ -18,6 +18,7 @@ import { TimeBlocksModule } from './time-blocks/time-blocks.module';
 import { DataSourceConfig } from './config/data.postgres.source';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 
 @Module({
   imports: [
@@ -61,6 +62,8 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     TimeBlocksModule,
 
     WhatsappModule,
+
+    SubscriptionsModule,
   ],
 })
 export class AppModule {}

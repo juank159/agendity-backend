@@ -1,5 +1,7 @@
 import {
   ConflictException,
+  forwardRef,
+  Inject,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -17,6 +19,7 @@ import { v4 as uuid } from 'uuid';
 import { OAuth2Client } from 'google-auth-library';
 import { ConfigService } from '@nestjs/config';
 import { EmailService } from 'src/email/email.service';
+import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
 
 @Injectable()
 export class AuthService {
@@ -27,6 +30,8 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
+    @Inject(forwardRef(() => SubscriptionsService)) // Evita dependencia circular
+    private readonly subscriptionsService: SubscriptionsService,
   ) {
     // Inicializar cliente de Google con tu Client ID
     this.googleClient = new OAuth2Client(
@@ -103,6 +108,11 @@ export class AuthService {
       });
 
       await this.userRepository.save(newUser);
+
+      // Crear suscripción de prueba para el nuevo tenant
+      await this.subscriptionsService.createTrialSubscription(
+        newUser.tenant_id,
+      );
 
       return {
         user: this.transformUserResponse(newUser),
@@ -257,40 +267,6 @@ export class AuthService {
       throw error;
     }
   }
-
-  // async verifyEmail(email: string, code: string) {
-  //   try {
-  //     const user = await this.userRepository.findOne({ where: { email } });
-
-  //     if (!user) {
-  //       throw new NotFoundException('Usuario no encontrado');
-  //     }
-
-  //     // Verificar si el código es válido y no ha expirado
-  //     if (user.verification_code !== code) {
-  //       throw new UnauthorizedException('Código de verificación inválido');
-  //     }
-
-  //     if (new Date() > user.verification_code_expires) {
-  //       throw new UnauthorizedException(
-  //         'El código de verificación ha expirado',
-  //       );
-  //     }
-
-  //     // Marcar email como verificado
-  //     user.is_email_verified = true;
-  //     user.verification_code = null;
-  //     user.verification_code_expires = null;
-  //     await this.userRepository.save(user);
-
-  //     return {
-  //       message: 'Email verificado correctamente',
-  //       is_verified: true,
-  //     };
-  //   } catch (error) {
-  //     throw error;
-  //   }
-  // }
 
   async verifyEmail(email: string, code: string) {
     try {
