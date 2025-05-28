@@ -470,6 +470,258 @@ export class PaymentsService {
     }
   }
 
+  async getEmployeeStats(
+    professionalId: string,
+    startDate: Date,
+    endDate: Date,
+    userId: string,
+  ): Promise<any> {
+    try {
+      // Ajustar la fecha final para incluir todo el día
+      const adjustedEndDate = new Date(endDate);
+      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+
+      console.log(
+        `Obteniendo estadísticas para el profesional ID: ${professionalId}`,
+        'Fechas:',
+        startDate,
+        'a',
+        adjustedEndDate,
+      );
+
+      // Logs adicionales para depuración de fechas
+      console.log('Fecha de inicio ISO:', startDate.toISOString());
+      console.log('Fecha de fin ISO:', adjustedEndDate.toISOString());
+      console.log('Fecha de inicio local:', startDate.toString());
+      console.log('Fecha de fin local:', adjustedEndDate.toString());
+
+      // Verificar si existen pagos para este profesional (sin filtro de fechas)
+      const checkPayments = await this.paymentRepository.manager.query(
+        `
+      SELECT COUNT(*) as count 
+      FROM payments p
+      JOIN appointments a ON p."appointmentId" = a.id
+      WHERE p.owner_id = $1
+      AND p.status = 'COMPLETED'
+      AND a."professional_id" = $2
+    `,
+        [userId, professionalId],
+      );
+
+      console.log(
+        'Verificación de pagos totales para este profesional:',
+        checkPayments,
+      );
+
+      // Verificar si hay pagos en el rango de fechas especificado
+      const checkPaymentsInDateRange =
+        await this.paymentRepository.manager.query(
+          `
+      SELECT COUNT(*) as count, MIN(p.created_at) as first_payment, MAX(p.created_at) as last_payment
+      FROM payments p
+      JOIN appointments a ON p."appointmentId" = a.id
+      WHERE p.owner_id = $1
+      AND p.status = 'COMPLETED'
+      AND a."professional_id" = $2
+      AND p.created_at BETWEEN $3 AND $4
+    `,
+          [
+            userId,
+            professionalId,
+            startDate.toISOString(),
+            adjustedEndDate.toISOString(),
+          ],
+        );
+
+      console.log(
+        'Verificación de pagos en el rango de fechas:',
+        checkPaymentsInDateRange,
+      );
+
+      // Verificar estructura de la tabla para confirmar nombres de columnas
+      const tableStructure = await this.paymentRepository.manager.query(`
+      SELECT column_name, data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'appointments'
+    `);
+      console.log('Estructura de la tabla appointments:', tableStructure);
+
+      // Consulta de muestra para ver algunos pagos
+      const samplePayments = await this.paymentRepository.manager.query(
+        `
+      SELECT p.id, p.amount, p.created_at, a.id as appointment_id, a."professional_id"
+      FROM payments p
+      JOIN appointments a ON p."appointmentId" = a.id
+      WHERE p.owner_id = $1
+      LIMIT 5
+    `,
+        [userId],
+      );
+      console.log('Muestra de pagos:', samplePayments);
+
+      // Consultar totales para este profesional usando el query builder
+      const result = await this.paymentRepository
+        .createQueryBuilder('payment')
+        .select('SUM(payment.amount)', 'total_amount')
+        .addSelect('COUNT(DISTINCT payment.id)', 'payment_count')
+        .addSelect('COUNT(DISTINCT appointment.id)', 'appointment_count')
+        .innerJoin('payment.appointment', 'appointment')
+        .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
+        .andWhere('appointment.professional_id = :professionalId', {
+          professionalId,
+        })
+        .andWhere('payment.ownerId = :userId', { userId })
+        .andWhere(
+          'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
+          {
+            startDate,
+            adjustedEndDate,
+          },
+        )
+        .getRawOne();
+
+      console.log('Resultado de la consulta principal:', result);
+
+      // Query nativo como alternativa si el query builder no funciona
+      const nativeQueryResult = await this.paymentRepository.manager.query(
+        `
+      SELECT 
+        SUM(p.amount) as total_amount,
+        COUNT(DISTINCT p.id) as payment_count,
+        COUNT(DISTINCT a.id) as appointment_count
+      FROM payments p
+      JOIN appointments a ON p."appointmentId" = a.id
+      WHERE p.owner_id = $1
+      AND p.status = 'COMPLETED'
+      AND a."professional_id" = $2
+      AND p.created_at BETWEEN $3 AND $4
+    `,
+        [
+          userId,
+          professionalId,
+          startDate.toISOString(),
+          adjustedEndDate.toISOString(),
+        ],
+      );
+
+      console.log('Resultado de consulta nativa:', nativeQueryResult);
+
+      // Consultar desglose por servicio con query nativo para evitar errores
+      let serviceBreakdown = [];
+      try {
+        serviceBreakdown = await this.paymentRepository.manager.query(
+          `
+        SELECT 
+          s.id as service_id,
+          s.name as service_name,
+          COUNT(*) as service_count,
+          SUM(s.price) as service_total
+        FROM payments p
+        JOIN appointments a ON p."appointmentId" = a.id
+        JOIN appointment_services aps ON a.id = aps.appointment_id
+        JOIN services s ON aps.service_id = s.id
+        WHERE p.owner_id = $1
+        AND p.status = 'COMPLETED'
+        AND a."professional_id" = $2
+        AND p.created_at BETWEEN $3 AND $4
+        GROUP BY s.id, s.name
+        ORDER BY service_total DESC
+      `,
+          [
+            userId,
+            professionalId,
+            startDate.toISOString(),
+            adjustedEndDate.toISOString(),
+          ],
+        );
+        console.log('Desglose por servicio:', serviceBreakdown);
+      } catch (serviceError) {
+        console.error('Error en la consulta de servicios:', serviceError);
+        serviceBreakdown = [];
+      }
+
+      // Consultar evolución diaria con query nativo
+      let dailyStats = [];
+      try {
+        dailyStats = await this.paymentRepository.manager.query(
+          `
+        SELECT 
+          DATE(p.created_at) as date,
+          SUM(p.amount) as daily_total,
+          COUNT(DISTINCT p.id) as daily_count
+        FROM payments p
+        JOIN appointments a ON p."appointmentId" = a.id
+        WHERE p.owner_id = $1
+        AND p.status = 'COMPLETED'
+        AND a."professional_id" = $2
+        AND p.created_at BETWEEN $3 AND $4
+        GROUP BY DATE(p.created_at)
+        ORDER BY date ASC
+      `,
+          [
+            userId,
+            professionalId,
+            startDate.toISOString(),
+            adjustedEndDate.toISOString(),
+          ],
+        );
+        console.log('Evolución diaria:', dailyStats);
+      } catch (dailyError) {
+        console.error('Error en la consulta de evolución diaria:', dailyError);
+        dailyStats = [];
+      }
+
+      // Preparar respuesta con los datos obtenidos
+      const summary = {
+        total_amount: Number(
+          result?.total_amount || nativeQueryResult[0]?.total_amount || 0,
+        ),
+        payment_count: Number(
+          result?.payment_count || nativeQueryResult[0]?.payment_count || 0,
+        ),
+        appointment_count: Number(
+          result?.appointment_count ||
+            nativeQueryResult[0]?.appointment_count ||
+            0,
+        ),
+        average_per_payment:
+          Number(result?.payment_count || nativeQueryResult[0]?.payment_count) >
+          0
+            ? Number(
+                result?.total_amount || nativeQueryResult[0]?.total_amount,
+              ) /
+              Number(
+                result?.payment_count || nativeQueryResult[0]?.payment_count,
+              )
+            : 0,
+      };
+
+      console.log('Resumen final:', summary);
+
+      return {
+        summary: summary,
+        by_service: serviceBreakdown.map((item) => ({
+          service_id: item.service_id,
+          service_name: item.service_name,
+          count: Number(item.service_count || 0),
+          total: Number(item.service_total || 0),
+        })),
+        daily_evolution: dailyStats.map((item) => ({
+          date: item.date,
+          total: Number(item.daily_total || 0),
+          count: Number(item.daily_count || 0),
+        })),
+      };
+    } catch (error) {
+      console.error('Error en getEmployeeStats:', error);
+      this.handleError(error, {
+        entity: 'los pagos',
+        operation: 'buscar',
+        detail: 'al obtener estadísticas del profesional',
+      });
+    }
+  }
+
   async getPaymentStatsByMethod(
     startDate: Date,
     endDate: Date,
@@ -645,109 +897,6 @@ export class PaymentsService {
       });
     }
   }
-
-  // RENDIMIENTO POR SERVICIO
-  // async getPaymentStatsByService(
-  //   startDate: Date,
-  //   endDate: Date,
-  //   userId: string,
-  // ): Promise<ServiceStats[]> {
-  //   try {
-  //     // Ajustar la fecha final para incluir todo el día
-  //     const adjustedEndDate = new Date(endDate);
-  //     adjustedEndDate.setUTCHours(23, 59, 59, 999);
-
-  //     console.log(
-  //       'Buscando estadísticas por servicio entre fechas:',
-  //       startDate,
-  //       'y',
-  //       adjustedEndDate,
-  //     );
-
-  //     // Primero obtenemos el total general para calcular porcentajes
-  //     const totalStats = await this.getPaymentStats(
-  //       startDate,
-  //       adjustedEndDate,
-  //       userId,
-  //     );
-  //     console.log('Total general de pagos:', totalStats);
-
-  //     // Obtener servicios con sus precios
-  //     const servicesWithPrices = await this.paymentRepository.manager
-  //       .createQueryBuilder()
-  //       .select('s.id', 'id')
-  //       .addSelect('s.name', 'name')
-  //       .addSelect('s.price', 'price')
-  //       .from('services', 's')
-  //       .where('s.ownerId = :userId', { userId })
-  //       .getRawMany();
-
-  //     console.log('Servicios con precios:', servicesWithPrices);
-
-  //     // Crear un mapa de precios de servicios
-  //     const servicePrices = {};
-  //     for (const service of servicesWithPrices) {
-  //       servicePrices[service.id] = Number(service.price) || 0;
-  //     }
-
-  //     // Consulta SQL para contar servicios y frecuencia
-  //     const entityManager = this.paymentRepository.manager;
-  //     const query = `
-  //       SELECT
-  //         s.id as service_id,
-  //         s.name as service_name,
-  //         COUNT(*) as usage_count
-  //       FROM payments p
-  //       JOIN appointments a ON p."appointmentId" = a.id
-  //       JOIN appointment_services aps ON a.id = aps.appointment_id
-  //       JOIN services s ON aps.service_id = s.id
-  //       WHERE p.owner_id = $1
-  //       AND p.status = 'COMPLETED'
-  //       AND p.created_at BETWEEN $2 AND $3
-  //       GROUP BY s.id, s.name
-  //       ORDER BY usage_count DESC
-  //     `;
-
-  //     const serviceUsage = await entityManager.query(query, [
-  //       userId,
-  //       startDate.toISOString(),
-  //       adjustedEndDate.toISOString(),
-  //     ]);
-
-  //     console.log('Uso de servicios:', serviceUsage);
-
-  //     // Procesar los resultados utilizando los precios de los servicios
-  //     const result = serviceUsage.map((item) => {
-  //       const serviceId = item.service_id;
-  //       const usageCount = Number(item.usage_count) || 0;
-  //       const price = servicePrices[serviceId] || 0;
-  //       const totalAmount = price * usageCount;
-
-  //       return {
-  //         service_id: serviceId,
-  //         service_name: item.service_name,
-  //         payment_count: usageCount,
-  //         total_amount: totalAmount,
-  //         average_amount: price,
-  //         percentage_of_total:
-  //           totalStats.total_amount > 0
-  //             ? (totalAmount * 100) / totalStats.total_amount
-  //             : 0,
-  //       };
-  //     });
-
-  //     console.log('Resultados procesados finales:', result);
-
-  //     return result;
-  //   } catch (error) {
-  //     console.error('Error en getPaymentStatsByService:', error);
-  //     this.handleError(error, {
-  //       entity: 'los pagos',
-  //       operation: 'buscar',
-  //       detail: 'al obtener estadísticas por servicio',
-  //     });
-  //   }
-  // }
 
   async getPaymentStatsByService(
     startDate: Date,

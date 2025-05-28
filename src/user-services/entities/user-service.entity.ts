@@ -1,4 +1,10 @@
-import { Entity, Column, ManyToOne, PrimaryGeneratedColumn, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  JoinColumn,
+} from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { Service } from 'src/services/entities/service.entity';
 
@@ -16,20 +22,28 @@ export class UserService {
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   customPrice: number;
 
+  // Este es el nuevo campo que debes añadir
+  @Column({ type: 'decimal', precision: 5, scale: 2, default: 0 })
+  commissionPercentage: number;
+
   @Column({ default: true })
   isActive: boolean;
 
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
-  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
+  @Column({
+    type: 'timestamptz',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
   updated_at: Date;
 
-  @ManyToOne(() => User, user => user.userServices)
+  @ManyToOne(() => User, (user) => user.userServices)
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @ManyToOne(() => Service, service => service.userServices)
+  @ManyToOne(() => Service, (service) => service.userServices)
   @JoinColumn({ name: 'service_id' })
   service: Service;
 }

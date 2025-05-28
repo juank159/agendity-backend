@@ -14,6 +14,7 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   JoinColumn,
 } from 'typeorm';
 import { Service } from 'src/services/entities/service.entity';
@@ -72,6 +73,7 @@ export class User {
   })
   notification_token: string;
 
+  // Campo existente para activar/desactivar (login y citas)
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 
@@ -96,6 +98,18 @@ export class User {
 
   @Column({ nullable: true })
   verification_code_expires: Date;
+
+  // 🆕 NUEVO: Soft Delete - TypeORM maneja esto automáticamente
+  @DeleteDateColumn()
+  deletedAt?: Date;
+
+  // 🆕 NUEVO: Razón de la eliminación (opcional)
+  @Column({ nullable: true })
+  deletionReason?: string;
+
+  // 🆕 NUEVO: Usuario que eliminó (para auditoría)
+  @Column({ nullable: true })
+  deletedBy?: string;
 
   // Relación Owner-Employee
   @ManyToOne(() => User, (user) => user.employees, {
@@ -161,7 +175,7 @@ export class User {
   @OneToMany(() => Client, (client) => client.owner)
   clients: Client[];
 
-  // Métodos auxiliares
+  // Métodos auxiliares existentes
   isOwner(): boolean {
     return this.roles?.some((role) => role.name === 'Owner');
   }
@@ -176,5 +190,22 @@ export class User {
 
   belongsToOwner(ownerId: string): boolean {
     return this.owner?.id === ownerId;
+  }
+
+  // 🆕 NUEVOS: Métodos auxiliares para soft delete
+  isDeleted(): boolean {
+    return !!this.deletedAt;
+  }
+
+  isActiveEmployee(): boolean {
+    return this.isEmployee() && this.isActive && !this.isDeleted();
+  }
+
+  canLogin(): boolean {
+    return this.isActive && !this.isDeleted();
+  }
+
+  canBeScheduled(): boolean {
+    return this.isActive && !this.isDeleted();
   }
 }

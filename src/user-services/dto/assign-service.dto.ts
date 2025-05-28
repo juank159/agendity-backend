@@ -1,31 +1,44 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsUUID, IsNumber, IsOptional, IsBoolean } from 'class-validator';
+import {
+  IsUUID,
+  IsNumber,
+  IsOptional,
+  IsBoolean,
+  Min,
+  Max,
+} from 'class-validator';
 
 export class AssignServiceDto {
   @ApiProperty({
     example: '123e4567-e89b-12d3-a456-426614174000',
     description: 'ID del servicio que se asignará al profesional',
-    required: true
+    required: true,
   })
   @IsUUID()
   serviceId: string;
 
   @ApiProperty({
-    example: 75.50,
+    example: 75.5,
     description: 'Precio personalizado para este profesional (opcional)',
     required: false,
     minimum: 0,
-    type: Number
+    type: Number,
   })
   @IsOptional()
   @IsNumber()
   customPrice?: number;
 
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  commissionPercentage?: number;
+
   @ApiProperty({
     example: true,
     description: 'Indica si la asignación del servicio está activa',
     required: false,
-    default: true
+    default: true,
   })
   @IsOptional()
   @IsBoolean()

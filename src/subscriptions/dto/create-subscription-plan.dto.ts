@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsBoolean,
   Min,
+  IsArray,
 } from 'class-validator';
 
 export class CreateSubscriptionPlanDto {
@@ -28,6 +29,15 @@ export class CreateSubscriptionPlanDto {
   billing_interval: string;
 
   @IsNumber()
+  @Min(1)
+  @IsOptional()
+  duration_months?: number = 1; // Nuevo campo
+
+  @IsBoolean()
+  @IsOptional()
+  is_recurring?: boolean = false; // Nuevo campo
+
+  @IsNumber()
   appointment_limit: number;
 
   @IsString()
@@ -37,4 +47,9 @@ export class CreateSubscriptionPlanDto {
   @IsBoolean()
   @IsOptional()
   is_active?: boolean = true;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  features?: string[] = []; // Nuevo campo
 }

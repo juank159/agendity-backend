@@ -24,6 +24,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UploadService } from 'src/common/upload/upload.service';
 import { diskStorage } from 'multer';
 import * as path from 'path';
+import { hasRoles } from 'src/auth/jwt/has.roles';
+import { JwtRoles } from 'src/auth/jwt/jwt.role';
 
 @Controller('clients')
 export class ClientsController {
@@ -49,6 +51,7 @@ export class ClientsController {
 
   @Get()
   @UseGuards(JwtAuthGuard)
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   findAll(@GetUser() user: User) {
     return this.clientsService.findAll(user.id);
   }

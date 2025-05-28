@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Schedule } from './entities/schedule.entity';
@@ -12,6 +18,7 @@ export class SchedulesService {
   constructor(
     @InjectRepository(Schedule)
     private readonly scheduleRepository: Repository<Schedule>,
+    @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
   ) {}
 
@@ -22,20 +29,64 @@ export class SchedulesService {
     const user = await this.usersService.findOne({ id: user_id });
 
     // Verificar que no exista solapamiento de horarios
-    await this.validateScheduleOverlap(user_id, scheduleData.day_of_week, scheduleData.start_time, scheduleData.end_time);
+    await this.validateScheduleOverlap(
+      user_id,
+      scheduleData.day_of_week,
+      scheduleData.start_time,
+      scheduleData.end_time,
+    );
 
     // Validar que start_time sea anterior a end_time
     if (scheduleData.start_time >= scheduleData.end_time) {
-      throw new BadRequestException('La hora de inicio debe ser anterior a la hora de fin');
+      throw new BadRequestException(
+        'La hora de inicio debe ser anterior a la hora de fin',
+      );
     }
 
     const schedule = this.scheduleRepository.create({
       ...scheduleData,
-      user // Asignamos el usuario directamente
+      user, // Asignamos el usuario directamente
     });
 
     return await this.scheduleRepository.save(schedule);
-}
+  }
+
+  // Nuevo método para crear horarios en lote
+  async createBatch(
+    userId: string,
+    schedules: Omit<CreateScheduleDto, 'user_id'>[],
+  ): Promise<Schedule[]> {
+    // Verificar que existe el profesional
+    const user = await this.usersService.findOne({ id: userId });
+
+    const createdSchedules: Schedule[] = [];
+
+    for (const scheduleData of schedules) {
+      // Verificar que no exista solapamiento de horarios
+      await this.validateScheduleOverlap(
+        userId,
+        scheduleData.day_of_week,
+        scheduleData.start_time,
+        scheduleData.end_time,
+      );
+
+      // Validar que start_time sea anterior a end_time
+      if (scheduleData.start_time >= scheduleData.end_time) {
+        throw new BadRequestException(
+          'La hora de inicio debe ser anterior a la hora de fin',
+        );
+      }
+
+      const schedule = this.scheduleRepository.create({
+        ...scheduleData,
+        user,
+      });
+
+      createdSchedules.push(await this.scheduleRepository.save(schedule));
+    }
+
+    return createdSchedules;
+  }
 
   async findAll(): Promise<Schedule[]> {
     return await this.scheduleRepository.find({
@@ -63,7 +114,10 @@ export class SchedulesService {
     return schedule;
   }
 
-  async update(id: string, updateScheduleDto: UpdateScheduleDto): Promise<Schedule> {
+  async update(
+    id: string,
+    updateScheduleDto: UpdateScheduleDto,
+  ): Promise<Schedule> {
     const schedule = await this.findOne(id);
     const { user_id, ...scheduleData } = updateScheduleDto;
 
@@ -73,25 +127,31 @@ export class SchedulesService {
       schedule.user = newUser as unknown as User;
     }
 
-    if (scheduleData.day_of_week || scheduleData.start_time || scheduleData.end_time) {
+    if (
+      scheduleData.day_of_week ||
+      scheduleData.start_time ||
+      scheduleData.end_time
+    ) {
       await this.validateScheduleOverlap(
         schedule.user.id,
         scheduleData.day_of_week || schedule.day_of_week,
         scheduleData.start_time || schedule.start_time,
         scheduleData.end_time || schedule.end_time,
-        id
+        id,
       );
     }
 
     if (scheduleData.start_time && scheduleData.end_time) {
       if (scheduleData.start_time >= scheduleData.end_time) {
-        throw new BadRequestException('La hora de inicio debe ser anterior a la hora de fin');
+        throw new BadRequestException(
+          'La hora de inicio debe ser anterior a la hora de fin',
+        );
       }
     }
 
     Object.assign(schedule, scheduleData);
     return await this.scheduleRepository.save(schedule);
-}
+  }
 
   async remove(id: string): Promise<void> {
     const schedule = await this.findOne(id);
@@ -103,7 +163,7 @@ export class SchedulesService {
     dayOfWeek: number,
     startTime: string,
     endTime: string,
-    excludeId?: string
+    excludeId?: string,
   ): Promise<void> {
     const queryBuilder = this.scheduleRepository
       .createQueryBuilder('schedule')
@@ -111,7 +171,7 @@ export class SchedulesService {
       .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })
       .andWhere(
         '(schedule.start_time, schedule.end_time) OVERLAPS (:startTime, :endTime)',
-        { startTime, endTime }
+        { startTime, endTime },
       );
 
     if (excludeId) {

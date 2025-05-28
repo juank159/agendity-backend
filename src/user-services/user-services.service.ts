@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  forwardRef,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserService } from './entities/user-service.entity';
@@ -11,6 +16,7 @@ export class UserServicesService {
   constructor(
     @InjectRepository(UserService)
     private readonly userServiceRepository: Repository<UserService>,
+    @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
     private readonly servicesService: ServicesService,
   ) {}
@@ -52,9 +58,15 @@ export class UserServicesService {
         assignServiceDto.serviceId,
       );
 
+      // Actualizar asignación existente incluyendo commissionPercentage
       const updatedAssignment = this.userServiceRepository.create({
         ...existingAssignment,
         ...assignServiceDto,
+        // Si no se proporciona, mantener el valor existente
+        commissionPercentage:
+          assignServiceDto.commissionPercentage !== undefined
+            ? assignServiceDto.commissionPercentage
+            : existingAssignment.commissionPercentage,
       });
 
       return await this.userServiceRepository.save(updatedAssignment);
@@ -64,12 +76,33 @@ export class UserServicesService {
         const newUserService = this.userServiceRepository.create({
           userId,
           ...assignServiceDto,
+          // Valor por defecto 0 si no se proporciona
+          commissionPercentage: assignServiceDto.commissionPercentage || 0,
         });
 
         return await this.userServiceRepository.save(newUserService);
       }
       throw error;
     }
+  }
+
+  // Nuevo método para asignar múltiples servicios a la vez
+  async assignMultipleServices(
+    userId: string,
+    assignServicesDto: AssignServiceDto[],
+  ): Promise<UserService[]> {
+    // Verificar que el usuario existe
+    await this.usersService.findOne({ id: userId });
+
+    const result = [];
+
+    // Procesar cada servicio
+    for (const serviceDto of assignServicesDto) {
+      const userService = await this.assignService(userId, serviceDto);
+      result.push(userService);
+    }
+
+    return result;
   }
 
   async getUserServices(userId: string): Promise<UserService[]> {

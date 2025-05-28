@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SchedulesService } from './schedules.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
@@ -12,36 +20,73 @@ export class SchedulesController {
 
   @Post()
   @ApiOperation({ summary: 'Crear un nuevo horario' })
-  @ApiResponse({ status: 201, description: 'Horario creado exitosamente', type: Schedule })
+  @ApiResponse({
+    status: 201,
+    description: 'Horario creado exitosamente',
+    type: Schedule,
+  })
   create(@Body() createScheduleDto: CreateScheduleDto) {
     return this.schedulesService.create(createScheduleDto);
   }
 
+  @Post('batch/:userId')
+  @ApiOperation({ summary: 'Crear múltiples horarios para un usuario' })
+  @ApiResponse({
+    status: 201,
+    description: 'Horarios creados exitosamente',
+    type: [Schedule],
+  })
+  createBatch(
+    @Param('userId') userId: string,
+    @Body() schedules: Omit<CreateScheduleDto, 'user_id'>[],
+  ) {
+    return this.schedulesService.createBatch(userId, schedules);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Obtener todos los horarios' })
-  @ApiResponse({ status: 200, description: 'Lista de horarios', type: [Schedule] })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de horarios',
+    type: [Schedule],
+  })
   findAll() {
     return this.schedulesService.findAll();
   }
 
   @Get('user/:userId')
   @ApiOperation({ summary: 'Obtener horarios de un profesional' })
-  @ApiResponse({ status: 200, description: 'Horarios del profesional', type: [Schedule] })
+  @ApiResponse({
+    status: 200,
+    description: 'Horarios del profesional',
+    type: [Schedule],
+  })
   findByUser(@Param('userId') userId: string) {
     return this.schedulesService.findByUser(userId);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Obtener un horario por ID' })
-  @ApiResponse({ status: 200, description: 'Horario encontrado', type: Schedule })
+  @ApiResponse({
+    status: 200,
+    description: 'Horario encontrado',
+    type: Schedule,
+  })
   findOne(@Param('id') id: string) {
     return this.schedulesService.findOne(id);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Actualizar un horario' })
-  @ApiResponse({ status: 200, description: 'Horario actualizado', type: Schedule })
-  update(@Param('id') id: string, @Body() updateScheduleDto: UpdateScheduleDto) {
+  @ApiResponse({
+    status: 200,
+    description: 'Horario actualizado',
+    type: Schedule,
+  })
+  update(
+    @Param('id') id: string,
+    @Body() updateScheduleDto: UpdateScheduleDto,
+  ) {
     return this.schedulesService.update(id, updateScheduleDto);
   }
 

@@ -84,23 +84,31 @@ export class ClientsService {
 
   private async validateUniqueFields(
     dto: CreateClientDto | UpdateClientDto,
+    ownerId: string,
     currentId?: string,
   ): Promise<void> {
-    const conditions = [];
+    const whereConditions = [];
 
-    if ('email' in dto) {
-      conditions.push({ email: dto.email });
+    if ('email' in dto && dto.email) {
+      whereConditions.push({ email: dto.email, ownerId });
     }
 
-    if ('phone' in dto) {
-      conditions.push({ phone: dto.phone });
+    if ('phone' in dto && dto.phone) {
+      whereConditions.push({ phone: dto.phone, ownerId });
     }
 
-    const existingClient = await this.clientRepository.findOne({
-      where: conditions,
+    if (whereConditions.length === 0) return;
+
+    // Buscar si existe un cliente con el mismo email o teléfono para este tenant
+    const existingClients = await this.clientRepository.find({
+      where: whereConditions,
     });
 
-    if (existingClient && existingClient.id !== currentId) {
+    const existingClient = existingClients.find(
+      (client) => client.id !== currentId,
+    );
+
+    if (existingClient) {
       const duplicatedField =
         existingClient.email === dto.email ? 'email' : 'teléfono';
       const duplicatedValue =
@@ -116,7 +124,7 @@ export class ClientsService {
     userId: string,
   ): Promise<Client> {
     try {
-      await this.validateUniqueFields(createClientDto);
+      await this.validateUniqueFields(createClientDto, userId);
 
       const client = this.clientRepository.create({
         ...createClientDto,
@@ -293,7 +301,7 @@ export class ClientsService {
         userId,
       });
       const currentClient = await this.findClient({ id, ownerId: userId });
-      await this.validateUniqueFields(updateClientDto, id);
+      await this.validateUniqueFields(updateClientDto, id, userId);
 
       const updatedClient = this.clientRepository.create({
         ...currentClient,

@@ -2,14 +2,15 @@
 
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
 import { Subscription } from './entities/subscription.entity';
 import { PaymentHistory } from './entities/payment-history.entity';
 
 import { WompiService } from './services/wompi.service';
-import { ConfigModule } from '@nestjs/config';
 import { SubscriptionsController } from './controllers/subscriptions.controller';
 import { WompiWebhookController } from './controllers/wompi-webhook.controller';
+import { DemoPaymentController } from './controllers/demo-payment.controller';
 import { SubscriptionsService } from './services/subscriptions.service';
 
 @Module({
@@ -17,7 +18,11 @@ import { SubscriptionsService } from './services/subscriptions.service';
     TypeOrmModule.forFeature([SubscriptionPlan, Subscription, PaymentHistory]),
     ConfigModule,
   ],
-  controllers: [SubscriptionsController, WompiWebhookController],
+  controllers: [
+    SubscriptionsController,
+    WompiWebhookController,
+    DemoPaymentController, // Añadido el nuevo controlador
+  ],
   providers: [SubscriptionsService, WompiService],
   exports: [SubscriptionsService, WompiService],
 })

@@ -1,136 +1,3 @@
-// import {
-//   Controller,
-//   Get,
-//   Post,
-//   Body,
-//   Param,
-//   Query,
-//   UseGuards,
-//   ParseUUIDPipe,
-// } from '@nestjs/common';
-// import {
-//   ApiTags,
-//   ApiOperation,
-//   ApiResponse,
-//   ApiBearerAuth,
-//   ApiParam,
-//   ApiQuery,
-// } from '@nestjs/swagger';
-// import { PaymentsService } from './payments.service';
-// import { CreatePaymentDto } from './dto/create-payment.dto';
-// import { RefundPaymentDto } from './dto/refund-payment.dto';
-// import { Payment } from './entities/payment.entity';
-// import { GetUser } from '../common/decorators/get-user.decorator';
-// import { User } from '../users/entities/user.entity';
-// import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
-// import { hasRoles } from '../auth/jwt/has.roles';
-// import { JwtRoles } from '../auth/jwt/jwt.role';
-// import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
-// import { ParseDatePipe } from 'src/common/pipes/parse-date.pipe';
-
-// @ApiTags('Pagos')
-// @ApiBearerAuth()
-// @UseGuards(JwtAuthGuard, JwtRolesGuard)
-// @Controller('payments')
-// export class PaymentsController {
-//   constructor(private readonly paymentsService: PaymentsService) {}
-
-//   @Post()
-//   @hasRoles(JwtRoles.Owner)
-//   @ApiOperation({ summary: 'Crear un nuevo pago' })
-//   @ApiResponse({
-//     status: 201,
-//     description: 'Pago creado exitosamente',
-//     type: Payment,
-//   })
-//   @ApiResponse({ status: 400, description: 'Ya existe un pago para esta cita' })
-//   @ApiResponse({ status: 404, description: 'Cita no encontrada' })
-//   create(@Body() createPaymentDto: CreatePaymentDto, @GetUser() user: User) {
-//     return this.paymentsService.create(createPaymentDto, user.id);
-//   }
-
-//   @Post(':id/refund')
-//   @hasRoles(JwtRoles.Owner)
-//   @ApiOperation({ summary: 'Procesar reembolso de un pago' })
-//   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-//   @ApiResponse({
-//     status: 200,
-//     description: 'Reembolso procesado exitosamente',
-//     type: Payment,
-//   })
-//   @ApiResponse({
-//     status: 400,
-//     description: 'Monto de reembolso inválido o pago no reembolsable',
-//   })
-//   @ApiResponse({ status: 404, description: 'Pago no encontrado' })
-//   refund(
-//     @Param('id', ParseUUIDPipe) id: string,
-//     @Body() refundDto: RefundPaymentDto,
-//     @GetUser() user: User,
-//   ) {
-//     return this.paymentsService.refund(id, refundDto, user.id);
-//   }
-
-//   @Get()
-//   @hasRoles(JwtRoles.Owner)
-//   @ApiOperation({ summary: 'Obtener todos los pagos' })
-//   @ApiResponse({ status: 200, description: 'Lista de pagos', type: [Payment] })
-//   findAll(@GetUser() user: User) {
-//     return this.paymentsService.findAll(user.id);
-//   }
-
-//   @Get('stats')
-//   @hasRoles(JwtRoles.Owner)
-//   @ApiOperation({ summary: 'Obtener estadísticas de pagos' })
-//   @ApiQuery({ name: 'startDate', type: 'string', format: 'date' })
-//   @ApiQuery({ name: 'endDate', type: 'string', format: 'date' })
-//   @ApiResponse({
-//     status: 200,
-//     description: 'Estadísticas de pagos',
-//     schema: {
-//       properties: {
-//         total_amount: { type: 'number' },
-//         payment_count: { type: 'number' },
-//         average_amount: { type: 'number' },
-//       },
-//     },
-//   })
-//   getStats(
-//     @Query('startDate', ParseDatePipe) startDate: Date,
-//     @Query('endDate', ParseDatePipe) endDate: Date,
-//     @GetUser() user: User,
-//   ) {
-//     return this.paymentsService.getPaymentStats(startDate, endDate, user.id);
-//   }
-
-//   @Get('appointment/:id')
-//   @hasRoles(JwtRoles.Owner)
-//   @ApiOperation({ summary: 'Obtener pagos de una cita' })
-//   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-//   @ApiResponse({
-//     status: 200,
-//     description: 'Pagos de la cita',
-//     type: [Payment],
-//   })
-//   @ApiResponse({ status: 404, description: 'Cita no encontrada' })
-//   findByAppointment(
-//     @Param('id', ParseUUIDPipe) id: string,
-//     @GetUser() user: User,
-//   ) {
-//     return this.paymentsService.findByAppointment(id, user.id);
-//   }
-
-//   @Get(':id')
-//   @hasRoles(JwtRoles.Owner)
-//   @ApiOperation({ summary: 'Obtener un pago por ID' })
-//   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-//   @ApiResponse({ status: 200, description: 'Pago encontrado', type: Payment })
-//   @ApiResponse({ status: 404, description: 'Pago no encontrado' })
-//   findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
-//     return this.paymentsService.findOne(id, user.id);
-//   }
-// }
-
 import {
   Controller,
   Get,
@@ -142,6 +9,8 @@ import {
   ParseUUIDPipe,
   DefaultValuePipe,
   ParseIntPipe,
+  BadRequestException,
+  Req,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
@@ -190,6 +59,99 @@ export class PaymentsController {
     @GetUser() user: User,
   ) {
     return this.paymentsService.getPaymentStats(startDate, endDate, user.id);
+  }
+
+  @Get('employee-stats')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  async getEmployeeStats(
+    @Query('startDate', ParseDatePipe) startDate: Date,
+    @Query('endDate', ParseDatePipe) endDate: Date,
+    @Query('professionalId') professionalId: string,
+    @GetUser() user: User,
+    @Req() request: Request,
+  ) {
+    // Añadir logs de depuración
+    console.log('Usuario accediendo a employee-stats:', {
+      id: user.id,
+      roles: user.roles?.map((r) => (typeof r === 'string' ? r : r.name)),
+      email: user.email,
+    });
+
+    // Obtener los roles como strings
+    const userRolesAsString = user.roles.map((role) =>
+      typeof role === 'string' ? role : role.name || role.toString(),
+    );
+    console.log('Roles como string:', userRolesAsString);
+
+    // Verificar si el usuario es un empleado (y no es dueño)
+    const isOnlyEmployee =
+      userRolesAsString.includes(JwtRoles.Employee.toString()) &&
+      !userRolesAsString.includes(JwtRoles.Owner.toString());
+    console.log('¿Es solo empleado?', isOnlyEmployee);
+
+    if (isOnlyEmployee) {
+      // Extraer el owner_id directamente del token JWT
+      let ownerId: string | undefined;
+
+      // Obtener el token de la cabecera de autorización
+      const authHeader = request.headers['authorization'] as string;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7); // Quitar 'Bearer '
+        try {
+          // Decodificar el token sin verificar (ya ha sido verificado por el guard)
+          const decodedToken = JSON.parse(
+            Buffer.from(token.split('.')[1], 'base64').toString(),
+          );
+
+          // Extraer owner_id del token
+          ownerId = decodedToken.owner_id;
+          console.log(
+            'Token decodificado:',
+            JSON.stringify(decodedToken, null, 2),
+          );
+          console.log('Owner ID extraído del token:', ownerId);
+        } catch (error) {
+          console.error('Error decodificando token:', error);
+        }
+      }
+
+      console.log('Empleado ID:', user.id);
+      console.log('Propietario ID determinado:', ownerId);
+
+      if (!ownerId) {
+        throw new BadRequestException(
+          'No se puede determinar el propietario del empleado',
+        );
+      }
+
+      // Empleado ve solo sus propias estadísticas
+      return this.paymentsService.getEmployeeStats(
+        user.id, // El ID del empleado actual
+        startDate,
+        endDate,
+        ownerId, // El ID del propietario del negocio
+      );
+    } else {
+      // Owner: Necesita un professionalId o devolvemos error
+      if (!professionalId) {
+        throw new BadRequestException(
+          'Se requiere professionalId para consultar estadísticas de un profesional específico',
+        );
+      }
+
+      console.log(
+        'Obteniendo estadísticas para profesional con ID:',
+        professionalId,
+      );
+      console.log('Usuario propietario ID:', user.id);
+
+      return this.paymentsService.getEmployeeStats(
+        professionalId,
+        startDate,
+        endDate,
+        user.id,
+      );
+    }
   }
 
   @Get('appointment/:id')

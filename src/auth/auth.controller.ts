@@ -6,6 +6,9 @@ import {
   UseGuards,
   Get,
   Param,
+  Patch,
+  Delete,
+  Query,
 } from '@nestjs/common';
 
 import { CreateAuthDto, CreateEmployeeDto, LoginAuthDto } from './dto';
@@ -16,6 +19,9 @@ import { JwtRolesGuard } from './jwt/jwt.roles.guard';
 import { hasRoles } from './jwt/has.roles';
 import { User } from '../users/entities/user.entity';
 import { GetUser } from 'src/common/decorators/get-user.decorator';
+import { UpdateEmployeeDto } from './dto/update-employee.dto';
+import { CreateEmployeeWithDetailsDto } from './dto/create-employee-with-details.dto';
+import { ToggleEmployeeStatusDto } from './dto/toggle-employee-status.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -31,9 +37,59 @@ export class AuthController {
   @Post('register/employee')
   createEmployee(
     @GetUser() owner: User,
-    @Body() createEmployeeDto: CreateEmployeeDto,
+    @Body() createEmployeeDto: CreateEmployeeWithDetailsDto, // Usar el nuevo DTO
   ) {
     return this.authService.createEmployee(createEmployeeDto, owner);
+  }
+
+  // NUEVO ENDPOINT PARA ACTUALIZAR EMPLEADO
+  @hasRoles(JwtRoles.Owner)
+  @UseGuards(JwtAuthGuard, JwtRolesGuard)
+  @Patch('employee/:id')
+  updateEmployee(
+    @GetUser() owner: User,
+    @Param('id') employeeId: string,
+    @Body() updateEmployeeDto: UpdateEmployeeDto,
+  ) {
+    return this.authService.updateEmployee(
+      owner.id,
+      employeeId,
+      updateEmployeeDto,
+    );
+  }
+
+  @hasRoles(JwtRoles.Owner)
+  @UseGuards(JwtAuthGuard, JwtRolesGuard)
+  @Patch('employee/:id/status')
+  toggleEmployeeStatus(
+    @GetUser() owner: User,
+    @Param('id') employeeId: string,
+    @Body() statusDto: ToggleEmployeeStatusDto,
+  ) {
+    return this.authService.toggleEmployeeStatus(
+      owner.id,
+      employeeId,
+      statusDto,
+    );
+  }
+
+  // NUEVO ENDPOINT PARA ELIMINAR EMPLEADO
+  @hasRoles(JwtRoles.Owner)
+  @UseGuards(JwtAuthGuard, JwtRolesGuard)
+  @Delete('employee/:id')
+  deleteEmployee(
+    @GetUser() owner: User,
+    @Param('id') employeeId: string,
+    @Body('reason') reason?: string, // Razón opcional
+  ) {
+    return this.authService.deleteEmployee(owner.id, employeeId, reason);
+  }
+
+  @hasRoles(JwtRoles.Owner)
+  @UseGuards(JwtAuthGuard, JwtRolesGuard)
+  @Patch('employee/:id/restore')
+  restoreEmployee(@GetUser() owner: User, @Param('id') employeeId: string) {
+    return this.authService.restoreEmployee(owner.id, employeeId);
   }
 
   @Post('login')
@@ -48,9 +104,17 @@ export class AuthController {
     return this.authService.googleLogin(token);
   }
 
+  // @Post('verify/request-code')
+  // requestVerificationCode(@Body('email') email: string) {
+  //   return this.authService.generateVerificationCode(email);
+  // }
+
   @Post('verify/request-code')
-  requestVerificationCode(@Body('email') email: string) {
-    return this.authService.generateVerificationCode(email);
+  requestVerificationCode(
+    @Body('email') email: string,
+    @Body('isNewUser') isNewUser: boolean = false,
+  ) {
+    return this.authService.generateVerificationCode(email, isNewUser);
   }
 
   @Post('verify/email')
@@ -75,8 +139,12 @@ export class AuthController {
   @hasRoles(JwtRoles.Owner)
   @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Get('employees')
-  getEmployees(@GetUser() owner: User) {
-    return this.authService.getEmployeesByOwner(owner.id);
+  getEmployees(
+    @GetUser() owner: User,
+    @Query('includeDeleted') includeDeleted?: string, // Parámetro opcional
+  ) {
+    const shouldIncludeDeleted = includeDeleted === 'true';
+    return this.authService.getEmployeesByOwner(owner.id, shouldIncludeDeleted);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -84,5 +152,28 @@ export class AuthController {
   @Get('employee/:id')
   getEmployee(@GetUser() owner: User, @Param('id') employeeId: string) {
     return this.authService.getEmployeeByOwner(owner.id, employeeId);
+  }
+
+  @hasRoles(JwtRoles.Owner)
+  @UseGuards(JwtAuthGuard, JwtRolesGuard)
+  @Get('employees/deleted')
+  getDeletedEmployees(@GetUser() owner: User) {
+    return this.authService.getDeletedEmployeesByOwner(owner.id);
+  }
+
+  // 🆕 NUEVO: Endpoint específico para empleados activos
+  @hasRoles(JwtRoles.Owner)
+  @UseGuards(JwtAuthGuard, JwtRolesGuard)
+  @Get('employees/active')
+  getActiveEmployees(@GetUser() owner: User) {
+    return this.authService.getActiveEmployeesByOwner(owner.id);
+  }
+
+  @Post('verify/employee-email')
+  verifyEmployeeEmail(
+    @Body('employee_id') employeeId: string,
+    @Body('code') code: string,
+  ) {
+    return this.authService.verifyEmployeeEmail(employeeId, code);
   }
 }

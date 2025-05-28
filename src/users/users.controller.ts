@@ -103,6 +103,8 @@ export class UsersController {
     }
   }
 
+  @hasRoles(JwtRoles.Owner)
+  @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.remove(id);

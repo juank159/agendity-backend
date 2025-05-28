@@ -1,399 +1,3 @@
-// import {
-//   Injectable,
-//   NotFoundException,
-//   BadRequestException,
-//   InternalServerErrorException,
-//   Inject,
-//   forwardRef,
-// } from '@nestjs/common';
-// import { InjectRepository } from '@nestjs/typeorm';
-// import { Repository, Not, Between } from 'typeorm';
-// import { Appointment } from './entities/appointment.entity';
-// import { CreateAppointmentDto } from './dto/create-appointment.dto';
-// import { UpdateAppointmentDto } from './dto/update-appointment.dto';
-// import { ClientsService } from '../clients/clients.service';
-// import { UsersService } from '../users/users.service';
-// import { ServicesService } from '../services/services.service';
-// import { RELATIONS, RELATION_GROUPS } from './constants/relations.constants';
-// import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
-// import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
-// import { EventEmitter2 } from '@nestjs/event-emitter';
-// import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
-
-// @Injectable()
-// export class AppointmentsService {
-//   constructor(
-//     @InjectRepository(Appointment)
-//     private readonly appointmentRepository: Repository<Appointment>,
-//     private readonly clientsService: ClientsService,
-//     private readonly usersService: UsersService,
-//     private readonly servicesService: ServicesService,
-//     private readonly eventEmitter: EventEmitter2,
-//     @Inject(forwardRef(() => SubscriptionsService))
-//     private readonly subscriptionsService: SubscriptionsService,
-//   ) {}
-
-//   private handleError(error: any, options: ErrorHandlerOptions): never {
-//     console.error(`Error al ${options.operation} ${options.entity}:`, error);
-
-//     if (
-//       error instanceof BadRequestException ||
-//       error instanceof NotFoundException
-//     ) {
-//       throw error;
-//     }
-
-//     throw new InternalServerErrorException(
-//       `Error al ${options.operation} ${options.entity}. Por favor, intenta nuevamente.`,
-//     );
-//   }
-
-//   async create(
-//     createAppointmentDto: CreateAppointmentDto,
-//     userId: string,
-//   ): Promise<Appointment> {
-//     try {
-//       console.log('Datos recibidos:', createAppointmentDto);
-
-//       const {
-//         client_id,
-//         professional_id,
-//         service_ids,
-//         date,
-//         ...appointmentData
-//       } = createAppointmentDto;
-
-//       const [client, professional] = await Promise.all([
-//         this.clientsService.findOne(client_id, userId),
-//         this.usersService.findOne({ id: professional_id }),
-//       ]);
-
-//       console.log('Cliente:', client);
-//       console.log('Profesional:', professional);
-
-//       if (!client || !professional) {
-//         throw new NotFoundException('Cliente o profesional no encontrado');
-//       }
-
-//       const services = await Promise.all(
-//         service_ids.map((id) => this.servicesService.findOne(id, userId)),
-//       );
-
-//       console.log('Servicios:', services);
-
-//       if (services.some((service) => !service)) {
-//         throw new NotFoundException('Uno o más servicios no encontrados');
-//       }
-
-//       const appointmentDate = new Date(date);
-//       console.log('Fecha convertida:', appointmentDate);
-
-//       const existingAppointment = await this.appointmentRepository
-//         .createQueryBuilder('appointment')
-//         .where('appointment.professional_id = :professionalId', {
-//           professionalId: professional_id,
-//         })
-//         .andWhere('appointment.date = :appointmentDate', {
-//           appointmentDate,
-//         })
-//         .andWhere('appointment.ownerId = :userId', {
-//           // Cambiado de owner_id a ownerId
-//           userId,
-//         })
-//         .getOne();
-
-//       if (existingAppointment) {
-//         throw new BadRequestException('Horario no disponible');
-//       }
-
-//       const appointmentToSave = {
-//         ownerId: userId, // Cambiado de owner_id a ownerId
-//         professionalId: professional_id, // Cambiado a professionalId para coincidir con la entidad
-//         date: new Date(createAppointmentDto.date),
-//         total_price: services.reduce(
-//           (sum, service) => sum + Number(service.price),
-//           0,
-//         ),
-//         status: AppointmentStatus.PENDING,
-//         payment_status: PaymentStatus.PENDING,
-//         notes: appointmentData.notes || '',
-//         client: client,
-//         professional: professional,
-//         services: services,
-//       };
-
-//       console.log('Objeto a guardar:', appointmentToSave);
-
-//       const savedAppointment =
-//         await this.appointmentRepository.save(appointmentToSave);
-//       console.log('Cita guardada:', savedAppointment);
-
-//       // Emitir el evento después de guardar la cita
-//       this.eventEmitter.emit('appointment.created', savedAppointment);
-
-//       return savedAppointment;
-//     } catch (error) {
-//       console.error('Error en create:', error);
-//       if (
-//         error instanceof NotFoundException ||
-//         error instanceof BadRequestException
-//       ) {
-//         throw error;
-//       }
-//       throw new InternalServerErrorException('Error al crear la cita');
-//     }
-//   }
-
-//   // async create(
-//   //   createAppointmentDto: CreateAppointmentDto,
-//   //   userId: string,
-//   // ): Promise<Appointment> {
-//   //   try {
-//   //     console.log('Datos recibidos:', createAppointmentDto);
-
-//   //     // Verificar los límites de suscripción antes de crear la cita
-//   //     const subscriptionStatus =
-//   //       await this.subscriptionsService.checkSubscriptionStatus(userId);
-
-//   //     if (!subscriptionStatus.canCreateAppointment) {
-//   //       throw new BadRequestException(
-//   //         subscriptionStatus.message ||
-//   //           'No puedes crear más citas. Verifica tu plan de suscripción.',
-//   //       );
-//   //     }
-
-//   //     const {
-//   //       client_id,
-//   //       professional_id,
-//   //       service_ids,
-//   //       date,
-//   //       ...appointmentData
-//   //     } = createAppointmentDto;
-
-//   //     const [client, professional] = await Promise.all([
-//   //       this.clientsService.findOne(client_id, userId),
-//   //       this.usersService.findOne({ id: professional_id }),
-//   //     ]);
-
-//   //     console.log('Cliente:', client);
-//   //     console.log('Profesional:', professional);
-
-//   //     if (!client || !professional) {
-//   //       throw new NotFoundException('Cliente o profesional no encontrado');
-//   //     }
-
-//   //     const services = await Promise.all(
-//   //       service_ids.map((id) => this.servicesService.findOne(id, userId)),
-//   //     );
-
-//   //     console.log('Servicios:', services);
-
-//   //     if (services.some((service) => !service)) {
-//   //       throw new NotFoundException('Uno o más servicios no encontrados');
-//   //     }
-
-//   //     const appointmentDate = new Date(date);
-//   //     console.log('Fecha convertida:', appointmentDate);
-
-//   //     const existingAppointment = await this.appointmentRepository
-//   //       .createQueryBuilder('appointment')
-//   //       .where('appointment.professional_id = :professionalId', {
-//   //         professionalId: professional_id,
-//   //       })
-//   //       .andWhere('appointment.date = :appointmentDate', {
-//   //         appointmentDate,
-//   //       })
-//   //       .andWhere('appointment.ownerId = :userId', {
-//   //         userId,
-//   //       })
-//   //       .getOne();
-
-//   //     if (existingAppointment) {
-//   //       throw new BadRequestException('Horario no disponible');
-//   //     }
-
-//   //     const appointmentToSave = {
-//   //       ownerId: userId,
-//   //       professionalId: professional_id,
-//   //       date: new Date(createAppointmentDto.date),
-//   //       total_price: services.reduce(
-//   //         (sum, service) => sum + Number(service.price),
-//   //         0,
-//   //       ),
-//   //       status: AppointmentStatus.PENDING,
-//   //       payment_status: PaymentStatus.PENDING,
-//   //       notes: appointmentData.notes || '',
-//   //       client: client,
-//   //       professional: professional,
-//   //       services: services,
-//   //     };
-
-//   //     console.log('Objeto a guardar:', appointmentToSave);
-
-//   //     // Actualizar el contador de citas de prueba si aplica
-//   //     await this.subscriptionsService.updateTrialAppointmentUsage(userId);
-
-//   //     const savedAppointment =
-//   //       await this.appointmentRepository.save(appointmentToSave);
-//   //     console.log('Cita guardada:', savedAppointment);
-
-//   //     // Emitir el evento después de guardar la cita
-//   //     this.eventEmitter.emit('appointment.created', savedAppointment);
-
-//   //     return savedAppointment;
-//   //   } catch (error) {
-//   //     console.error('Error en create:', error);
-//   //     if (
-//   //       error instanceof NotFoundException ||
-//   //       error instanceof BadRequestException
-//   //     ) {
-//   //       throw error;
-//   //     }
-//   //     throw new InternalServerErrorException('Error al crear la cita');
-//   //   }
-//   // }
-
-//   async findAllByDateRange(
-//     userId: string,
-//     startDate: Date,
-//     endDate: Date,
-//   ): Promise<Appointment[]> {
-//     try {
-//       return await this.appointmentRepository.find({
-//         where: {
-//           ownerId: userId,
-//           date: Between(startDate, endDate),
-//         },
-//         relations: ['client', 'professional', 'services'], // Aquí también
-//         order: {
-//           date: 'ASC',
-//         },
-//       });
-//     } catch (error) {
-//       this.handleError(error, {
-//         entity: 'las citas',
-//         operation: 'listar',
-//         detail: 'por rango de fechas',
-//       });
-//     }
-//   }
-
-//   async findAll(
-//     userId: string,
-//     startDate?: Date,
-//     endDate?: Date,
-//   ): Promise<Appointment[]> {
-//     try {
-//       if (startDate && endDate) {
-//         return this.findAllByDateRange(userId, startDate, endDate);
-//       }
-
-//       return await this.appointmentRepository.find({
-//         where: { ownerId: userId },
-//         relations: ['client', 'professional', 'services'], // Explícitamente definir las relaciones
-//         order: {
-//           date: 'ASC',
-//         },
-//       });
-//     } catch (error) {
-//       this.handleError(error, {
-//         entity: 'las citas',
-//         operation: 'listar',
-//         detail: startDate && endDate ? 'filtrado por fechas' : 'todas',
-//       });
-//     }
-//   }
-
-//   async findOne(id: string, userId: string): Promise<Appointment> {
-//     const appointment = await this.appointmentRepository.findOne({
-//       where: { id, ownerId: userId },
-//       relations: RELATION_GROUPS.default,
-//     });
-
-//     if (!appointment) {
-//       throw new NotFoundException(`Cita con ID ${id} no encontrada`);
-//     }
-
-//     return appointment;
-//   }
-
-//   async update(
-//     id: string,
-//     updateAppointmentDto: UpdateAppointmentDto,
-//     userId: string,
-//   ): Promise<Appointment> {
-//     try {
-//       const appointment = await this.findOne(id, userId);
-
-//       if (updateAppointmentDto.date) {
-//         const existingAppointment = await this.appointmentRepository
-//           .createQueryBuilder('appointment')
-//           .where('appointment.professional_id = :professionalId', {
-//             professionalId: appointment.professional.id,
-//           })
-//           .andWhere('appointment.date = :date', {
-//             date: updateAppointmentDto.date,
-//           })
-//           .andWhere('appointment.id != :id', { id })
-//           .andWhere('appointment.owner_id = :ownerId', { ownerId: userId })
-//           .getOne();
-
-//         if (existingAppointment) {
-//           throw new BadRequestException(
-//             'El profesional no está disponible en ese horario',
-//           );
-//         }
-//       }
-
-//       const updatedAppointment = await this.appointmentRepository.save({
-//         ...appointment,
-//         ...updateAppointmentDto,
-//       });
-
-//       return updatedAppointment;
-//     } catch (error) {
-//       this.handleError(error, {
-//         entity: 'la cita',
-//         operation: 'actualizar',
-//       });
-//     }
-//   }
-
-//   async remove(id: string, userId: string): Promise<void> {
-//     try {
-//       const appointment = await this.findOne(id, userId);
-//       await this.appointmentRepository.remove(appointment);
-//     } catch (error) {
-//       this.handleError(error, {
-//         entity: 'la cita',
-//         operation: 'eliminar',
-//       });
-//     }
-//   }
-
-//   async findByProfessionalAndDate(
-//     professionalId: string,
-//     date: Date,
-//     userId: string,
-//   ): Promise<Appointment[]> {
-//     try {
-//       return await this.appointmentRepository.find({
-//         where: {
-//           professional: { id: professionalId },
-//           date,
-//           ownerId: userId,
-//         },
-//         relations: RELATION_GROUPS.minimal,
-//       });
-//     } catch (error) {
-//       this.handleError(error, {
-//         entity: 'las citas',
-//         operation: 'buscar',
-//       });
-//     }
-//   }
-// }
-
 import {
   Injectable,
   NotFoundException,
@@ -444,12 +48,110 @@ export class AppointmentsService {
     );
   }
 
+  // async create(
+  //   createAppointmentDto: CreateAppointmentDto,
+  //   userId: string,
+  // ): Promise<Appointment> {
+  //   try {
+  //     console.log('Datos recibidos:', createAppointmentDto);
+
+  //     const {
+  //       client_id,
+  //       professional_id,
+  //       service_ids,
+  //       date,
+  //       ...appointmentData
+  //     } = createAppointmentDto;
+
+  //     const [client, professional] = await Promise.all([
+  //       this.clientsService.findOne(client_id, userId),
+  //       this.usersService.findOne({ id: professional_id }),
+  //     ]);
+
+  //     console.log('Cliente:', client);
+  //     console.log('Profesional:', professional);
+
+  //     if (!client || !professional) {
+  //       throw new NotFoundException('Cliente o profesional no encontrado');
+  //     }
+
+  //     const services = await Promise.all(
+  //       service_ids.map((id) => this.servicesService.findOne(id, userId)),
+  //     );
+
+  //     console.log('Servicios:', services);
+
+  //     if (services.some((service) => !service)) {
+  //       throw new NotFoundException('Uno o más servicios no encontrados');
+  //     }
+
+  //     // Verificar disponibilidad con el nuevo método
+  //     const isAvailable = await this.checkProfessionalAvailability(
+  //       professional_id,
+  //       date,
+  //       services,
+  //       userId,
+  //     );
+
+  //     if (!isAvailable) {
+  //       throw new BadRequestException('Horario no disponible');
+  //     }
+
+  //     const appointmentToSave = {
+  //       ownerId: userId,
+  //       professionalId: professional_id,
+  //       date: new Date(date),
+  //       total_price: services.reduce(
+  //         (sum, service) => sum + Number(service.price),
+  //         0,
+  //       ),
+  //       status: AppointmentStatus.PENDING,
+  //       payment_status: PaymentStatus.PENDING,
+  //       notes: appointmentData.notes || '',
+  //       client: client,
+  //       professional: professional,
+  //       services: services,
+  //     };
+
+  //     console.log('Objeto a guardar:', appointmentToSave);
+
+  //     const savedAppointment =
+  //       await this.appointmentRepository.save(appointmentToSave);
+  //     console.log('Cita guardada:', savedAppointment);
+
+  //     // Emitir el evento después de guardar la cita
+  //     this.eventEmitter.emit('appointment.created', savedAppointment);
+
+  //     return savedAppointment;
+  //   } catch (error) {
+  //     console.error('Error en create:', error);
+  //     if (
+  //       error instanceof NotFoundException ||
+  //       error instanceof BadRequestException
+  //     ) {
+  //       throw error;
+  //     }
+  //     throw new InternalServerErrorException('Error al crear la cita');
+  //   }
+  // }
+
   async create(
     createAppointmentDto: CreateAppointmentDto,
     userId: string,
   ): Promise<Appointment> {
     try {
       console.log('Datos recibidos:', createAppointmentDto);
+
+      // Verificar los límites de suscripción antes de crear la cita
+      const subscriptionStatus =
+        await this.subscriptionsService.checkSubscriptionStatus(userId);
+
+      if (!subscriptionStatus.canCreateAppointment) {
+        throw new BadRequestException(
+          subscriptionStatus.message ||
+            'No puedes crear más citas. Verifica tu plan de suscripción.',
+        );
+      }
 
       const {
         client_id,
@@ -510,6 +212,9 @@ export class AppointmentsService {
       };
 
       console.log('Objeto a guardar:', appointmentToSave);
+
+      // Actualizar el contador de citas de prueba si aplica
+      await this.subscriptionsService.updateTrialAppointmentUsage(userId);
 
       const savedAppointment =
         await this.appointmentRepository.save(appointmentToSave);
@@ -627,7 +332,6 @@ export class AppointmentsService {
     }
   }
 
-  // También actualizar el método update para usar la misma validación
   async update(
     id: string,
     updateAppointmentDto: UpdateAppointmentDto,
@@ -636,41 +340,110 @@ export class AppointmentsService {
     try {
       const appointment = await this.findOne(id, userId);
 
-      if (updateAppointmentDto.date || updateAppointmentDto.service_ids) {
-        // Si se cambia la fecha o los servicios, verificar disponibilidad
-        const date = updateAppointmentDto.date || appointment.date;
-        const serviceIds =
-          updateAppointmentDto.service_ids ||
-          appointment.services.map((s) => s.id);
+      // Crear objeto para actualización
+      const updateData: any = {};
 
-        // Obtener los servicios actualizados
+      // Copiar campos simples
+      if (updateAppointmentDto.date)
+        updateData.date = new Date(updateAppointmentDto.date);
+      if (updateAppointmentDto.notes !== undefined)
+        updateData.notes = updateAppointmentDto.notes;
+      if (updateAppointmentDto.status)
+        updateData.status = updateAppointmentDto.status;
+
+      if (updateAppointmentDto.payment_status)
+        updateData.payment_status = updateAppointmentDto.payment_status;
+
+      // Importante: Manejar explícitamente el cambio de profesional
+      if (updateAppointmentDto.professional_id) {
+        // Verificar que exista el profesional
+        const professional = await this.usersService.findOne({
+          id: updateAppointmentDto.professional_id,
+        });
+
+        if (!professional) {
+          throw new NotFoundException('Profesional no encontrado');
+        }
+
+        // Asignar el profesional directamente - aquí está la clave
+        updateData.professionalId = updateAppointmentDto.professional_id;
+        updateData.professional = professional;
+      }
+
+      // Manejar cliente y otros campos
+      if (updateAppointmentDto.client_id) {
+        const client = await this.clientsService.findOne(
+          updateAppointmentDto.client_id,
+          userId,
+        );
+        if (!client) {
+          throw new NotFoundException('Cliente no encontrado');
+        }
+        updateData.client = client;
+      }
+
+      // Manejar servicios
+      if (
+        updateAppointmentDto.service_ids &&
+        updateAppointmentDto.service_ids.length > 0
+      ) {
         const services = await Promise.all(
-          serviceIds.map((id) => this.servicesService.findOne(id, userId)),
+          updateAppointmentDto.service_ids.map((id) =>
+            this.servicesService.findOne(id, userId),
+          ),
         );
 
-        // Verificar disponibilidad excluyendo la cita actual
+        if (services.some((service) => !service)) {
+          throw new NotFoundException('Uno o más servicios no encontrados');
+        }
+
+        updateData.services = services;
+
+        // Actualizar precio total
+        updateData.total_price = services.reduce(
+          (sum, service) => sum + Number(service.price),
+          0,
+        );
+      }
+
+      // Verificar disponibilidad (si es necesario)
+      if (
+        updateAppointmentDto.professional_id ||
+        updateAppointmentDto.date ||
+        updateAppointmentDto.service_ids
+      ) {
+        const professionalId =
+          updateAppointmentDto.professional_id || appointment.professionalId;
+        const date = updateAppointmentDto.date || appointment.date;
+        const services = updateData.services || appointment.services;
+
         const isAvailable = await this.checkProfessionalAvailabilityForUpdate(
-          appointment.professionalId,
+          professionalId,
           date,
           services,
           userId,
-          id, // Excluir la cita actual de la verificación
+          id, // ID de la cita actual para excluirla
         );
 
         if (!isAvailable) {
-          throw new BadRequestException(
-            'El profesional no está disponible en ese horario',
-          );
+          throw new BadRequestException('Horario no disponible');
         }
       }
 
-      const updatedAppointment = await this.appointmentRepository.save({
+      // Importante: El orden en el merge de objetos
+      // Primero va el objeto original, luego los datos de actualización
+      const appointmentToUpdate = {
         ...appointment,
-        ...updateAppointmentDto,
-      });
+        ...updateData,
+      };
 
-      return updatedAppointment;
+      // Guardar y devolver la cita actualizada
+      const result = await this.appointmentRepository.save(appointmentToUpdate);
+
+      // Para asegurar que obtenemos todos los datos relacionados
+      return this.findOne(id, userId);
     } catch (error) {
+      // Manejar errores
       this.handleError(error, {
         entity: 'la cita',
         operation: 'actualizar',
@@ -757,17 +530,50 @@ export class AppointmentsService {
     }
   }
 
+  // async findAllByDateRange(
+  //   userId: string,
+  //   startDate: Date,
+  //   endDate: Date,
+  // ): Promise<Appointment[]> {
+  //   try {
+  //     return await this.appointmentRepository.find({
+  //       where: {
+  //         ownerId: userId,
+  //         date: Between(startDate, endDate),
+  //       },
+  //       relations: ['client', 'professional', 'services'],
+  //       order: {
+  //         date: 'ASC',
+  //       },
+  //     });
+  //   } catch (error) {
+  //     this.handleError(error, {
+  //       entity: 'las citas',
+  //       operation: 'listar',
+  //       detail: 'por rango de fechas',
+  //     });
+  //   }
+  // }
+
   async findAllByDateRange(
     userId: string,
     startDate: Date,
     endDate: Date,
+    isEmployee = false,
   ): Promise<Appointment[]> {
     try {
+      const whereClause = isEmployee
+        ? {
+            professionalId: userId,
+            date: Between(startDate, endDate),
+          }
+        : {
+            ownerId: userId,
+            date: Between(startDate, endDate),
+          };
+
       return await this.appointmentRepository.find({
-        where: {
-          ownerId: userId,
-          date: Between(startDate, endDate),
-        },
+        where: whereClause,
         relations: ['client', 'professional', 'services'],
         order: {
           date: 'ASC',
@@ -782,18 +588,54 @@ export class AppointmentsService {
     }
   }
 
+  // async findAll(
+  //   userId: string,
+  //   startDate?: Date,
+  //   endDate?: Date,
+  // ): Promise<Appointment[]> {
+  //   try {
+  //     if (startDate && endDate) {
+  //       return this.findAllByDateRange(userId, startDate, endDate);
+  //     }
+
+  //     return await this.appointmentRepository.find({
+  //       where: { ownerId: userId },
+  //       relations: ['client', 'professional', 'services'],
+  //       order: {
+  //         date: 'ASC',
+  //       },
+  //     });
+  //   } catch (error) {
+  //     this.handleError(error, {
+  //       entity: 'las citas',
+  //       operation: 'listar',
+  //       detail: startDate && endDate ? 'filtrado por fechas' : 'todas',
+  //     });
+  //   }
+  // }
+
   async findAll(
     userId: string,
     startDate?: Date,
     endDate?: Date,
+    userRoles?: string[],
   ): Promise<Appointment[]> {
     try {
+      // Determinar si es un empleado
+      const isEmployee =
+        userRoles?.includes('Employee') && !userRoles?.includes('Owner');
+
       if (startDate && endDate) {
-        return this.findAllByDateRange(userId, startDate, endDate);
+        return this.findAllByDateRange(userId, startDate, endDate, isEmployee);
       }
 
+      // Construir consulta según el rol
+      const whereClause = isEmployee
+        ? { professionalId: userId } // Empleado: ver citas donde es profesional
+        : { ownerId: userId }; // Propietario: ver todas sus citas
+
       return await this.appointmentRepository.find({
-        where: { ownerId: userId },
+        where: whereClause,
         relations: ['client', 'professional', 'services'],
         order: {
           date: 'ASC',
@@ -829,6 +671,49 @@ export class AppointmentsService {
       this.handleError(error, {
         entity: 'la cita',
         operation: 'eliminar',
+      });
+    }
+  }
+
+  async findByProfessionalId(
+    professionalId: string,
+    startDate?: Date,
+    endDate?: Date,
+  ): Promise<Appointment[]> {
+    try {
+      console.log(`Buscando citas para el profesional ${professionalId}`);
+
+      // Construir la consulta base
+      let whereClause: any = {
+        professionalId,
+      };
+
+      // Agregar filtro de fecha si corresponde
+      if (startDate && endDate) {
+        whereClause.date = Between(startDate, endDate);
+      }
+
+      console.log('Query criteria:', JSON.stringify(whereClause));
+
+      // Realizar la consulta
+      const appointments = await this.appointmentRepository.find({
+        where: whereClause,
+        relations: ['client', 'professional', 'services'],
+        order: {
+          date: 'ASC',
+        },
+      });
+
+      console.log(
+        `Encontradas ${appointments.length} citas para el profesional`,
+      );
+      return appointments;
+    } catch (error) {
+      console.error('Error en findByProfessionalId:', error);
+      this.handleError(error, {
+        entity: 'las citas',
+        operation: 'listar',
+        detail: 'por profesional',
       });
     }
   }
