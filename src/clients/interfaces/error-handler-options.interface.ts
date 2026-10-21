@@ -1,4 +1,4 @@
-interface ErrorHandlerOptions {
+export interface ErrorHandlerOptions {
   entity: string;
   operation:
     | 'crear'

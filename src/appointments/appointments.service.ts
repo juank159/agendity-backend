@@ -675,6 +675,28 @@ export class AppointmentsService {
     }
   }
 
+  // ✅ NUEVO MÉTODO: Marcar recordatorio como enviado
+  async markReminderAsSent(id: string, userId: string): Promise<Appointment> {
+    try {
+      const appointment = await this.findOne(id, userId);
+      
+      // Marcar el recordatorio como enviado
+      appointment.reminderSent = true;
+      appointment.reminderSentAt = new Date();
+      
+      const updatedAppointment = await this.appointmentRepository.save(appointment);
+      
+      console.log(`Recordatorio marcado como enviado para cita ${id}`);
+      
+      return updatedAppointment;
+    } catch (error) {
+      this.handleError(error, {
+        entity: 'la cita',
+        operation: 'actualizar',
+      });
+    }
+  }
+
   async findByProfessionalId(
     professionalId: string,
     startDate?: Date,

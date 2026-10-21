@@ -79,7 +79,7 @@ export class EmailService {
             <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 5px;">
               ${code}
             </div>
-            <p>Este código expirará en 30 minutos.</p>
+            <p>Este código expirará en 10 minutos.</p>
             <p>Si no solicitaste restablecer tu contraseña, ignora este mensaje.</p>
           </div>
         `,

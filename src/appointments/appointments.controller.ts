@@ -67,6 +67,42 @@ export class AppointmentsController {
     return this.appointmentReminderService.sendManualReminder(id, user.id);
   }
 
+  // ✅ NUEVO ENDPOINT: Marcar recordatorio como enviado
+  @Patch(':id/reminder/mark-sent')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  async markReminderAsSent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser() user: User,
+  ) {
+    try {
+      this.logger.log(
+        `Marcando recordatorio como enviado para cita ${id} por usuario ${user.id}`,
+      );
+      
+      const result = await this.appointmentsService.markReminderAsSent(
+        id,
+        user.id,
+      );
+      
+      this.logger.log(
+        `Recordatorio marcado como enviado exitosamente para cita ${id}`,
+      );
+      
+      return {
+        success: true,
+        message: 'Recordatorio marcado como enviado',
+        appointmentId: id,
+        sentAt: new Date(),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error marcando recordatorio como enviado para cita ${id}: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
   // @Get()
   // @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   // async findAll(

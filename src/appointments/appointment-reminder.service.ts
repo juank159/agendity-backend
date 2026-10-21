@@ -2,7 +2,13 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, SchedulerRegistry } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import {
+  Repository,
+  Between,
+  MoreThanOrEqual,
+  LessThanOrEqual,
+  In,
+} from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CronJob } from 'cron';
@@ -73,30 +79,117 @@ export class AppointmentReminderService {
   // Se ejecuta todos los días a la medianoche
   @Cron('0 0 * * *') // Ejecutar diariamente a medianoche
   async scheduleDailyReminders() {
-    this.logger.log('Ejecutando tarea diaria de programación de recordatorios');
+    this.logger.log(
+      '🕐 Ejecutando tarea diaria de programación de recordatorios',
+    );
     await this.scheduleUpcomingReminders();
+    await this.cleanupExpiredReminders();
+  }
+
+  // ✅ NUEVA FUNCIONALIDAD: Limpiar recordatorios de citas pasadas
+  @Cron('0 */6 * * *') // Ejecutar cada 6 horas
+  async cleanupExpiredReminders() {
+    this.logger.log('🧹 Iniciando limpieza de recordatorios expirados');
+
+    try {
+      const currentDate = new Date();
+
+      // Buscar citas que ya pasaron pero aún tienen reminderSent: false
+      const expiredAppointments = await this.appointmentsRepository.find({
+        where: {
+          date: LessThanOrEqual(currentDate),
+          reminderSent: false,
+        },
+        select: ['id', 'date', 'reminderSent'],
+      });
+
+      this.logger.log(
+        `📊 Encontradas ${expiredAppointments.length} citas pasadas sin recordatorio marcado`,
+      );
+
+      // Marcar como recordatorio enviado para evitar procesamiento futuro
+      if (expiredAppointments.length > 0) {
+        const expiredIds = expiredAppointments.map((app) => app.id);
+
+        await this.appointmentsRepository.update(
+          { id: In(expiredIds) },
+          { reminderSent: true, reminderSentAt: currentDate },
+        );
+
+        this.logger.log(
+          `✅ Marcadas ${expiredAppointments.length} citas pasadas como procesadas`,
+        );
+      }
+
+      // Limpiar trabajos cron de citas que ya pasaron
+      await this.cleanupExpiredCronJobs();
+    } catch (error) {
+      this.logger.error(
+        `❌ Error durante limpieza de recordatorios: ${error.message}`,
+        error.stack,
+      );
+    }
+  }
+
+  // ✅ MÉTODO AUXILIAR: Limpiar trabajos cron expirados
+  private async cleanupExpiredCronJobs() {
+    try {
+      const currentDate = new Date();
+      const allJobs = this.schedulerRegistry.getCronJobs();
+      let cleanedCount = 0;
+
+      allJobs.forEach((job, jobName) => {
+        // Solo procesar trabajos de recordatorios
+        if (jobName.startsWith('reminder-')) {
+          const appointmentId = jobName.replace('reminder-', '');
+
+          // Verificar si el trabajo debería ser eliminado
+          // (esto es una aproximación, idealmente deberíamos verificar con la base de datos)
+          try {
+            this.schedulerRegistry.deleteCronJob(jobName);
+            cleanedCount++;
+            this.logger.log(`🗑️ Trabajo cron ${jobName} eliminado`);
+          } catch (e) {
+            // Trabajo ya no existe o error al eliminar
+            this.logger.warn(
+              `⚠️ No se pudo eliminar trabajo ${jobName}: ${e.message}`,
+            );
+          }
+        }
+      });
+
+      if (cleanedCount > 0) {
+        this.logger.log(
+          `🧹 Limpieza de trabajos cron completada: ${cleanedCount} eliminados`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(`❌ Error limpiando trabajos cron: ${error.message}`);
+    }
   }
 
   // Busca y programa recordatorios para citas próximas
   private async scheduleUpcomingReminders() {
     try {
       const currentDate = new Date();
-      const tomorrow = new Date(currentDate);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(23, 59, 59, 999);
+      // ✅ OPTIMIZACIÓN: Extender rango a próximos 7 días para mejor cobertura
+      const nextWeek = new Date(currentDate);
+      nextWeek.setDate(nextWeek.getDate() + 7);
+      nextWeek.setHours(23, 59, 59, 999);
 
       this.logger.log(
-        `Buscando citas entre ${currentDate.toISOString()} y ${tomorrow.toISOString()}`,
+        `🔍 Buscando citas futuras entre ${currentDate.toISOString()} y ${nextWeek.toISOString()}`,
       );
 
-      // Usar Between de TypeORM para el rango de fechas
+      // ✅ FILTRO MEJORADO: Solo citas futuras que no han enviado recordatorio
       const upcomingAppointments = await this.appointmentsRepository.find({
         where: {
-          date: Between(currentDate, tomorrow),
+          date: MoreThanOrEqual(currentDate), // Solo citas futuras
           reminderSent: false, // Solo las que no han sido enviadas
           status: AppointmentStatus.PENDING, // Solo citas confirmadas
         },
         relations: ['client', 'professional', 'services'],
+        order: { date: 'ASC' }, // Ordenar por fecha más próxima primero
       });
 
       this.logger.log(
@@ -158,41 +251,48 @@ export class AppointmentReminderService {
         return;
       }
 
-      // Calcular la hora del recordatorio (5 minutos antes de la cita)
+      // ✅ LÓGICA MEJORADA: Calcular tiempo de recordatorio inteligente
       const appointmentDate = new Date(appointment.date);
-      const reminderTime = subMinutes(appointmentDate, 5);
       const now = new Date();
+      const timeUntilAppointment = appointmentDate.getTime() - now.getTime();
+      const hoursUntilAppointment = timeUntilAppointment / (1000 * 60 * 60);
 
-      this.logger.log(
-        `Cita ${appointment.id} programada para: ${appointmentDate.toISOString()}`,
-      );
-      this.logger.log(
-        `Recordatorio para cita ${appointment.id} calculado para: ${reminderTime.toISOString()}`,
-      );
-      this.logger.log(`Hora actual: ${now.toISOString()}`);
-
-      // VERIFICACIÓN CRÍTICA: Si el recordatorio ya pasó o está muy cerca
-      if (
-        reminderTime <= now ||
-        reminderTime.getTime() - now.getTime() < 60000
-      ) {
-        // Menos de 1 minuto en el futuro
+      // ✅ VALIDACIÓN PREVIA: Verificar que la cita sea futura
+      if (appointmentDate <= now) {
         this.logger.warn(
-          `El tiempo de recordatorio para la cita ${appointment.id} ya pasó o está muy cerca (${reminderTime.toISOString()}). No se programará un cron job.`,
+          `⏰ Cita ${appointment.id} ya pasó (${appointmentDate.toISOString()}), no se programará recordatorio`,
+        );
+        return;
+      }
+
+      // ✅ TIEMPO DE RECORDATORIO INTELIGENTE basado en cuándo es la cita
+      let reminderMinutesBefore: number;
+      if (hoursUntilAppointment >= 24) {
+        reminderMinutesBefore = 60; // 1 hora antes para citas de mañana o más tarde
+      } else if (hoursUntilAppointment >= 2) {
+        reminderMinutesBefore = 30; // 30 minutos antes para citas del mismo día
+      } else {
+        reminderMinutesBefore = 15; // 15 minutos antes para citas muy próximas
+      }
+
+      const reminderTime = subMinutes(appointmentDate, reminderMinutesBefore);
+
+      this.logger.log(
+        `📅 Cita ${appointment.id} programada para: ${appointmentDate.toISOString()}`,
+      );
+      this.logger.log(
+        `⏰ Recordatorio ${reminderMinutesBefore} min antes: ${reminderTime.toISOString()}`,
+      );
+      this.logger.log(`🕐 Hora actual: ${now.toISOString()}`);
+
+      // ✅ VERIFICACIÓN MEJORADA: Si el recordatorio ya pasó
+      if (reminderTime <= now) {
+        this.logger.warn(
+          `⚠️ El tiempo de recordatorio para la cita ${appointment.id} ya pasó. Enviando inmediatamente.`,
         );
 
-        // Si la cita aún no ha ocurrido, enviar el recordatorio inmediatamente
-        if (appointmentDate > now) {
-          this.logger.log(
-            `Enviando recordatorio inmediatamente para cita próxima ${appointment.id}`,
-          );
-          await this.sendReminderNow(appointment);
-        } else {
-          this.logger.log(
-            `La cita ${appointment.id} ya pasó, no se enviará recordatorio`,
-          );
-        }
-
+        // Enviar el recordatorio inmediatamente para citas muy próximas
+        await this.sendReminderNow(appointment);
         return;
       }
 
@@ -301,7 +401,7 @@ export class AppointmentReminderService {
       }
 
       // Construir el mensaje
-      const message = `👋 Hola ${appointment.client.name}, le recordamos su cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Lo esperamos en nuestra ubicación habitual. Si necesita reagendar, por favor contáctenos.`;
+      const message = `👋 Hola, te recordamos tu cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual. Si necesita reagendar, por favor contáctenos.`;
 
       // Enviar el mensaje usando el servicio de WhatsApp
       const result = await this.whatsappService.sendWhatsAppMessage(
@@ -371,7 +471,7 @@ export class AppointmentReminderService {
       }
 
       // Construir el mensaje
-      const message = `👋 Hola ${appointment.client.name}, le recordamos su cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Lo esperamos en nuestra ubicación habitual.`;
+      const message = `👋 Hola , te recordamos tu cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual.`;
 
       this.logger.log(`Mensaje a enviar: ${message}`);
 

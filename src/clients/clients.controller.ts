@@ -20,6 +20,7 @@ import { User } from 'src/users/entities/user.entity';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { ClientsService } from './clients.service';
 import { ImportClientsDto } from './dto/import-clients.dto';
+import { PaginationDto } from './dto/pagination.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UploadService } from 'src/common/upload/upload.service';
 import { diskStorage } from 'multer';
@@ -52,8 +53,22 @@ export class ClientsController {
   @Get()
   @UseGuards(JwtAuthGuard)
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  findAll(@GetUser() user: User) {
-    return this.clientsService.findAll(user.id);
+  findAll(@GetUser() user: User, @Query() paginationDto: PaginationDto) {
+    console.log('🔍 GET /clients - Parámetros recibidos:', {
+      userId: user.id,
+      query: paginationDto
+    });
+    
+    return this.clientsService.findAll(user.id, paginationDto);
+  }
+
+  // ✅ ENDPOINT LEGACY PARA RETROCOMPATIBILIDAD
+  @Get('all')
+  @UseGuards(JwtAuthGuard)
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  findAllLegacy(@GetUser() user: User) {
+    console.log('🔄 GET /clients/all - Endpoint legacy usado');
+    return this.clientsService.findAllLegacy(user.id);
   }
 
   @Get(':id')

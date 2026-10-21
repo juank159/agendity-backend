@@ -22,6 +22,7 @@ import { GetUser } from 'src/common/decorators/get-user.decorator';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { CreateEmployeeWithDetailsDto } from './dto/create-employee-with-details.dto';
 import { ToggleEmployeeStatusDto } from './dto/toggle-employee-status.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -122,18 +123,32 @@ export class AuthController {
     return this.authService.verifyEmail(email, code);
   }
 
+  // @Post('forgot-password')
+  // forgotPassword(@Body('email') email: string) {
+  //   return this.authService.generatePasswordResetCode(email);
+  // }
+
   @Post('forgot-password')
   forgotPassword(@Body('email') email: string) {
     return this.authService.generatePasswordResetCode(email);
   }
 
+  // @Post('reset-password')
+  // resetPassword(
+  //   @Body('email') email: string,
+  //   @Body('code') code: string,
+  //   @Body('new_password') newPassword: string,
+  // ) {
+  //   return this.authService.resetPassword(email, code, newPassword);
+  // }
+
   @Post('reset-password')
-  resetPassword(
-    @Body('email') email: string,
-    @Body('code') code: string,
-    @Body('new_password') newPassword: string,
-  ) {
-    return this.authService.resetPassword(email, code, newPassword);
+  resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
+    return this.authService.resetPassword(
+      resetPasswordDto.email,
+      resetPasswordDto.code,
+      resetPasswordDto.newPassword,
+    );
   }
 
   @hasRoles(JwtRoles.Owner)

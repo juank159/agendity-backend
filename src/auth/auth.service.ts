@@ -715,55 +715,121 @@ export class AuthService {
 
   async generateVerificationCode(email: string, isNewUser: boolean = false) {
     try {
+      console.log(`🔥🔥🔥 MÉTODO GENERATEVERIFICATIONCODE LLAMADO`);
+      console.log(`📧 Email: ${email}`);
+      console.log(`👤 isNewUser: ${isNewUser}`);
+      console.log(`⏰ Timestamp: ${new Date().toISOString()}`);
+
       let user;
 
       if (isNewUser) {
-        // Para un nuevo usuario, creamos un registro temporal para almacenar el código
-        user = this.userRepository.create({
-          email: email,
-          is_email_verified: false,
-          // Otros campos requeridos con valores predeterminados
-          name: 'Pendiente',
-          lastname: 'Pendiente',
-          phone: 'Pendiente',
-          password: 'temporal', // Se actualizará después
-          is_google_account: false,
-        });
-      } else {
-        // Para usuarios existentes, buscarlos normalmente
+        console.log(`🆕 Procesando como NUEVO USUARIO...`);
+
+        // ← CORREGIDO: Para nuevos usuarios, primero buscar si ya existe
         user = await this.userRepository.findOne({ where: { email } });
+
+        if (user) {
+          console.log(`✅ Usuario ya existe en BD: ${user.id}`);
+          // Si el usuario ya existe, solo actualizamos el código
+        } else {
+          console.log(`👤 Usuario no existe, creando registro temporal...`);
+          // Solo crear si no existe
+          user = this.userRepository.create({
+            email: email,
+            is_email_verified: false,
+            name: 'Pendiente',
+            lastname: 'Pendiente',
+            phone: 'Pendiente',
+            password: 'temporal',
+            is_google_account: false,
+          });
+          console.log(`👤 Usuario temporal creado en memoria`);
+        }
+      } else {
+        console.log(`👤 Buscando usuario EXISTENTE...`);
+
+        user = await this.userRepository.findOne({ where: { email } });
+
         if (!user) {
+          console.log(`❌ Usuario no encontrado para email: ${email}`);
           throw new NotFoundException('Usuario no encontrado');
         }
+
+        console.log(`✅ Usuario existente encontrado: ${user.id}`);
       }
 
       // Generar código de 6 dígitos
       const code = Math.floor(100000 + Math.random() * 900000).toString();
+      console.log(`📝 Código generado: ${code}`);
 
       // Establecer expiración (10 minutos)
       const expires = new Date();
       expires.setMinutes(expires.getMinutes() + 10);
+      console.log(`⏰ Código expira en: ${expires.toISOString()}`);
 
-      // Guardar en el usuario
+      // Actualizar el usuario con el código
       user.verification_code = code;
       user.verification_code_expires = expires;
-      await this.userRepository.save(user);
 
-      // Enviar email
-      const emailSent = await this.emailService.sendVerificationCode(
-        email,
-        code,
+      console.log(`💾 Guardando código en base de datos...`);
+      await this.userRepository.save(user);
+      console.log(`✅ Código guardado exitosamente en BD`);
+
+      // ENVIAR EMAIL
+      console.log(`📧 INICIANDO PROCESO DE ENVÍO DE EMAIL...`);
+      console.log(`📧 Servicio de email disponible: ${!!this.emailService}`);
+      console.log(
+        `📧 Método sendVerificationCode disponible: ${!!this.emailService?.sendVerificationCode}`,
       );
 
-      if (!emailSent) {
+      try {
+        console.log(`📨 Llamando a emailService.sendVerificationCode...`);
+        const emailSent = await this.emailService.sendVerificationCode(
+          email,
+          code,
+        );
+
+        console.log(`📧 Resultado del envío: ${emailSent}`);
+        console.log(`📧 Tipo de resultado: ${typeof emailSent}`);
+        console.log(`📧 Es truthy: ${!!emailSent}`);
+
+        if (!emailSent) {
+          console.log(`❌❌❌ EMAIL NO SE ENVIÓ - emailSent es falsy`);
+          throw new InternalServerErrorException(
+            'Error al enviar el código de verificación',
+          );
+        }
+
+        console.log(`✅✅✅ EMAIL ENVIADO EXITOSAMENTE`);
+      } catch (emailError) {
+        console.error(`❌❌❌ ERROR EN ENVÍO DE EMAIL:`);
+        console.error(`Tipo de error: ${emailError.constructor.name}`);
+        console.error(`Mensaje: ${emailError.message}`);
+        console.error(`Stack: ${emailError.stack}`);
+
         throw new InternalServerErrorException(
-          'Error al enviar el código de verificación',
+          `Error al enviar email de verificación: ${emailError.message}`,
         );
       }
 
+      console.log(`🎉 MÉTODO GENERATEVERIFICATIONCODE COMPLETADO EXITOSAMENTE`);
       return { message: 'Código de verificación enviado' };
     } catch (error) {
-      throw error;
+      console.error('❌❌❌ ERROR COMPLETO EN GENERATEVERIFICATIONCODE:');
+      console.error('Tipo de error:', error.constructor.name);
+      console.error('Mensaje:', error.message);
+      console.error('Stack:', error.stack);
+
+      if (
+        error instanceof NotFoundException ||
+        error instanceof InternalServerErrorException
+      ) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        `Error inesperado en generación de código: ${error.message}`,
+      );
     }
   }
 
@@ -1021,9 +1087,9 @@ export class AuthService {
       // Generar código de 6 dígitos
       const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-      // Establecer expiración (30 minutos)
+      // Establecer expiración (10 minutos)
       const expires = new Date();
-      expires.setMinutes(expires.getMinutes() + 30);
+      expires.setMinutes(expires.getMinutes() + 10);
 
       // Guardar en el usuario
       user.reset_password_code = code;

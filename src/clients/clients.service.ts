@@ -16,7 +16,9 @@ import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { RELATION_GROUPS } from './constants/relations.constants';
 import { ClientFindOptions } from './interfaces/client-find-options.interface';
+import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { PaginationDto, PaginationResult } from './dto/pagination.dto';
 
 @Injectable()
 export class ClientsService {
@@ -147,7 +149,110 @@ export class ClientsService {
     }
   }
 
-  async findAll(userId: string): Promise<Client[]> {
+  async findAll(userId: string, paginationDto?: PaginationDto): Promise<PaginationResult<Client>> {
+    try {
+      const {
+        page = 1,
+        limit = 10,
+        search,
+        sortBy = 'created_at',
+        sortOrder = 'DESC',
+        status = 'all',
+        source = 'all'
+      } = paginationDto || {};
+
+      console.log('📊 Paginación solicitada:', {
+        page,
+        limit,
+        search,
+        sortBy,
+        sortOrder,
+        status,
+        source,
+        userId
+      });
+
+      const skip = (page - 1) * limit;
+
+      // Construcción dinámica de la consulta
+      const queryBuilder = this.clientRepository
+        .createQueryBuilder('client')
+        .where('client.ownerId = :ownerId', { ownerId: userId });
+
+      // ✅ FILTRO DE BÚSQUEDA
+      if (search) {
+        const searchTerm = `%${search.toLowerCase()}%`;
+        queryBuilder.andWhere(
+          '(LOWER(client.name) LIKE :search OR LOWER(client.lastname) LIKE :search OR LOWER(client.email) LIKE :search OR client.phone LIKE :search)',
+          { search: searchTerm }
+        );
+      }
+
+      // ✅ FILTRO POR ESTADO
+      if (status !== 'all') {
+        queryBuilder.andWhere('client.isActive = :isActive', {
+          isActive: status === 'active'
+        });
+      }
+
+      // ✅ FILTRO POR ORIGEN
+      if (source !== 'all') {
+        queryBuilder.andWhere('client.isFromDevice = :isFromDevice', {
+          isFromDevice: source === 'imported'
+        });
+      }
+
+      // ✅ ORDENAMIENTO DINÁMICO
+      const validSortFields = ['name', 'lastname', 'email', 'phone', 'created_at'];
+      const finalSortBy = validSortFields.includes(sortBy) ? sortBy : 'created_at';
+      queryBuilder.orderBy(`client.${finalSortBy}`, sortOrder);
+
+      // ✅ PAGINACIÓN
+      queryBuilder.skip(skip).take(limit);
+
+      // ✅ CARGAR SOLO RELACIONES MÍNIMAS PARA LISTADO (OPTIMIZACIÓN)
+      // No cargar appointments y reviews por defecto para mejorar performance
+      // queryBuilder.leftJoinAndSelect('client.appointments', 'appointments');
+      // queryBuilder.leftJoinAndSelect('client.reviews', 'reviews');
+
+      // ✅ EJECUTAR CONSULTA CON COUNT
+      const [data, total] = await queryBuilder.getManyAndCount();
+
+      // ✅ CALCULAR METADATOS DE PAGINACIÓN
+      const totalPages = Math.ceil(total / limit);
+      const hasNextPage = page < totalPages;
+      const hasPrevPage = page > 1;
+
+      console.log('📈 Resultado de paginación:', {
+        total,
+        returned: data.length,
+        page,
+        totalPages,
+        hasNextPage,
+        hasPrevPage
+      });
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages,
+        hasNextPage,
+        hasPrevPage
+      };
+
+    } catch (error) {
+      console.error('❌ Error en findAll paginado:', error);
+      this.handleError(error, {
+        entity: 'los clientes',
+        operation: 'listar',
+      });
+    }
+  }
+
+  // ✅ MANTENER MÉTODO LEGACY PARA RETROCOMPATIBILIDAD
+  async findAllLegacy(userId: string): Promise<Client[]> {
     try {
       return await this.clientRepository.find({
         where: { ownerId: userId },
