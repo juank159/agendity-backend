@@ -9,9 +9,12 @@ import {
   Logger,
 } from '@nestjs/common';
 
+import { Public } from '../../common/decorators/public.decorator';
 import { WompiService } from '../services/wompi.service';
 import { SubscriptionsService } from '../services/subscriptions.service';
 
+// Público: lo llama Wompi sin JWT. La autenticidad se comprueba con la firma del evento.
+@Public()
 @Controller('webhooks/wompi')
 export class WompiWebhookController {
   private readonly logger = new Logger(WompiWebhookController.name);

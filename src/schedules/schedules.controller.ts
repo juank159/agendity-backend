@@ -7,6 +7,8 @@ import {
   Param,
   Delete,
 } from '@nestjs/common';
+import { hasRoles } from '../auth/jwt/has.roles';
+import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SchedulesService } from './schedules.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
@@ -18,6 +20,7 @@ import { Schedule } from './entities/schedule.entity';
 export class SchedulesController {
   constructor(private readonly schedulesService: SchedulesService) {}
 
+  @hasRoles(JwtRoles.Owner)
   @Post()
   @ApiOperation({ summary: 'Crear un nuevo horario' })
   @ApiResponse({
@@ -29,6 +32,7 @@ export class SchedulesController {
     return this.schedulesService.create(createScheduleDto);
   }
 
+  @hasRoles(JwtRoles.Owner)
   @Post('batch/:userId')
   @ApiOperation({ summary: 'Crear múltiples horarios para un usuario' })
   @ApiResponse({
@@ -43,6 +47,8 @@ export class SchedulesController {
     return this.schedulesService.createBatch(userId, schedules);
   }
 
+  // Devuelve los horarios de todos los negocios: solo Admin hasta filtrar por tenant (2.02).
+  @hasRoles(JwtRoles.Admin)
   @Get()
   @ApiOperation({ summary: 'Obtener todos los horarios' })
   @ApiResponse({
@@ -54,6 +60,7 @@ export class SchedulesController {
     return this.schedulesService.findAll();
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get('user/:userId')
   @ApiOperation({ summary: 'Obtener horarios de un profesional' })
   @ApiResponse({
@@ -65,6 +72,7 @@ export class SchedulesController {
     return this.schedulesService.findByUser(userId);
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get(':id')
   @ApiOperation({ summary: 'Obtener un horario por ID' })
   @ApiResponse({
@@ -76,6 +84,7 @@ export class SchedulesController {
     return this.schedulesService.findOne(id);
   }
 
+  @hasRoles(JwtRoles.Owner)
   @Patch(':id')
   @ApiOperation({ summary: 'Actualizar un horario' })
   @ApiResponse({
@@ -90,6 +99,7 @@ export class SchedulesController {
     return this.schedulesService.update(id, updateScheduleDto);
   }
 
+  @hasRoles(JwtRoles.Owner)
   @Delete(':id')
   @ApiOperation({ summary: 'Eliminar un horario' })
   @ApiResponse({ status: 200, description: 'Horario eliminado' })

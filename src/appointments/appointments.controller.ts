@@ -6,7 +6,6 @@ import {
   Patch,
   Param,
   Delete,
-  UseGuards,
   ParseUUIDPipe,
   Query,
   BadRequestException,
@@ -19,16 +18,13 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { Appointment } from './entities/appointment.entity';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { User } from '../users/entities/user.entity';
-import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
 import { AppointmentReminderService } from './appointment-reminder.service';
 import { SubscriptionLimitsGuard } from 'src/subscriptions/guards/subscription-limits.guard';
 import { SubscriptionLimitInterceptor } from '../subscriptions/interceptors/subscription-limit.interceptor';
 
 @Controller('appointments')
-@UseGuards(JwtAuthGuard, JwtRolesGuard)
 export class AppointmentsController {
   private readonly logger = new Logger(AppointmentsController.name);
   constructor(
@@ -37,7 +33,7 @@ export class AppointmentsController {
   ) {}
 
   @Post()
-  //@UseGuards(JwtAuthGuard, JwtRolesGuard, SubscriptionLimitsGuard)
+  //@UseGuards(SubscriptionLimitsGuard) (JWT y roles los aplican los guards globales)
   //@UseInterceptors(SubscriptionLimitInterceptor)
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async create(
@@ -243,7 +239,6 @@ export class AppointmentsController {
   }
 
   @Get('check-reminders')
-  @UseGuards(JwtAuthGuard)
   async checkReminders(@GetUser() user: User) {
     this.logger.log(`Manual reminder check requested by user ${user.id}`);
     await this.appointmentReminderService.checkAndScheduleReminders();

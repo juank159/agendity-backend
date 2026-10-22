@@ -19,6 +19,9 @@ import { DataSourceConfig } from './config/data.postgres.source';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtAuthGuard } from './auth/jwt/jwt.auth.guard';
+import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
 
 @Module({
   imports: [
@@ -64,6 +67,11 @@ import { SubscriptionsModule } from './subscriptions/subscriptions.module';
     WhatsappModule,
 
     SubscriptionsModule,
+  ],
+  providers: [
+    // El orden importa: primero se autentica (JWT) y después se comprueban los roles.
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: JwtRolesGuard },
   ],
 })
 export class AppModule {}

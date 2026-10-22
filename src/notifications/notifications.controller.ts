@@ -1,4 +1,6 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+import { hasRoles } from '../auth/jwt/has.roles';
+import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
@@ -10,6 +12,8 @@ import { Notification, ReceiverType } from './entities/notification.entity';
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
+  // Las notificaciones las crea el propio backend; por HTTP solo Admin.
+  @hasRoles(JwtRoles.Admin)
   @Post()
   @ApiOperation({ summary: 'Crear una nueva notificación' })
   @ApiResponse({ status: 201, description: 'Notificación creada exitosamente', type: Notification })
@@ -17,6 +21,8 @@ export class NotificationsController {
     return this.notificationsService.create(createNotificationDto);
   }
 
+  // Devuelve las de todos los negocios: solo Admin hasta filtrar por tenant (2.02).
+  @hasRoles(JwtRoles.Admin)
   @Get()
   @ApiOperation({ summary: 'Obtener todas las notificaciones' })
   @ApiResponse({ status: 200, description: 'Lista de notificaciones', type: [Notification] })
@@ -24,6 +30,7 @@ export class NotificationsController {
     return this.notificationsService.findAll();
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get('receiver/:receiverId')
   @ApiOperation({ summary: 'Obtener notificaciones de un receptor' })
   @ApiQuery({ name: 'type', enum: ReceiverType })
@@ -35,6 +42,7 @@ export class NotificationsController {
     return this.notificationsService.findByReceiver(receiverId, receiverType);
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get('unread/count/:receiverId')
   @ApiOperation({ summary: 'Obtener cantidad de notificaciones no leídas' })
   @ApiQuery({ name: 'type', enum: ReceiverType })
@@ -50,6 +58,7 @@ export class NotificationsController {
     return this.notificationsService.getUnreadCount(receiverId, receiverType);
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Patch('read/:id')
   @ApiOperation({ summary: 'Marcar notificación como leída' })
   @ApiResponse({ status: 200, description: 'Notificación marcada como leída', type: Notification })
@@ -57,6 +66,7 @@ export class NotificationsController {
     return this.notificationsService.markAsRead(id);
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Patch('read-all/:receiverId')
   @ApiOperation({ summary: 'Marcar todas las notificaciones como leídas' })
   @ApiQuery({ name: 'type', enum: ReceiverType })
@@ -68,6 +78,7 @@ export class NotificationsController {
     return this.notificationsService.markAllAsRead(receiverId, receiverType);
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get(':id')
   @ApiOperation({ summary: 'Obtener una notificación por ID' })
   @ApiResponse({ status: 200, description: 'Notificación encontrada', type: Notification })
@@ -75,6 +86,7 @@ export class NotificationsController {
     return this.notificationsService.findOne(id);
   }
 
+  @hasRoles(JwtRoles.Owner)
   @Delete(':id')
   @ApiOperation({ summary: 'Eliminar una notificación' })
   @ApiResponse({ status: 200, description: 'Notificación eliminada' })

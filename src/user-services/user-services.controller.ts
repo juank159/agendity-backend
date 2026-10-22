@@ -7,6 +7,8 @@ import {
   Delete,
   ParseUUIDPipe,
 } from '@nestjs/common';
+import { hasRoles } from '../auth/jwt/has.roles';
+import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { UserServicesService } from './user-services.service';
 import { AssignServiceDto } from './dto/assign-service.dto';
@@ -17,6 +19,7 @@ import { UserService } from './entities/user-service.entity';
 export class UserServicesController {
   constructor(private readonly userServicesService: UserServicesService) {}
 
+  @hasRoles(JwtRoles.Owner)
   @Post()
   @ApiOperation({ summary: 'Asignar un servicio a un usuario' })
   @ApiParam({
@@ -46,6 +49,7 @@ export class UserServicesController {
   }
 
   // Nuevo endpoint para asignar múltiples servicios
+  @hasRoles(JwtRoles.Owner)
   @Post('batch')
   @ApiOperation({ summary: 'Asignar múltiples servicios a un usuario' })
   @ApiParam({
@@ -69,6 +73,7 @@ export class UserServicesController {
     );
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get()
   @ApiOperation({ summary: 'Obtener todos los servicios de un usuario' })
   @ApiParam({
@@ -94,6 +99,7 @@ export class UserServicesController {
     return this.userServicesService.getUserServices(userId);
   }
 
+  @hasRoles(JwtRoles.Owner)
   @Delete(':serviceId')
   @ApiOperation({ summary: 'Eliminar un servicio asignado a un usuario' })
   @ApiParam({

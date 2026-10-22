@@ -7,20 +7,16 @@ import {
   Patch,
   Param,
   Delete,
-  UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { CustomPaymentMethodsService } from './custom-payment-methods.service';
 import { CreateCustomPaymentMethodDto } from './dto/create-custom-payment-method.dto';
 import { UpdateCustomPaymentMethodDto } from './dto/update-custom-payment-method.dto';
-import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
-import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { User } from '../users/entities/user.entity';
 
-@UseGuards(JwtAuthGuard, JwtRolesGuard)
 @Controller('custom-payment-methods')
 export class CustomPaymentMethodsController {
   constructor(

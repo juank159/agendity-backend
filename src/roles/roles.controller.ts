@@ -1,4 +1,6 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { hasRoles } from '../auth/jwt/has.roles';
+import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { RolesService } from './roles.service';
 import { CreateRoleDto } from './dto/create-role.dto';
@@ -6,6 +8,7 @@ import { UpdateRoleDto } from './dto/update-role.dto';
 import { Role } from './entities/role.entity';
 
 @ApiTags('Roles')
+@hasRoles(JwtRoles.Admin)
 @Controller('roles')
 export class RolesController {
   constructor(private readonly rolesService: RolesService) {}

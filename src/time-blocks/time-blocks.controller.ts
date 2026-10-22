@@ -7,7 +7,6 @@ import {
   Param,
   Delete,
   Query,
-  UseGuards,
   ParseUUIDPipe,
   ParseIntPipe,
 } from '@nestjs/common';
@@ -25,16 +24,13 @@ import { UpdateTimeBlockDto } from './dto/update-time-block.dto';
 import { TimeBlock } from './entities/time-block.entity';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { User } from '../users/entities/user.entity';
-import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
 import { ParseDatePipe } from '../common/pipes/parse-date.pipe';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
 
 @ApiTags('Bloques de Tiempo')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, JwtRolesGuard)
 @Controller('time-blocks')
 export class TimeBlocksController {
   constructor(private readonly timeBlocksService: TimeBlocksService) {}

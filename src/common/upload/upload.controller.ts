@@ -7,6 +7,8 @@ import {
   UseInterceptors,
   Logger,
 } from '@nestjs/common';
+import { hasRoles } from '../../auth/jwt/has.roles';
+import { JwtRoles } from '../../auth/jwt/jwt.role';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { UploadService } from './upload.service';
@@ -42,6 +44,7 @@ export class UploadController {
     }
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Post('image')
   @UseInterceptors(
     FileInterceptor('file', {

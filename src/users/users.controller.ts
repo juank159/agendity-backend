@@ -6,7 +6,6 @@ import {
   Patch,
   Param,
   Delete,
-  UseGuards,
   BadRequestException,
   UseInterceptors,
   UploadedFile,
@@ -14,14 +13,12 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { JwtAuthGuard } from 'src/auth/jwt/jwt.auth.guard';
 import { FindUserQuery } from 'src/auth/interfaces';
 import { isUUID } from 'class-validator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import * as path from 'path';
 import { CloudinaryService } from 'src/static/cloudinary.service';
-import { JwtRolesGuard } from 'src/auth/jwt/jwt.roles.guard';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
 import { UploadService } from 'src/common/upload/upload.service';
@@ -34,12 +31,12 @@ export class UsersController {
   ) {}
 
   @hasRoles(JwtRoles.Owner)
-  @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Get()
   findAll() {
     return this.usersService.findAll();
   }
 
+  @hasRoles(JwtRoles.Owner)
   @Get(':param')
   findOne(@Param('param') param: string) {
     // Transformar el parámetro en un objeto FindUserQuery
@@ -59,11 +56,13 @@ export class UsersController {
     );
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.usersService.update(id, updateUserDto);
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Post('image')
   @UseInterceptors(FileInterceptor('file'))
   async uploadImage(@UploadedFile() file: Express.Multer.File) {
@@ -76,6 +75,7 @@ export class UsersController {
     };
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Patch(':id/image')
   @UseInterceptors(FileInterceptor('file'))
   async updateUserImage(
@@ -104,7 +104,6 @@ export class UsersController {
   }
 
   @hasRoles(JwtRoles.Owner)
-  @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.remove(id);

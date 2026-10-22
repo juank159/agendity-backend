@@ -1,7 +1,6 @@
 import {
   Controller,
   Post,
-  UseGuards,
   Get,
   Param,
   Patch,
@@ -12,7 +11,6 @@ import {
   BadRequestException,
   Query,
 } from '@nestjs/common';
-import { JwtAuthGuard } from 'src/auth/jwt/jwt.auth.guard';
 import { GetUser } from 'src/common/decorators/get-user.decorator';
 import { Client } from './entities/client.entity';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -36,13 +34,11 @@ export class ClientsController {
   ) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard)
   create(@Body() createClientDto: CreateClientDto, @GetUser() user: User) {
     return this.clientsService.create(createClientDto, user.id);
   }
 
   @Post('batch')
-  @UseGuards(JwtAuthGuard)
   async importBatch(
     @Body() importClientsDto: ImportClientsDto,
     @GetUser() user: User,
@@ -51,7 +47,6 @@ export class ClientsController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   findAll(@GetUser() user: User, @Query() paginationDto: PaginationDto) {
     console.log('🔍 GET /clients - Parámetros recibidos:', {
@@ -64,7 +59,6 @@ export class ClientsController {
 
   // ✅ ENDPOINT LEGACY PARA RETROCOMPATIBILIDAD
   @Get('all')
-  @UseGuards(JwtAuthGuard)
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   findAllLegacy(@GetUser() user: User) {
     console.log('🔄 GET /clients/all - Endpoint legacy usado');
@@ -72,13 +66,11 @@ export class ClientsController {
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
   findOne(@Param('id') id: string, @GetUser() user: User) {
     return this.clientsService.findOne(id, user.id);
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard)
   update(
     @Param('id') id: string,
     @Body() updateClientDto: UpdateClientDto,
@@ -88,11 +80,11 @@ export class ClientsController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
   remove(@Param('id') id: string, @GetUser() user: User) {
     return this.clientsService.remove(id, user.id);
   }
 
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Post('image')
   @UseInterceptors(
     FileInterceptor('file', {

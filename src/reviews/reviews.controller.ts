@@ -6,7 +6,6 @@ import {
   Patch,
   Param,
   Delete,
-  UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import {
@@ -22,14 +21,11 @@ import { UpdateReviewDto } from './dto/update-review.dto';
 import { Review } from './entities/review.entity';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { User } from '../users/entities/user.entity';
-import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
 
 @ApiTags('Reseñas')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, JwtRolesGuard)
 @Controller('reviews')
 export class ReviewsController {
   constructor(private readonly reviewsService: ReviewsService) {}

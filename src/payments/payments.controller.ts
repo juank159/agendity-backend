@@ -5,7 +5,6 @@ import {
   Body,
   Param,
   Query,
-  UseGuards,
   ParseUUIDPipe,
   DefaultValuePipe,
   ParseIntPipe,
@@ -18,13 +17,10 @@ import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { Payment } from './entities/payment.entity';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { User } from '../users/entities/user.entity';
-import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { JwtRolesGuard } from '../auth/jwt/jwt.roles.guard';
 import { ParseDatePipe } from 'src/common/pipes/parse-date.pipe';
 
-@UseGuards(JwtAuthGuard, JwtRolesGuard)
 @Controller('payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
@@ -258,7 +254,6 @@ export class PaymentsController {
   }
 
   @Get('diagnose-timezone')
-  @UseGuards(JwtAuthGuard)
   async diagnoseTimezone(@GetUser('id') userId: string) {
     return this.paymentsService.diagnoseTimezoneProblem();
   }

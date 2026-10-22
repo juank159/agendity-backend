@@ -6,7 +6,6 @@ import {
   Patch,
   Param,
   Delete,
-  UseGuards,
   HttpCode,
   Logger,
 } from '@nestjs/common';
@@ -15,8 +14,6 @@ import { ConfigService } from '@nestjs/config';
 import { CreateSubscriptionPlanDto } from '../dto/create-subscription-plan.dto';
 import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
-import { JwtAuthGuard } from '../../auth/jwt/jwt.auth.guard';
-import { JwtRolesGuard } from '../../auth/jwt/jwt.roles.guard';
 import { hasRoles } from '../../auth/jwt/has.roles';
 import { JwtRoles } from '../../auth/jwt/jwt.role';
 import { GetUser } from '../../common/decorators/get-user.decorator';
@@ -36,7 +33,6 @@ export class SubscriptionsController {
 
   // Endpoints para planes de suscripción - solo accesibles para Admin
   @hasRoles(JwtRoles.Admin)
-  @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Post('plans')
   createPlan(@Body() createPlanDto: CreateSubscriptionPlanDto) {
     return this.subscriptionsService.createPlan(createPlanDto);
@@ -53,7 +49,6 @@ export class SubscriptionsController {
   }
 
   @hasRoles(JwtRoles.Admin)
-  @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Patch('plans/:id')
   updatePlan(
     @Param('id') id: string,
@@ -63,20 +58,17 @@ export class SubscriptionsController {
   }
 
   // Endpoints para suscripciones de tenants
-  @UseGuards(JwtAuthGuard)
   @Get('status')
   getSubscriptionStatus(@GetUser() user: User) {
     return this.subscriptionsService.getSubscriptionByTenantId(user.tenant_id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('check-limits')
   checkSubscriptionLimits(@GetUser() user: User) {
     return this.subscriptionsService.checkSubscriptionStatus(user.tenant_id);
   }
 
   @hasRoles(JwtRoles.Owner)
-  @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Post('subscribe')
   subscribe(
     @GetUser() user: User,
@@ -93,7 +85,6 @@ export class SubscriptionsController {
     );
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('refresh-status')
   @HttpCode(200)
   async refreshSubscriptionStatus(@GetUser() user: User) {
@@ -290,14 +281,12 @@ export class SubscriptionsController {
   }
 
   @hasRoles(JwtRoles.Owner)
-  @UseGuards(JwtAuthGuard, JwtRolesGuard)
   @Post('cancel')
   @HttpCode(200)
   cancelSubscription(@GetUser() user: User) {
     return this.subscriptionsService.cancelSubscription(user.tenant_id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('payment-history')
   getPaymentHistory(@GetUser() user: User) {
     return this.subscriptionsService.getPaymentHistory(user.tenant_id);

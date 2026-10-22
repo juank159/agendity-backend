@@ -1,23 +1,13 @@
 // src/whatsapp/whatsapp.controller.ts
-import {
-  Controller,
-  Post,
-  Body,
-  Get,
-  Patch,
-  Param,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Post, Body, Get, Patch, Param } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 import { CreateWhatsappConfigDto } from './dto/create-whatsapp-config.dto';
 import { UpdateWhatsappConfigDto } from './dto/update-whatsapp-config.dto';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
-import { JwtAuthGuard } from '../auth/jwt/jwt.auth.guard';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { User } from '../users/entities/user.entity';
 
 @Controller('whatsapp')
-@UseGuards(JwtAuthGuard)
 export class WhatsappController {
   constructor(private readonly whatsappService: WhatsappService) {}
 
