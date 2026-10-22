@@ -9,17 +9,16 @@ import {
   DefaultValuePipe,
   ParseIntPipe,
   BadRequestException,
-  Req,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { Payment } from './entities/payment.entity';
-import { GetUser } from '../common/decorators/get-user.decorator';
-import { User } from '../users/entities/user.entity';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ParseDatePipe } from 'src/common/pipes/parse-date.pipe';
+import { AuthUser } from '../auth/interfaces';
 
 @Controller('payments')
 export class PaymentsController {
@@ -27,7 +26,10 @@ export class PaymentsController {
 
   @Post()
   @hasRoles(JwtRoles.Owner)
-  create(@Body() createPaymentDto: CreatePaymentDto, @GetUser() user: User) {
+  create(
+    @Body() createPaymentDto: CreatePaymentDto,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.paymentsService.create(createPaymentDto, user.id);
   }
 
@@ -36,14 +38,14 @@ export class PaymentsController {
   refund(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() refundDto: RefundPaymentDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.refund(id, refundDto, user.id);
   }
 
   @Get()
   @hasRoles(JwtRoles.Owner)
-  findAll(@GetUser() user: User) {
+  findAll(@CurrentUser() user: AuthUser) {
     return this.paymentsService.findAll(user.id);
   }
 
@@ -52,7 +54,7 @@ export class PaymentsController {
   getStats(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.getPaymentStats(startDate, endDate, user.id);
   }
@@ -63,54 +65,16 @@ export class PaymentsController {
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Query('professionalId') professionalId: string,
-    @GetUser() user: User,
-    @Req() request: Request,
+    @CurrentUser() user: AuthUser,
   ) {
-    // Añadir logs de depuración
-    console.log('Usuario accediendo a employee-stats:', {
-      id: user.id,
-      roles: user.roles?.map((r) => (typeof r === 'string' ? r : r.name)),
-      email: user.email,
-    });
-
-    // Obtener los roles como strings
-    const userRolesAsString = user.roles.map((role) =>
-      typeof role === 'string' ? role : role.name || role.toString(),
-    );
-    console.log('Roles como string:', userRolesAsString);
-
-    // Verificar si el usuario es un empleado (y no es dueño)
     const isOnlyEmployee =
-      userRolesAsString.includes(JwtRoles.Employee.toString()) &&
-      !userRolesAsString.includes(JwtRoles.Owner.toString());
-    console.log('¿Es solo empleado?', isOnlyEmployee);
+      user.roles.includes(JwtRoles.Employee) &&
+      !user.roles.includes(JwtRoles.Owner);
 
     if (isOnlyEmployee) {
-      // Extraer el owner_id directamente del token JWT
-      let ownerId: string | undefined;
-
-      // Obtener el token de la cabecera de autorización
-      const authHeader = request.headers['authorization'] as string;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7); // Quitar 'Bearer '
-        try {
-          // Decodificar el token sin verificar (ya ha sido verificado por el guard)
-          const decodedToken = JSON.parse(
-            Buffer.from(token.split('.')[1], 'base64').toString(),
-          );
-
-          // Extraer owner_id del token
-          ownerId = decodedToken.owner_id;
-          console.log('Owner ID extraído del token:', ownerId);
-        } catch (error) {
-          console.error('Error decodificando token:', error);
-        }
-      }
-
-      console.log('Empleado ID:', user.id);
-      console.log('Propietario ID determinado:', ownerId);
-
-      if (!ownerId) {
+      // El owner del empleado sale del AuthUser (2.01), no del token a mano.
+      const ownerId = user.ownerId;
+      if (!ownerId || ownerId === user.id) {
         throw new BadRequestException(
           'No se puede determinar el propietario del empleado',
         );
@@ -150,7 +114,7 @@ export class PaymentsController {
   @hasRoles(JwtRoles.Owner)
   findByAppointment(
     @Param('id', ParseUUIDPipe) id: string,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.findByAppointment(id, user.id);
   }
@@ -165,7 +129,10 @@ export class PaymentsController {
 
   @Get(':id')
   @hasRoles(JwtRoles.Owner)
-  findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.paymentsService.findOne(id, user.id);
   }
 
@@ -174,7 +141,7 @@ export class PaymentsController {
   getStatsByMethod(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.getPaymentStatsByMethod(
       startDate,
@@ -188,7 +155,7 @@ export class PaymentsController {
   getStatsComparison(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.getPaymentStatsComparison(
       startDate,
@@ -202,7 +169,7 @@ export class PaymentsController {
   getStatsByService(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.getPaymentStatsByService(
       startDate,
@@ -216,7 +183,7 @@ export class PaymentsController {
   getStatsByProfessional(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.getPaymentStatsByProfessional(
       startDate,
@@ -231,7 +198,7 @@ export class PaymentsController {
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.getPaymentStatsByClient(
       startDate,
@@ -247,7 +214,7 @@ export class PaymentsController {
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Query('limit', new DefaultValuePipe(5), ParseIntPipe) limit: number,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.paymentsService.getTopClients(
       startDate,

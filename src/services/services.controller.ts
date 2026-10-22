@@ -12,10 +12,10 @@ import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
 import { Service } from './entities/service.entity';
-import { GetUser } from 'src/common/decorators/get-user.decorator';
-import { User } from 'src/users/entities/user.entity';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
+import { AuthUser } from '../auth/interfaces';
 
 @Controller('services')
 export class ServicesController {
@@ -23,13 +23,16 @@ export class ServicesController {
 
   @hasRoles(JwtRoles.Owner)
   @Post()
-  create(@Body() createServiceDto: CreateServiceDto, @GetUser() user: User) {
+  create(
+    @Body() createServiceDto: CreateServiceDto,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.servicesService.create(createServiceDto, user.id);
   }
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get()
-  findAll(@GetUser() user: User) {
+  findAll(@CurrentUser() user: AuthUser) {
     return this.servicesService.findAll(user.id);
   }
 
@@ -37,14 +40,17 @@ export class ServicesController {
   @Get('category/:categoryId')
   findByCategory(
     @Param('categoryId', ParseUUIDPipe) categoryId: string,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.servicesService.findByCategory(categoryId, user.id);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.servicesService.findOne(id, user.id);
   }
 
@@ -53,14 +59,17 @@ export class ServicesController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateServiceDto: UpdateServiceDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.servicesService.update(id, updateServiceDto, user.id);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.servicesService.remove(id, user.id);
   }
 }

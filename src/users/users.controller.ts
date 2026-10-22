@@ -12,13 +12,14 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { FindUserQuery, JwtPayload } from 'src/auth/interfaces';
-import { GetUser } from 'src/common/decorators/get-user.decorator';
+import { FindUserQuery } from 'src/auth/interfaces';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { isUUID } from 'class-validator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
 import { UploadService } from 'src/common/upload/upload.service';
+import { AuthUser } from '../auth/interfaces';
 
 @Controller('users')
 export class UsersController {
@@ -29,13 +30,13 @@ export class UsersController {
 
   @hasRoles(JwtRoles.Owner)
   @Get()
-  findAll(@GetUser() actor: JwtPayload) {
+  findAll(@CurrentUser() actor: AuthUser) {
     return this.usersService.findAll(actor);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Get(':param')
-  findOne(@Param('param') param: string, @GetUser() actor: JwtPayload) {
+  findOne(@Param('param') param: string, @CurrentUser() actor: AuthUser) {
     const query: FindUserQuery = this.buildQueryObject(param);
     return this.usersService.findOneForActor(actor, query);
   }
@@ -57,7 +58,7 @@ export class UsersController {
   update(
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,
-    @GetUser() actor: JwtPayload,
+    @CurrentUser() actor: AuthUser,
   ) {
     return this.usersService.update(actor, id, updateUserDto);
   }
@@ -81,7 +82,7 @@ export class UsersController {
   async updateUserImage(
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: Express.Multer.File,
-    @GetUser() actor: JwtPayload,
+    @CurrentUser() actor: AuthUser,
   ) {
     // Comprobar el acceso ANTES de subir la imagen (404 si no es suyo).
     await this.usersService.findOneForActor(actor, { id });

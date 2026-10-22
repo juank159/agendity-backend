@@ -180,7 +180,7 @@ describe('Guard JWT global (e2e)', () => {
       .spyOn(app.get(AppointmentReminderService), 'checkAndScheduleReminders')
       .mockResolvedValue(undefined);
     const token = signToken(
-      { id: FAKE_UUID, name: 'e2e', email: 'e2e@test.local', tenant_id: null },
+      { id: FAKE_UUID, name: 'e2e', email: 'e2e@test.local' },
       ['Owner'],
     );
     const res = await http
@@ -200,7 +200,6 @@ describe('Guard JWT global (e2e)', () => {
       id: FAKE_UUID,
       name: 'e2e',
       email: 'e2e@test.local',
-      tenant_id: null,
     };
     const asOwner = await http
       .get('/api/payments/diagnose-timezone')
@@ -248,9 +247,9 @@ describe('Guard JWT global (e2e)', () => {
   });
 
   it('el guard de roles global responde 403 si falta el rol', async () => {
-    const ownerToken = jwt.sign(
-      { id: FAKE_UUID, email: 'e2e@test.local', roles: ['Owner'] },
-      { expiresIn: '1m' },
+    const ownerToken = signToken(
+      { id: FAKE_UUID, name: 'e2e', email: 'e2e@test.local' },
+      ['Owner'],
     );
     // Rutas solo para Admin: el guard corta antes del handler (no toca la BD).
     const adminOnly: Array<[HttpMethod, string]> = [

@@ -12,10 +12,10 @@ import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { Category } from './entities/category.entity';
-import { GetUser } from 'src/common/decorators/get-user.decorator';
-import { JwtPayload } from 'src/auth/interfaces';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
+import { AuthUser } from '../auth/interfaces';
 
 @Controller('categories')
 export class CategoriesController {
@@ -24,7 +24,7 @@ export class CategoriesController {
   @hasRoles(JwtRoles.Owner)
   @Post()
   create(
-    @GetUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
     @Body() createCategoryDto: CreateCategoryDto,
   ) {
     return this.categoriesService.create(createCategoryDto, user.id);
@@ -32,13 +32,13 @@ export class CategoriesController {
 
   @hasRoles(JwtRoles.Owner)
   @Get()
-  findAll(@GetUser() user: JwtPayload) {
+  findAll(@CurrentUser() user: AuthUser) {
     return this.categoriesService.findAll(user.id);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Get(':term')
-  findOne(@Param('term') term: string, @GetUser() user: JwtPayload) {
+  findOne(@Param('term') term: string, @CurrentUser() user: AuthUser) {
     return this.categoriesService.findOne(term, user.id);
   }
 
@@ -47,14 +47,17 @@ export class CategoriesController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateCategoryDto: UpdateCategoryDto,
-    @GetUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.categoriesService.update(id, updateCategoryDto, user.id);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: JwtPayload) {
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.categoriesService.remove(id, user.id);
   }
 }

@@ -11,10 +11,9 @@ import {
   BadRequestException,
   Query,
 } from '@nestjs/common';
-import { GetUser } from 'src/common/decorators/get-user.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { Client } from './entities/client.entity';
 import { CreateClientDto } from './dto/create-client.dto';
-import { User } from 'src/users/entities/user.entity';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { ClientsService } from './clients.service';
 import { ImportClientsDto } from './dto/import-clients.dto';
@@ -25,6 +24,7 @@ import { diskStorage } from 'multer';
 import * as path from 'path';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
+import { AuthUser } from '../auth/interfaces';
 
 @Controller('clients')
 export class ClientsController {
@@ -34,39 +34,45 @@ export class ClientsController {
   ) {}
 
   @Post()
-  create(@Body() createClientDto: CreateClientDto, @GetUser() user: User) {
+  create(
+    @Body() createClientDto: CreateClientDto,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.clientsService.create(createClientDto, user.id);
   }
 
   @Post('batch')
   async importBatch(
     @Body() importClientsDto: ImportClientsDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.clientsService.importBatch(importClientsDto.clients, user.id);
   }
 
   @Get()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  findAll(@GetUser() user: User, @Query() paginationDto: PaginationDto) {
+  findAll(
+    @CurrentUser() user: AuthUser,
+    @Query() paginationDto: PaginationDto,
+  ) {
     console.log('🔍 GET /clients - Parámetros recibidos:', {
       userId: user.id,
-      query: paginationDto
+      query: paginationDto,
     });
-    
+
     return this.clientsService.findAll(user.id, paginationDto);
   }
 
   // ✅ ENDPOINT LEGACY PARA RETROCOMPATIBILIDAD
   @Get('all')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  findAllLegacy(@GetUser() user: User) {
+  findAllLegacy(@CurrentUser() user: AuthUser) {
     console.log('🔄 GET /clients/all - Endpoint legacy usado');
     return this.clientsService.findAllLegacy(user.id);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @GetUser() user: User) {
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.clientsService.findOne(id, user.id);
   }
 
@@ -74,13 +80,13 @@ export class ClientsController {
   update(
     @Param('id') id: string,
     @Body() updateClientDto: UpdateClientDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.clientsService.update(id, updateClientDto, user.id);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @GetUser() user: User) {
+  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.clientsService.remove(id, user.id);
   }
 

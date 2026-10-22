@@ -5,6 +5,7 @@
 import { JwtService } from '@nestjs/jwt';
 import { DataSource } from 'typeorm';
 import { User } from '../../src/users/entities/user.entity';
+import { JwtPayload, tenantOf } from '../../src/auth/interfaces';
 
 export interface DevUsers {
   owner: User;
@@ -27,24 +28,30 @@ export async function findDevOwnerAndEmployee(
   }
   const employee = await repo.findOne({
     where: { owner: { id: owner.id } },
+    relations: ['owner'],
   });
   return { owner, employee };
 }
 
-/** Firma un JWT como lo hace `AuthService.generateToken`, con los roles indicados. */
+/**
+ * Firma un JWT como lo hace `AuthService.generateToken` (payload de 2.01, con
+ * `tenantId`/`ownerId`), con los roles indicados. El tenant sale de `owner`
+ * si viene cargado; si no, es el propio id (Owner o usuario ficticio).
+ */
 export function signToken(
-  user: Pick<User, 'id' | 'name' | 'email' | 'tenant_id'>,
+  user: Pick<User, 'id' | 'name' | 'email'> & { owner?: { id: string } | null },
   roles: string[],
 ): string {
   const jwt = new JwtService({ secret: process.env.SECRET_KEY_JWT });
-  return jwt.sign(
-    {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      roles,
-      tenant_id: user.tenant_id,
-    },
-    { expiresIn: '5m' },
-  );
+  const tenantId = tenantOf(user);
+  const payload: JwtPayload = {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    roles,
+    tenantId,
+    ownerId: tenantId,
+    tenant_id: tenantId,
+  };
+  return jwt.sign(payload, { expiresIn: '5m' });
 }

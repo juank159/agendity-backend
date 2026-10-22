@@ -4,8 +4,8 @@ import { WhatsappService } from './whatsapp.service';
 import { CreateWhatsappConfigDto } from './dto/create-whatsapp-config.dto';
 import { UpdateWhatsappConfigDto } from './dto/update-whatsapp-config.dto';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
-import { GetUser } from '../common/decorators/get-user.decorator';
-import { User } from '../users/entities/user.entity';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthUser } from '../auth/interfaces';
 
 @Controller('whatsapp')
 export class WhatsappController {
@@ -14,13 +14,13 @@ export class WhatsappController {
   @Post('config')
   createConfig(
     @Body() createWhatsappConfigDto: CreateWhatsappConfigDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.whatsappService.create(createWhatsappConfigDto, user.id);
   }
 
   @Get('config')
-  findConfig(@GetUser() user: User) {
+  findConfig(@CurrentUser() user: AuthUser) {
     return this.whatsappService.findByOwnerId(user.id);
   }
 
@@ -28,7 +28,7 @@ export class WhatsappController {
   updateConfig(
     @Param('id') id: string,
     @Body() updateWhatsappConfigDto: UpdateWhatsappConfigDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.whatsappService.update(id, updateWhatsappConfigDto, user.id);
   }
@@ -36,7 +36,7 @@ export class WhatsappController {
   @Post('send')
   sendMessage(
     @Body() sendMessageDto: SendWhatsappMessageDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.whatsappService.sendWhatsAppMessage(
       user.id,
@@ -46,7 +46,7 @@ export class WhatsappController {
   }
 
   @Post('test')
-  sendTestMessage(@GetUser() user: User) {
+  sendTestMessage(@CurrentUser() user: AuthUser) {
     return this.whatsappService.sendTestMessage(user.id);
   }
 }

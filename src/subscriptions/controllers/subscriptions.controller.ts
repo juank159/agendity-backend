@@ -15,10 +15,10 @@ import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
 import { hasRoles } from '../../auth/jwt/has.roles';
 import { JwtRoles } from '../../auth/jwt/jwt.role';
-import { GetUser } from '../../common/decorators/get-user.decorator';
-import { User } from '../../users/entities/user.entity';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { SubscriptionsService } from '../services/subscriptions.service';
 import { WompiService } from '../services/wompi.service';
+import { AuthUser } from '../../auth/interfaces';
 
 @Controller('subscriptions')
 export class SubscriptionsController {
@@ -57,38 +57,39 @@ export class SubscriptionsController {
 
   // Endpoints para suscripciones de tenants
   @Get('status')
-  getSubscriptionStatus(@GetUser() user: User) {
-    return this.subscriptionsService.getSubscriptionByTenantId(user.tenant_id);
+  getSubscriptionStatus(@CurrentUser() user: AuthUser) {
+    return this.subscriptionsService.getSubscriptionByTenantId(user.tenantId);
   }
 
   @Get('check-limits')
-  checkSubscriptionLimits(@GetUser() user: User) {
-    return this.subscriptionsService.checkSubscriptionStatus(user.tenant_id);
+  checkSubscriptionLimits(@CurrentUser() user: AuthUser) {
+    return this.subscriptionsService.checkSubscriptionStatus(user.tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Post('subscribe')
   subscribe(
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Body() createSubscriptionDto: CreateSubscriptionDto,
   ) {
     // Asegurar que el tenant_id en el DTO coincida con el del usuario
-    createSubscriptionDto.tenant_id = user.tenant_id;
+    createSubscriptionDto.tenant_id = user.tenantId;
 
     return this.subscriptionsService.createPaidSubscription(
       createSubscriptionDto,
       user.email,
-      `${user.name} ${user.lastname}`,
-      user.phone, // Añadido para Wompi
+      // El JWT no trae apellido ni teléfono (antes llegaban como undefined).
+      user.name,
+      undefined,
     );
   }
 
   @Post('refresh-status')
   @HttpCode(200)
-  async refreshSubscriptionStatus(@GetUser() user: User) {
+  async refreshSubscriptionStatus(@CurrentUser() user: AuthUser) {
     try {
       // Obtener el tenant_id
-      const tenantId = user?.tenant_id;
+      const tenantId = user?.tenantId;
 
       this.logger.log(
         `Refrescando estado de suscripción para tenant ${tenantId}`,
@@ -281,12 +282,12 @@ export class SubscriptionsController {
   @hasRoles(JwtRoles.Owner)
   @Post('cancel')
   @HttpCode(200)
-  cancelSubscription(@GetUser() user: User) {
-    return this.subscriptionsService.cancelSubscription(user.tenant_id);
+  cancelSubscription(@CurrentUser() user: AuthUser) {
+    return this.subscriptionsService.cancelSubscription(user.tenantId);
   }
 
   @Get('payment-history')
-  getPaymentHistory(@GetUser() user: User) {
-    return this.subscriptionsService.getPaymentHistory(user.tenant_id);
+  getPaymentHistory(@CurrentUser() user: AuthUser) {
+    return this.subscriptionsService.getPaymentHistory(user.tenantId);
   }
 }

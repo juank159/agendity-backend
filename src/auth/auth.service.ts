@@ -24,7 +24,7 @@ import { UserAccessActor, assertCanManageUser } from 'src/users/user-access';
 import * as bcrypt from 'bcrypt';
 import { randomInt, timingSafeEqual } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
-import { JwtPayload } from './interfaces';
+import { AuthUser, JwtPayload, tenantOf } from './interfaces';
 import { Role } from 'src/roles/entities/role.entity';
 import { v4 as uuid } from 'uuid';
 import { OAuth2Client, TokenPayload } from 'google-auth-library';
@@ -124,14 +124,17 @@ export class AuthService {
     return bcrypt.hash(password, 10);
   }
 
+  /** `user` debe traer `roles` y, si es empleado, `owner`. */
   private generateToken(user: User): string {
+    const tenantId = tenantOf(user);
     const payload: JwtPayload = {
       id: user.id,
       name: user.name,
       email: user.email,
       roles: user.roles.map((role) => role.name),
-      tenant_id: user.tenant_id,
-      owner_id: user.owner?.id,
+      tenantId,
+      ownerId: tenantId,
+      tenant_id: tenantId,
     };
 
     return this.getJwtToken(payload);
@@ -247,19 +250,20 @@ export class AuthService {
       const ownerRole = await this.getRole('Owner');
       const { password, ...userData } = createAuthDto;
 
+      // El tenant del Owner es su propio id (2.01).
+      const id = uuid();
       const newUser = this.userRepository.create({
         ...userData,
+        id,
         password: await this.hashPassword(password),
         roles: [ownerRole],
-        tenant_id: uuid(), // Generar nuevo tenant_id para el owner
+        tenant_id: id,
       });
 
       await this.userRepository.save(newUser);
 
       // Crear suscripción de prueba para el nuevo tenant
-      await this.subscriptionsService.createTrialSubscription(
-        newUser.tenant_id,
-      );
+      await this.subscriptionsService.createTrialSubscription(id);
 
       return {
         user: this.transformUserResponse(newUser),
@@ -272,7 +276,7 @@ export class AuthService {
 
   async createEmployee(
     createEmployeeDto: CreateEmployeeDto | CreateEmployeeWithDetailsDto,
-    owner: User,
+    owner: AuthUser,
   ) {
     try {
       // Usamos transacción para asegurar consistencia
@@ -307,8 +311,9 @@ export class AuthService {
           ...userData,
           password: await this.hashPassword(password),
           roles: [employeeRole],
-          owner: owner,
-          tenant_id: owner.tenant_id,
+          owner: { id: owner.id } as User,
+          // Hereda el tenant del Owner (antes quedaba NULL: el JWT no lo traía).
+          tenant_id: owner.tenantId,
         });
 
         await manager.save(newEmployee);
@@ -816,8 +821,10 @@ export class AuthService {
           is_google_account: true,
           is_email_verified: true, // Los emails de Google ya están verificados
           roles: [ownerRole],
-          tenant_id: uuid(),
         });
+        // El tenant del Owner es su propio id (2.01).
+        user.id = uuid();
+        user.tenant_id = user.id;
 
         await this.userRepository.save(user);
       }

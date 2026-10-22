@@ -16,13 +16,13 @@ import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { Appointment } from './entities/appointment.entity';
-import { GetUser } from '../common/decorators/get-user.decorator';
-import { User } from '../users/entities/user.entity';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { AppointmentReminderService } from './appointment-reminder.service';
 import { SubscriptionLimitsGuard } from 'src/subscriptions/guards/subscription-limits.guard';
 import { SubscriptionLimitInterceptor } from '../subscriptions/interceptors/subscription-limit.interceptor';
+import { AuthUser } from '../auth/interfaces';
 
 @Controller('appointments')
 export class AppointmentsController {
@@ -38,7 +38,7 @@ export class AppointmentsController {
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async create(
     @Body() createAppointmentDto: CreateAppointmentDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     console.log('=== CREATE APPOINTMENT DEBUG ===');
 
@@ -56,7 +56,7 @@ export class AppointmentsController {
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async sendAppointmentReminder(
     @Param('id') id: string,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.appointmentReminderService.sendManualReminder(id, user.id);
   }
@@ -66,7 +66,7 @@ export class AppointmentsController {
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async markReminderAsSent(
     @Param('id', ParseUUIDPipe) id: string,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     try {
       this.logger.log(
@@ -100,7 +100,7 @@ export class AppointmentsController {
   // @Get()
   // @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   // async findAll(
-  //   @GetUser() user: User,
+  //   @CurrentUser() user: AuthUser,
   //   @Query('startDate') startDate?: string,
   //   @Query('endDate') endDate?: string,
   // ) {
@@ -156,34 +156,12 @@ export class AppointmentsController {
   @Get()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async findAll(
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
     try {
-      // Imprimir el objeto completo para depuración
-
-      // Extraer roles de manera más robusta
-      let userRoles = [];
-
-      if (user.roles) {
-        if (Array.isArray(user.roles)) {
-          // Si es un array, puede ser array de strings o array de objetos
-          if (user.roles.length > 0) {
-            if (typeof user.roles[0] === 'string') {
-              userRoles = user.roles;
-            } else if (typeof user.roles[0] === 'object') {
-              // Si es un array de objetos con propiedad 'name'
-              userRoles = user.roles.map((r) => r.name).filter(Boolean);
-            }
-          }
-        } else if (typeof user.roles === 'string') {
-          // Si es un solo string
-          userRoles = [user.roles];
-        }
-      }
-
-      console.log('Extracted roles:', userRoles);
+      const userRoles = user.roles;
 
       // Log para depuración
       console.log('Received request with params:', {
@@ -231,7 +209,7 @@ export class AppointmentsController {
 
   // Las rutas estáticas van ANTES de ':id' (si no, ':id' + ParseUUIDPipe las captura con 400).
   @Get('check-reminders')
-  async checkReminders(@GetUser() user: User) {
+  async checkReminders(@CurrentUser() user: AuthUser) {
     this.logger.log(`Manual reminder check requested by user ${user.id}`);
     await this.appointmentReminderService.checkAndScheduleReminders();
     return { message: 'Reminder check completed' };
@@ -239,7 +217,10 @@ export class AppointmentsController {
 
   @Get(':id')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.appointmentsService.findOne(id, user.id);
   }
 
@@ -248,14 +229,17 @@ export class AppointmentsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateAppointmentDto: UpdateAppointmentDto,
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.appointmentsService.update(id, updateAppointmentDto, user.id);
   }
 
   @Delete(':id')
   @hasRoles(JwtRoles.Owner)
-  remove(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.appointmentsService.remove(id, user.id);
   }
 }

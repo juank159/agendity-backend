@@ -22,12 +22,12 @@ import { TimeBlocksService } from './time-blocks.service';
 import { CreateTimeBlockDto } from './dto/create-time-block.dto';
 import { UpdateTimeBlockDto } from './dto/update-time-block.dto';
 import { TimeBlock } from './entities/time-block.entity';
-import { GetUser } from '../common/decorators/get-user.decorator';
-import { User } from '../users/entities/user.entity';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ParseDatePipe } from '../common/pipes/parse-date.pipe';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
+import { AuthUser } from '../auth/interfaces';
 
 @ApiTags('Bloques de Tiempo')
 @ApiBearerAuth()
@@ -48,7 +48,7 @@ export class TimeBlocksController {
     description: 'Fechas inválidas o horario no disponible',
   })
   create(
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Body() createTimeBlockDto: CreateTimeBlockDto,
   ) {
     return this.timeBlocksService.create(createTimeBlockDto, user.id);
@@ -62,7 +62,7 @@ export class TimeBlocksController {
     description: 'Lista de bloques de tiempo',
     type: [TimeBlockResponseDto],
   })
-  findAll(@GetUser() user: User) {
+  findAll(@CurrentUser() user: AuthUser) {
     return this.timeBlocksService.findAll(user.id);
   }
 
@@ -78,7 +78,7 @@ export class TimeBlocksController {
     type: [TimeBlockResponseDto],
   })
   findByUser(
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Query('startDate', ParseDatePipe) startDate?: Date,
     @Query('endDate', ParseDatePipe) endDate?: Date,
@@ -111,7 +111,7 @@ export class TimeBlocksController {
     },
   })
   getAvailableSlots(
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Query('date', ParseDatePipe) date: Date,
     @Query('duration', ParseIntPipe) duration: number,
@@ -134,7 +134,10 @@ export class TimeBlocksController {
     type: TimeBlockResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Bloque no encontrado' })
-  findOne(@GetUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+  findOne(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.timeBlocksService.findOne(id, user.id);
   }
 
@@ -150,7 +153,7 @@ export class TimeBlocksController {
   @ApiResponse({ status: 404, description: 'Bloque no encontrado' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
   update(
-    @GetUser() user: User,
+    @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateTimeBlockDto: UpdateTimeBlockDto,
   ) {
@@ -163,7 +166,10 @@ export class TimeBlocksController {
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Bloque eliminado' })
   @ApiResponse({ status: 404, description: 'Bloque no encontrado' })
-  remove(@GetUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+  remove(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.timeBlocksService.remove(id, user.id);
   }
 }

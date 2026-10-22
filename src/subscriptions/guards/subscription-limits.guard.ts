@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { SubscriptionsService } from '../services/subscriptions.service';
+import { AuthUser } from 'src/auth/interfaces';
 
 @Injectable()
 export class SubscriptionLimitsGuard implements CanActivate {
@@ -16,17 +17,17 @@ export class SubscriptionLimitsGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const user = request.user;
+    const user = request.user as AuthUser | undefined;
 
-    if (!user || !user.tenant_id) {
-      this.logger.warn('No user or tenant_id found in request');
+    if (!user || !user.tenantId) {
+      this.logger.warn('No user or tenantId found in request');
       return false;
     }
 
     try {
       // Verificar si puede crear citas según su suscripción
       const { canCreateAppointment, message } =
-        await this.subscriptionsService.checkSubscriptionStatus(user.tenant_id);
+        await this.subscriptionsService.checkSubscriptionStatus(user.tenantId);
 
       if (!canCreateAppointment) {
         // Agregar mensaje al request para que pueda ser usado en la respuesta
@@ -37,7 +38,7 @@ export class SubscriptionLimitsGuard implements CanActivate {
       // Si puede crear la cita, actualizar contador si está en periodo de prueba
       if (canCreateAppointment) {
         await this.subscriptionsService.updateTrialAppointmentUsage(
-          user.tenant_id,
+          user.tenantId,
         );
       }
 

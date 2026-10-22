@@ -14,9 +14,7 @@ import { CreateAuthDto, CreateEmployeeDto, LoginAuthDto } from './dto';
 import { AuthService } from './auth.service';
 import { JwtRoles } from './jwt/jwt.role';
 import { hasRoles } from './jwt/has.roles';
-import { User } from '../users/entities/user.entity';
-import { JwtPayload } from './interfaces';
-import { GetUser } from 'src/common/decorators/get-user.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { CreateEmployeeWithDetailsDto } from './dto/create-employee-with-details.dto';
 import { ToggleEmployeeStatusDto } from './dto/toggle-employee-status.dto';
@@ -26,6 +24,7 @@ import {
   AUTH_RATE_LIMITS,
   RateLimit,
 } from '../common/decorators/rate-limit.decorator';
+import { AuthUser } from './interfaces';
 
 @Controller('auth')
 export class AuthController {
@@ -41,7 +40,7 @@ export class AuthController {
   @hasRoles(JwtRoles.Owner)
   @Post('register/employee')
   createEmployee(
-    @GetUser() owner: User,
+    @CurrentUser() owner: AuthUser,
     @Body() createEmployeeDto: CreateEmployeeWithDetailsDto, // Usar el nuevo DTO
   ) {
     return this.authService.createEmployee(createEmployeeDto, owner);
@@ -51,7 +50,7 @@ export class AuthController {
   @hasRoles(JwtRoles.Owner)
   @Patch('employee/:id')
   updateEmployee(
-    @GetUser() owner: User,
+    @CurrentUser() owner: AuthUser,
     @Param('id') employeeId: string,
     @Body() updateEmployeeDto: UpdateEmployeeDto,
   ) {
@@ -65,7 +64,7 @@ export class AuthController {
   @hasRoles(JwtRoles.Owner)
   @Patch('employee/:id/status')
   toggleEmployeeStatus(
-    @GetUser() owner: User,
+    @CurrentUser() owner: AuthUser,
     @Param('id') employeeId: string,
     @Body() statusDto: ToggleEmployeeStatusDto,
   ) {
@@ -80,7 +79,7 @@ export class AuthController {
   @hasRoles(JwtRoles.Owner)
   @Delete('employee/:id')
   deleteEmployee(
-    @GetUser() owner: User,
+    @CurrentUser() owner: AuthUser,
     @Param('id') employeeId: string,
     @Body('reason') reason?: string, // Razón opcional
   ) {
@@ -89,7 +88,10 @@ export class AuthController {
 
   @hasRoles(JwtRoles.Owner)
   @Patch('employee/:id/restore')
-  restoreEmployee(@GetUser() owner: User, @Param('id') employeeId: string) {
+  restoreEmployee(
+    @CurrentUser() owner: AuthUser,
+    @Param('id') employeeId: string,
+  ) {
     return this.authService.restoreEmployee(owner.id, employeeId);
   }
 
@@ -166,7 +168,7 @@ export class AuthController {
   @hasRoles(JwtRoles.Owner)
   @Get('employees')
   getEmployees(
-    @GetUser() owner: User,
+    @CurrentUser() owner: AuthUser,
     @Query('includeDeleted') includeDeleted?: string, // Parámetro opcional
   ) {
     const shouldIncludeDeleted = includeDeleted === 'true';
@@ -175,20 +177,20 @@ export class AuthController {
 
   @hasRoles(JwtRoles.Owner)
   @Get('employee/:id')
-  getEmployee(@GetUser() owner: User, @Param('id') employeeId: string) {
+  getEmployee(@CurrentUser() owner: AuthUser, @Param('id') employeeId: string) {
     return this.authService.getEmployeeByOwner(owner.id, employeeId);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Get('employees/deleted')
-  getDeletedEmployees(@GetUser() owner: User) {
+  getDeletedEmployees(@CurrentUser() owner: AuthUser) {
     return this.authService.getDeletedEmployeesByOwner(owner.id);
   }
 
   // 🆕 NUEVO: Endpoint específico para empleados activos
   @hasRoles(JwtRoles.Owner)
   @Get('employees/active')
-  getActiveEmployees(@GetUser() owner: User) {
+  getActiveEmployees(@CurrentUser() owner: AuthUser) {
     return this.authService.getActiveEmployeesByOwner(owner.id);
   }
 
@@ -197,7 +199,7 @@ export class AuthController {
   @RateLimit(AUTH_RATE_LIMITS.verifyCode)
   @Post('verify/employee-email')
   verifyEmployeeEmail(
-    @GetUser() owner: JwtPayload,
+    @CurrentUser() owner: AuthUser,
     @Body('employee_id') employeeId: string,
     @Body('code') code: string,
   ) {

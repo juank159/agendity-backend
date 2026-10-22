@@ -39,7 +39,6 @@ describe('Acceso a usuarios por Owner (e2e)', () => {
         id: STRANGER_ID,
         name: 'Ajeno',
         email: 'ajeno@e2e.local',
-        tenant_id: STRANGER_ID,
       },
       ['Owner'],
     );
