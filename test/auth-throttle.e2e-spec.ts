@@ -8,22 +8,23 @@
  *   (se intercepta `findUserWithSecrets`) y con `Repository.update/save` simulados.
  */
 import { INestApplication, UnauthorizedException } from '@nestjs/common';
-import * as request from 'supertest';
 import { Repository } from 'typeorm';
 import { AuthService } from '../src/auth/auth.service';
 import { MAX_CODE_ATTEMPTS } from '../src/auth/verification-attempts.service';
 import { AUTH_RATE_LIMITS } from '../src/common/decorators/rate-limit.decorator';
 import { User } from '../src/users/entities/user.entity';
-import { createE2EApp } from './utils/create-e2e-app';
+import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
 
 const FAKE_ID = '22222222-2222-4222-8222-222222222222';
 
 describe('Throttle de /auth y límite por código (e2e)', () => {
   let app: INestApplication;
+  let http: E2EHttp;
+  let close: () => Promise<void>;
   let authService: AuthService;
 
   beforeAll(async () => {
-    ({ app } = await createE2EApp());
+    ({ app, http, close } = await createE2EApp());
     authService = app.get(AuthService);
   }, 60000);
 
@@ -32,7 +33,7 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app?.close();
+    await close?.();
   });
 
   describe('throttle por IP', () => {
@@ -40,7 +41,7 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
       const statuses: number[] = [];
       for (let i = 0; i <= AUTH_RATE_LIMITS.login; i++) {
         // Se crea y se envía cada petición en orden (ver user-access.e2e-spec).
-        const res = await request(app.getHttpServer())
+        const res = await http
           .post('/api/auth/login')
           .send({ email: 'nadie@e2e.example', password: 'x' });
         statuses.push(res.status);
@@ -54,7 +55,7 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
     it(`POST /auth/verify/email responde 429 después de ${AUTH_RATE_LIMITS.verifyCode} intentos por minuto`, async () => {
       const statuses: number[] = [];
       for (let i = 0; i <= AUTH_RATE_LIMITS.verifyCode; i++) {
-        const res = await request(app.getHttpServer())
+        const res = await http
           .post('/api/auth/verify/email')
           .send({ email: 'nadie@e2e.example', code: '000000' });
         statuses.push(res.status);
@@ -68,7 +69,7 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
     it('las rutas sin @RateLimit no tienen throttle', async () => {
       const statuses = new Set<number>();
       for (let i = 0; i < 30; i++) {
-        const res = await request(app.getHttpServer()).get('/api/services');
+        const res = await http.get('/api/services');
         statuses.add(res.status);
       }
       expect([...statuses]).toEqual([401]);

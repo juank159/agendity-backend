@@ -8,11 +8,10 @@
 import { INestApplication } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { instanceToPlain } from 'class-transformer';
-import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 import { Schedule } from '../src/schedules/entities/schedule.entity';
 import { USER_SECRET_FIELDS, User } from '../src/users/entities/user.entity';
-import { createE2EApp } from './utils/create-e2e-app';
+import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
 const SECRET_KEYS = new Set<string>(USER_SECRET_FIELDS);
@@ -33,6 +32,8 @@ function findSecretKeys(value: unknown, path = '$'): string[] {
 
 describe('Secretos de User fuera de las respuestas (e2e)', () => {
   let app: INestApplication;
+  let http: E2EHttp;
+  let close: () => Promise<void>;
   let ds: DataSource;
   let owner: User;
   let employee: User | null;
@@ -41,7 +42,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
   const sign = signToken;
 
   beforeAll(async () => {
-    ({ app } = await createE2EApp());
+    ({ app, http, close } = await createE2EApp());
     ds = app.get(DataSource);
     ({ owner, employee } = await findDevOwnerAndEmployee(ds));
     ownerToken = sign(owner, ['Owner']);
@@ -49,7 +50,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
 
   afterAll(async () => {
     jest.restoreAllMocks();
-    await app?.close();
+    await close?.();
   });
 
   it('las columnas secretas tienen select:false', () => {
@@ -90,7 +91,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
     // de la comparación y se comprueba que recibió el hash real de la BD.
     compare.mockImplementationOnce(async () => true);
 
-    const res = await request(app.getHttpServer())
+    const res = await http
       .post('/api/auth/login')
       .send({ email: owner.email, password: 'no-es-la-clave' });
 
@@ -106,7 +107,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
   });
 
   it('login de un usuario real con contraseña incorrecta responde 401 (no 500)', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await http
       .post('/api/auth/login')
       .send({ email: owner.email, password: 'Clave-Incorrecta-e2e-1!' });
     expect(res.status).toBe(401);
@@ -139,7 +140,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
       const url = template
         .replace('{owner}', owner.id)
         .replace('{employee}', employee?.id ?? '');
-      const res = await request(app.getHttpServer())
+      const res = await http
         .get(url)
         .set('Authorization', `Bearer ${ownerToken}`);
       if (res.status !== 200) {
@@ -153,7 +154,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
   });
 
   it('GET /schedules (Admin) devuelve el usuario de cada horario sin secretos', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await http
       .get('/api/schedules')
       .set('Authorization', `Bearer ${sign(owner, ['Admin'])}`);
     expect(res.status).toBe(200);

@@ -9,9 +9,8 @@ import { INestApplication, RequestMethod } from '@nestjs/common';
 import { DiscoveryModule, DiscoveryService, Reflector } from '@nestjs/core';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { JwtService } from '@nestjs/jwt';
-import * as request from 'supertest';
 import { IS_PUBLIC_KEY } from '../src/common/decorators/public.decorator';
-import { createE2EApp } from './utils/create-e2e-app';
+import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
 
 /** Rutas públicas aprobadas (método + ruta Swagger). Cualquier cambio se revisa. */
 const PUBLIC_ROUTES = new Set<string>([
@@ -48,12 +47,16 @@ function joinPath(...parts: string[]): string {
 
 describe('Guard JWT global (e2e)', () => {
   let app: INestApplication;
+  let http: E2EHttp;
+  let close: () => Promise<void>;
   let routes: Route[];
   let jwt: JwtService;
 
   beforeAll(async () => {
     const created = await createE2EApp([DiscoveryModule]);
     app = created.app;
+    http = created.http;
+    close = created.close;
     const document = created.document;
 
     routes = [];
@@ -73,7 +76,7 @@ describe('Guard JWT global (e2e)', () => {
   }, 60000);
 
   afterAll(async () => {
-    await app?.close();
+    await close?.();
   });
 
   it('Swagger expone las rutas de la app', () => {
@@ -128,7 +131,7 @@ describe('Guard JWT global (e2e)', () => {
     'demo-payment no refleja parámetros sin escapar (XSS)',
     async () => {
       const payload = `"><script>alert(1)</script>`;
-      const res = await request(app.getHttpServer())
+      const res = await http
         .get('/api/demo-payment')
         .query({ reference: payload, redirect: `javascript:alert(1)//` });
       expect(res.status).toBe(200);
@@ -140,10 +143,9 @@ describe('Guard JWT global (e2e)', () => {
 
   it('toda ruta no pública responde 401 sin token', async () => {
     const failures: string[] = [];
-    const server = app.getHttpServer();
     for (const route of routes) {
       if (PUBLIC_ROUTES.has(route.key)) continue;
-      const res = await request(server)[route.method](route.url);
+      const res = await http[route.method](route.url);
       if (res.status !== 401) failures.push(`${route.key} -> ${res.status}`);
     }
     expect(failures).toEqual([]);
@@ -157,23 +159,22 @@ describe('Guard JWT global (e2e)', () => {
 
   it('toda ruta no pública responde 401 con un token inválido', async () => {
     const failures: string[] = [];
-    const server = app.getHttpServer();
     const forged = jwt.sign(
       { id: FAKE_UUID, roles: ['Admin', 'Owner', 'Employee'] },
       { secret: 'no-es-el-secreto' },
     );
     for (const route of routes) {
       if (PUBLIC_ROUTES.has(route.key)) continue;
-      const res = await request(server)
-        [route.method](route.url)
-        .set('Authorization', `Bearer ${forged}`);
+      const res = await http[route.method](route.url).set(
+        'Authorization',
+        `Bearer ${forged}`,
+      );
       if (res.status !== 401) failures.push(`${route.key} -> ${res.status}`);
     }
     expect(failures).toEqual([]);
   });
 
   it('el guard de roles global responde 403 si falta el rol', async () => {
-    const server = app.getHttpServer();
     const ownerToken = jwt.sign(
       { id: FAKE_UUID, email: 'e2e@test.local', roles: ['Owner'] },
       { expiresIn: '1m' },
@@ -187,9 +188,10 @@ describe('Guard JWT global (e2e)', () => {
       ['post', `/api/subscriptions/plans`],
     ];
     for (const [method, url] of adminOnly) {
-      const res = await request(server)
-        [method](url)
-        .set('Authorization', `Bearer ${ownerToken}`);
+      const res = await http[method](url).set(
+        'Authorization',
+        `Bearer ${ownerToken}`,
+      );
       expect(`${method} ${url} -> ${res.status}`).toBe(
         `${method} ${url} -> 403`,
       );
