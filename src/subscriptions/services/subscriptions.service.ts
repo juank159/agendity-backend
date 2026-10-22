@@ -1,6 +1,18 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  HttpException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm'; // Importar Between desde typeorm
+import { Cron } from '@nestjs/schedule';
+import {
+  Between,
+  EntityManager,
+  LessThan,
+  MoreThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { Subscription } from '../entities/subscription.entity';
 import { PaymentHistory } from '../entities/payment-history.entity';
@@ -9,7 +21,31 @@ import { CreateSubscriptionPlanDto } from '../dto/create-subscription-plan.dto';
 import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
 import { ConfigService } from '@nestjs/config';
-import { ErrorCode } from 'src/common/constants/error-codes';
+import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { Appointment } from 'src/appointments/entities/appointment.entity';
+import {
+  AppointmentAllowance,
+  SUBSCRIPTION_MESSAGES,
+  SubscriptionStatus,
+  TRIAL_APPOINTMENTS_LIMIT,
+  appointmentAllowance,
+  effectiveStatus,
+  paidPlanLimit,
+  planPeriodEnd,
+} from '../subscription-state';
+
+/** Respuesta de `POST /subscriptions/refresh-status`. */
+type RefreshResult = {
+  success: boolean;
+  message: string;
+  subscription?: Subscription;
+};
+
+/** Vista de `GET /subscriptions/status`: la fila (o un trial sin usar) con el estado efectivo. */
+export type SubscriptionStatusView = Omit<Subscription, 'id'> & {
+  id: string | null;
+};
 
 @Injectable()
 export class SubscriptionsService {
@@ -50,17 +86,6 @@ export class SubscriptionsService {
     return plan;
   }
 
-  // Agregar a src/subscriptions/services/subscriptions.service.ts
-
-  async getAllSubscriptions(): Promise<Subscription[]> {
-    return await this.subscriptionRepository.find({
-      relations: ['plan', 'payments'],
-      order: {
-        created_at: 'DESC',
-      },
-    });
-  }
-
   async findSubscriptionById(id: string): Promise<Subscription> {
     const subscription = await this.subscriptionRepository.findOne({
       where: { id },
@@ -83,23 +108,45 @@ export class SubscriptionsService {
     return await this.planRepository.save(plan);
   }
 
-  // Métodos para gestionar suscripciones
-  async createTrialSubscription(tenantId: string): Promise<Subscription> {
-    const subscription = this.subscriptionRepository.create({
-      tenant_id: tenantId,
-      status: 'trial',
-      trial_appointments_used: 0,
-      trial_appointments_limit: 20,
-    });
+  // Suscripción del negocio (tenant = id del Owner, 2.01). Una fila por negocio;
+  // si hubiera varias, manda la más reciente (antes: "la primera fila").
 
-    return await this.subscriptionRepository.save(subscription);
+  /** Crea el trial de un negocio nuevo. Solo lo llama el registro del Owner. */
+  async createTrialSubscription(
+    tenantId: string,
+    manager: EntityManager = this.subscriptionRepository.manager,
+  ): Promise<Subscription> {
+    const subscription = manager.create(Subscription, {
+      tenant_id: this.requireTenant(tenantId),
+      status: SubscriptionStatus.TRIAL,
+      trial_appointments_used: 0,
+      trial_appointments_limit: TRIAL_APPOINTMENTS_LIMIT,
+    });
+    return await manager.save(subscription);
+  }
+
+  /** TypeORM ignora `where: { tenant_id: undefined }` y devolvería la fila de otro negocio. */
+  private requireTenant(tenantId: string): string {
+    if (!tenantId) {
+      throw new NotFoundException('Suscripción no encontrada');
+    }
+    return tenantId;
+  }
+
+  /** Suscripción del negocio o `null`. Solo lectura. */
+  private async findTenantSubscription(
+    tenantId: string,
+    withPayments = false,
+  ): Promise<Subscription | null> {
+    return await this.subscriptionRepository.findOne({
+      where: { tenant_id: this.requireTenant(tenantId) },
+      relations: withPayments ? { plan: true, payments: true } : { plan: true },
+      order: { created_at: 'DESC' },
+    });
   }
 
   async getSubscriptionByTenantId(tenantId: string): Promise<Subscription> {
-    const subscription = await this.subscriptionRepository.findOne({
-      where: { tenant_id: tenantId },
-      relations: ['plan', 'payments'],
-    });
+    const subscription = await this.findTenantSubscription(tenantId, true);
 
     if (!subscription) {
       throw new NotFoundException(
@@ -110,75 +157,180 @@ export class SubscriptionsService {
     return subscription;
   }
 
-  async getSubscriptionByWompiId(
-    wompiSubscriptionId: string,
-  ): Promise<Subscription> {
-    const subscription = await this.subscriptionRepository.findOne({
-      where: { wompi_subscription_id: wompiSubscriptionId },
-    });
-
-    return subscription;
+  /**
+   * `GET /subscriptions/status`. No escribe: sin fila responde un trial sin usar
+   * (no lo crea) y una suscripción vencida sale como `expired` aunque la fila
+   * siga en `active` (la actualiza el cron `expireOverdueSubscriptions`).
+   */
+  async getSubscriptionStatus(
+    tenantId: string,
+    now: Date = new Date(),
+  ): Promise<SubscriptionStatusView> {
+    const subscription = await this.findTenantSubscription(tenantId, true);
+    if (!subscription) {
+      return {
+        id: null,
+        tenant_id: tenantId,
+        status: SubscriptionStatus.TRIAL,
+        wompi_customer_id: null,
+        wompi_subscription_id: null,
+        plan: null,
+        trial_appointments_used: 0,
+        trial_appointments_limit: TRIAL_APPOINTMENTS_LIMIT,
+        subscription_start_date: null,
+        subscription_end_date: null,
+        is_trial_used: false,
+        payments: [],
+        created_at: null,
+        updated_at: null,
+      };
+    }
+    return { ...subscription, status: effectiveStatus(subscription, now) };
   }
 
-  async updateTrialAppointmentUsage(tenantId: string): Promise<Subscription> {
-    let subscription;
+  /** Citas creadas por el negocio desde el inicio del periodo pagado. */
+  private async countAppointmentsInPeriod(
+    manager: EntityManager,
+    tenantId: string,
+    subscription: Subscription,
+  ): Promise<number> {
+    return await manager.count(Appointment, {
+      where: {
+        ownerId: tenantId,
+        ...(subscription.subscription_start_date
+          ? {
+              created_at: MoreThanOrEqual(subscription.subscription_start_date),
+            }
+          : {}),
+      },
+    });
+  }
 
-    try {
-      subscription = await this.getSubscriptionByTenantId(tenantId);
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        this.logger.log(
-          `Creating trial subscription for tenant ${tenantId} during updateTrialAppointmentUsage`,
-        );
-        subscription = await this.createTrialSubscription(tenantId);
-      } else {
-        throw error;
+  /**
+   * Consume una cita del cupo del negocio. Debe llamarse DENTRO de la
+   * transacción que crea la cita: si la creación falla, el rollback devuelve
+   * la cita al cupo. Si no se puede crear, lanza `TRIAL_LIMIT_REACHED` o
+   * `SUBSCRIPTION_INACTIVE` (HTTP legado 400, D-11).
+   *
+   * Concurrencia: un advisory lock por negocio serializa los consumos (también
+   * cuando aún no hay fila y hay que crearla) y la fila se bloquea con
+   * `FOR UPDATE` frente a otras escrituras (webhook, cancelar). El UPDATE del
+   * trial además es condicional: nunca pasa de `trial_appointments_limit`.
+   */
+  async consumeAppointmentQuota(
+    tenantId: string,
+    manager: EntityManager,
+    now: Date = new Date(),
+  ): Promise<AppointmentAllowance> {
+    this.requireTenant(tenantId);
+    if (!manager.queryRunner?.isTransactionActive) {
+      throw new Error(
+        'consumeAppointmentQuota debe ejecutarse dentro de una transacción',
+      );
+    }
+
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`subscription:${tenantId}`],
+    );
+
+    let subscription = await manager
+      .getRepository(Subscription)
+      .createQueryBuilder('subscription')
+      .leftJoinAndSelect('subscription.plan', 'plan')
+      .where('subscription.tenant_id = :tenantId', { tenantId })
+      .orderBy('subscription.created_at', 'DESC')
+      .setLock('pessimistic_write', undefined, ['subscription'])
+      .getOne();
+
+    if (!subscription) {
+      // Negocio sin fila (registrado antes de que existiera el trial): se crea aquí,
+      // dentro de la transacción de la cita.
+      subscription = await this.createTrialSubscription(tenantId, manager);
+    }
+
+    const appointmentsInPeriod =
+      paidPlanLimit(subscription, now) === null
+        ? 0
+        : await this.countAppointmentsInPeriod(manager, tenantId, subscription);
+    const allowance = appointmentAllowance(
+      subscription,
+      now,
+      appointmentsInPeriod,
+    );
+
+    if (!allowance.canCreateAppointment) {
+      this.throwNotAllowed(allowance);
+    }
+
+    if (subscription.status === SubscriptionStatus.TRIAL) {
+      const result = await manager
+        .createQueryBuilder()
+        .update(Subscription)
+        .set({
+          trial_appointments_used: () => 'trial_appointments_used + 1',
+          is_trial_used: () =>
+            'trial_appointments_used + 1 >= trial_appointments_limit',
+        })
+        .where('id = :id', { id: subscription.id })
+        .andWhere('status = :trial', { trial: SubscriptionStatus.TRIAL })
+        .andWhere('trial_appointments_used < trial_appointments_limit')
+        .execute();
+
+      if (!result.affected) {
+        this.throwNotAllowed({
+          canCreateAppointment: false,
+          code: ErrorCode.TRIAL_LIMIT_REACHED,
+          message: SUBSCRIPTION_MESSAGES.trialLimitReached,
+        });
       }
     }
 
-    if (subscription.status !== 'trial') {
-      return subscription; // No actualizar si no está en periodo de prueba
-    }
-
-    subscription.trial_appointments_used += 1;
-
-    // Verificar si se alcanzó el límite de prueba
-    if (
-      subscription.trial_appointments_used >=
-      subscription.trial_appointments_limit
-    ) {
-      subscription.is_trial_used = true;
-    }
-
-    return await this.subscriptionRepository.save(subscription);
+    return allowance;
   }
 
-  // Método modificado createPaidSubscription
+  private throwNotAllowed(allowance: AppointmentAllowance): never {
+    const code = allowance.code ?? ErrorCode.SUBSCRIPTION_INACTIVE;
+    throw new BusinessException(
+      code,
+      allowance.message || SUBSCRIPTION_MESSAGES.inactive,
+      LEGACY_STATUS[code],
+    );
+  }
+
+  /**
+   * Persiste el vencimiento: `active` con la fecha de fin pasada → `expired`.
+   * Las lecturas ya lo calculan al vuelo (`effectiveStatus`); esto solo deja la
+   * fila coherente para consultas por `status`. Idempotente.
+   */
+  @Cron('0 3 * * *')
+  async expireOverdueSubscriptions(now: Date = new Date()): Promise<number> {
+    const result = await this.subscriptionRepository.update(
+      {
+        status: SubscriptionStatus.ACTIVE,
+        subscription_end_date: LessThan(now),
+      },
+      { status: SubscriptionStatus.EXPIRED },
+    );
+    if (result.affected) {
+      this.logger.log(`Suscripciones vencidas marcadas: ${result.affected}`);
+    }
+    return result.affected ?? 0;
+  }
+
+  /**
+   * Pide un enlace de pago para el plan y deja la suscripción del negocio en
+   * `pending`. `tenantId` sale de `@Tenant()`; el `tenant_id` del DTO se ignora.
+   */
   async createPaidSubscription(
+    tenantId: string,
     createSubDto: CreateSubscriptionDto,
-    userEmail: string,
-    userName: string,
-    userPhone: string,
   ): Promise<Subscription | any> {
     try {
-      // Obtener la suscripción actual o crear una nueva
-      let subscription;
-      try {
-        subscription = await this.getSubscriptionByTenantId(
-          createSubDto.tenant_id,
-        );
-      } catch (error) {
-        if (error instanceof NotFoundException) {
-          this.logger.log(
-            `Creating trial subscription for tenant ${createSubDto.tenant_id} during createPaidSubscription`,
-          );
-          subscription = await this.createTrialSubscription(
-            createSubDto.tenant_id,
-          );
-        } else {
-          throw error;
-        }
-      }
+      // Es una escritura: si el negocio aún no tiene fila, se crea aquí.
+      const subscription =
+        (await this.findTenantSubscription(tenantId)) ??
+        (await this.createTrialSubscription(tenantId));
 
       // Obtener el plan
       const plan = await this.getPlanById(createSubDto.plan_id);
@@ -216,20 +368,11 @@ export class SubscriptionsService {
       subscription.plan = plan;
       subscription.subscription_start_date = new Date();
 
-      // Calcular fecha de fin basada en la duración del plan
-      const endDate = new Date();
-      if (plan.name.toLowerCase().includes('semestral')) {
-        endDate.setMonth(endDate.getMonth() + 6);
-      } else if (
-        plan.name.toLowerCase().includes('anual') ||
-        plan.billing_interval === 'year'
-      ) {
-        endDate.setMonth(endDate.getMonth() + 12);
-      } else {
-        // Plan mensual estándar
-        endDate.setMonth(endDate.getMonth() + 1);
-      }
-      subscription.subscription_end_date = endDate;
+      // Fin del periodo según `plan.duration_months` (se recalcula al activarse).
+      subscription.subscription_end_date = planPeriodEnd(
+        subscription.subscription_start_date,
+        plan,
+      );
 
       const savedSubscription =
         await this.subscriptionRepository.save(subscription);
@@ -275,7 +418,7 @@ export class SubscriptionsService {
         // Intentar crear un registro de error para monitoreo
         try {
           const paymentHistory = this.paymentRepository.create({
-            tenant_id: createSubDto.tenant_id,
+            tenant_id: tenantId,
             subscription,
             amount: plan.price,
             currency: plan.currency,
@@ -326,136 +469,44 @@ export class SubscriptionsService {
     }
   }
 
-  async checkSubscriptionStatus(tenantId: string): Promise<{
-    canCreateAppointment: boolean;
-    message?: string;
-    /** Por qué no se puede crear la cita (contrato §3). */
-    code?: ErrorCode;
-  }> {
+  /**
+   * `GET /subscriptions/check-limits`: ¿puede el negocio crear una cita? Solo
+   * lectura (no crea el trial ni marca `expired`). La creación de la cita no usa
+   * esta lectura: consume el cupo con `consumeAppointmentQuota`.
+   */
+  async checkSubscriptionStatus(
+    tenantId: string,
+    now: Date = new Date(),
+  ): Promise<AppointmentAllowance> {
+    this.requireTenant(tenantId);
     try {
-      // Intentar obtener la suscripción
-      let subscription;
-
-      try {
-        subscription = await this.getSubscriptionByTenantId(tenantId);
-      } catch (error) {
-        // Si no existe, crear una suscripción de prueba
-        if (error instanceof NotFoundException) {
-          this.logger.log(`Creating trial subscription for tenant ${tenantId}`);
-          subscription = await this.createTrialSubscription(tenantId);
-        } else {
-          throw error; // Si es otro tipo de error, propagarlo
-        }
-      }
-
-      // Si está en periodo de prueba y no ha alcanzado el límite
-      if (
-        subscription.status === 'trial' &&
-        subscription.trial_appointments_used <
-          subscription.trial_appointments_limit
-      ) {
-        return {
-          canCreateAppointment: true,
-          message: `Citas restantes en prueba: ${subscription.trial_appointments_limit - subscription.trial_appointments_used}`,
-        };
-      }
-
-      // Si está en período de prueba pero ya alcanzó el límite
-      if (
-        subscription.status === 'trial' &&
-        subscription.trial_appointments_used >=
-          subscription.trial_appointments_limit
-      ) {
-        return {
-          canCreateAppointment: false,
-          code: ErrorCode.TRIAL_LIMIT_REACHED,
-          message:
-            'Has alcanzado el límite de citas de prueba. Por favor, adquiere un plan para continuar.',
-        };
-      }
-
-      // Si tiene un plan activo
-      if (subscription.status === 'active' && subscription.plan) {
-        // Verificar si la suscripción ha expirado
-        const now = new Date();
-        if (
-          subscription.subscription_end_date &&
-          subscription.subscription_end_date < now
-        ) {
-          subscription.status = 'expired';
-          await this.subscriptionRepository.save(subscription);
-
-          return {
-            canCreateAppointment: false,
-            code: ErrorCode.SUBSCRIPTION_INACTIVE,
-            message: 'Tu suscripción ha expirado. Por favor, renueva tu plan.',
-          };
-        }
-
-        // Si el plan tiene citas ilimitadas (como mencionaste que todos tus planes pagos tendrán)
-        if (subscription.plan.appointment_limit === -1) {
-          return {
-            canCreateAppointment: true,
-            message: 'Plan activo con citas ilimitadas',
-          };
-        }
-
-        // En caso de que en el futuro implementes planes con límites
-        const appointmentsCount = 0; // Esto debe implementarse si decides tener planes con límites
-
-        if (appointmentsCount < subscription.plan.appointment_limit) {
-          return {
-            canCreateAppointment: true,
-            message: `Citas restantes en tu plan: ${subscription.plan.appointment_limit - appointmentsCount}`,
-          };
-        } else {
-          return {
-            canCreateAppointment: false,
-            code: ErrorCode.SUBSCRIPTION_INACTIVE,
-            message: 'Has alcanzado el límite de citas de tu plan actual.',
-          };
-        }
-      }
-
-      // En otros casos (cancelada, expirada, etc.)
-      return {
-        canCreateAppointment: false,
-        code: ErrorCode.SUBSCRIPTION_INACTIVE,
-        message: 'Tu suscripción no está activa. Por favor, actualiza tu plan.',
-      };
+      const subscription = await this.findTenantSubscription(tenantId);
+      const appointmentsInPeriod =
+        paidPlanLimit(subscription, now) === null
+          ? 0
+          : await this.countAppointmentsInPeriod(
+              this.subscriptionRepository.manager,
+              tenantId,
+              subscription,
+            );
+      return appointmentAllowance(subscription, now, appointmentsInPeriod);
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       this.logger.error(`Error checking subscription status: ${error.message}`);
       // Por defecto, si hay un error, no permitir la creación
       return {
         canCreateAppointment: false,
-        message: 'Error al verificar estado de suscripción.',
+        message: SUBSCRIPTION_MESSAGES.checkFailed,
       };
     }
   }
 
+  /** Pagos de suscripción del negocio, del más reciente al más antiguo. */
   async getPaymentHistory(tenantId: string): Promise<PaymentHistory[]> {
-    try {
-      // Intentar obtener la suscripción primero
-      let subscription;
-
-      try {
-        subscription = await this.getSubscriptionByTenantId(tenantId);
-      } catch (error) {
-        if (error instanceof NotFoundException) {
-          // Si no existe suscripción, devolvemos array vacío de pagos
-          return [];
-        }
-        throw error;
-      }
-
-      return await this.paymentRepository.find({
-        where: { tenant_id: tenantId },
-        order: { payment_date: 'DESC' },
-      });
-    } catch (error) {
-      this.logger.error(`Error getting payment history: ${error.message}`);
-      return [];
-    }
+    return await this.paymentRepository.find({
+      where: { tenant_id: this.requireTenant(tenantId) },
+      order: { payment_date: 'DESC' },
+    });
   }
 
   async handleSubscriptionUpdated(
@@ -467,9 +518,10 @@ export class SubscriptionsService {
         `Actualizando estado de suscripción: ${subscriptionId} a ${status}`,
       );
 
-      // Buscar la suscripción por ID
+      // Buscar la suscripción por ID (con el plan: de él sale la duración)
       const subscription = await this.subscriptionRepository.findOne({
         where: { id: subscriptionId },
+        relations: { plan: true },
       });
 
       if (subscription) {
@@ -481,21 +533,12 @@ export class SubscriptionsService {
           const now = new Date();
           subscription.subscription_start_date = now;
 
-          // Establecer fecha de fin basada en la duración del plan
+          // Fin del periodo según `plan.duration_months`
           if (subscription.plan) {
-            const endDate = new Date();
-            if (subscription.plan.name.toLowerCase().includes('semestral')) {
-              endDate.setMonth(endDate.getMonth() + 6);
-            } else if (
-              subscription.plan.name.toLowerCase().includes('anual') ||
-              subscription.plan.billing_interval === 'year'
-            ) {
-              endDate.setMonth(endDate.getMonth() + 12);
-            } else {
-              // Plan mensual estándar
-              endDate.setMonth(endDate.getMonth() + 1);
-            }
-            subscription.subscription_end_date = endDate;
+            subscription.subscription_end_date = planPeriodEnd(
+              now,
+              subscription.plan,
+            );
           }
         }
 
@@ -572,35 +615,85 @@ export class SubscriptionsService {
     return await this.paymentRepository.save(payment);
   }
 
-  async createPaymentLink(
-    tenantId: string,
-    planId: string,
-    redirectUrl: string,
-  ): Promise<string> {
-    let subscription;
+  /**
+   * `POST /subscriptions/refresh-status`: si la suscripción del negocio está en
+   * `pending`, la activa cuando hay un pago confirmado de ESTA suscripción en
+   * este intento (posterior a `subscription_start_date`) o Wompi da la
+   * transacción por aprobada. Solo el propio negocio (antes, en desarrollo y sin
+   * tenant, activaba la última `pending` de cualquier negocio).
+   */
+  async refreshPendingSubscription(tenantId: string): Promise<RefreshResult> {
+    const subscription = await this.findTenantSubscription(tenantId);
 
-    try {
-      subscription = await this.getSubscriptionByTenantId(tenantId);
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        subscription = await this.createTrialSubscription(tenantId);
-      } else {
-        throw error;
+    if (subscription?.status === SubscriptionStatus.PENDING) {
+      const since = subscription.subscription_start_date
+        ? new Date(subscription.subscription_start_date).getTime()
+        : 0;
+      const payments = await this.paymentRepository.find({
+        where: {
+          tenant_id: tenantId,
+          subscription: { id: subscription.id },
+          status: 'successful',
+        },
+        order: { payment_date: 'DESC' },
+      });
+      const successfulPayment = payments.find(
+        (p) => p.payment_date && new Date(p.payment_date).getTime() >= since,
+      );
+
+      if (successfulPayment) {
+        this.logger.log(
+          `Encontrado pago exitoso para tenant ${tenantId}, activando suscripción`,
+        );
+        await this.handleSubscriptionUpdated(subscription.id, 'ACTIVE');
+        return { success: true, message: 'Suscripción activada correctamente' };
+      }
+
+      this.logger.log('No se encontraron pagos locales, verificando con Wompi');
+      const latestTransactionStatus =
+        await this.wompiService.checkLatestTransactionByReference(
+          `sub_${subscription.id}`,
+        );
+
+      if (latestTransactionStatus === 'APPROVED') {
+        this.logger.log(
+          'Transacción verificada con Wompi como APPROVED, activando suscripción',
+        );
+        await this.handleSubscriptionUpdated(subscription.id, 'ACTIVE');
+        return {
+          success: true,
+          message: 'Suscripción verificada y activada correctamente',
+        };
+      }
+
+      // Solo con NODE_ENV=development: activar sin pago real.
+      if (this.wompiService.devShortcutsEnabled) {
+        this.logger.log(
+          'Ambiente de desarrollo: Activando suscripción pendiente automáticamente',
+        );
+        await this.recordPayment(
+          tenantId,
+          subscription.id,
+          subscription.plan ? subscription.plan.price : 27000,
+          'COP',
+          'successful',
+          `dev_${Date.now()}`,
+          '',
+        );
+        await this.handleSubscriptionUpdated(subscription.id, 'ACTIVE');
+        return {
+          success: true,
+          message:
+            'Suscripción activada en modo desarrollo (después de verificación con Wompi)',
+          subscription,
+        };
       }
     }
 
-    const plan = await this.getPlanById(planId);
-
-    const reference = `sub_${subscription.id}`;
-    const description = `Suscripción al plan ${plan.name}`;
-
-    return await this.wompiService.createPaymentLink(
-      plan.price,
-      description,
-      redirectUrl,
-      reference,
-      plan.currency,
-    );
+    return {
+      success: false,
+      message: 'No se encontraron cambios en la suscripción',
+    };
   }
 
   async cancelSubscription(tenantId: string): Promise<Subscription> {
@@ -641,16 +734,6 @@ export class SubscriptionsService {
       this.logger.error(`Error al cancelar suscripción: ${error.message}`);
       throw error;
     }
-  }
-
-  // Nuevo método para renovar suscripciones (para uso futuro con notificaciones)
-  async renewSubscription(
-    tenantId: string,
-    planId: string,
-    redirectUrl: string,
-  ): Promise<string> {
-    // Este método genera un link de pago para renovar una suscripción existente
-    return await this.createPaymentLink(tenantId, planId, redirectUrl);
   }
 
   // Método para enviar notificaciones de próxima expiración

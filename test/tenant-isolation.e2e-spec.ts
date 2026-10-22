@@ -528,9 +528,9 @@ describe('Aislamiento por tenant (e2e)', () => {
 
     it('crear usando recursos de otro negocio responde 404 (y la cita no toca la suscripción)', async () => {
       const t = auth(strangerToken);
-      const checkSubscription = jest.spyOn(
+      const consumeQuota = jest.spyOn(
         SubscriptionsService.prototype,
-        'checkSubscriptionStatus',
+        'consumeAppointmentQuota',
       );
       const professionalId = employee?.id ?? owner.id;
       await expectStatuses([
@@ -612,7 +612,7 @@ describe('Aislamiento por tenant (e2e)', () => {
           404,
         ],
       ]);
-      expect(checkSubscription).not.toHaveBeenCalled();
+      expect(consumeQuota).not.toHaveBeenCalled();
       expectNoWrites();
     });
   });
@@ -776,12 +776,10 @@ describe('Aislamiento por tenant (e2e)', () => {
           return { id: MISSING_ID, ...entity };
         });
       blockOtherWrites();
-      const checkSubscription = jest
-        .spyOn(SubscriptionsService.prototype, 'checkSubscriptionStatus')
+      // El cupo se consume en la transacción de la cita (2.03): aquí se simula.
+      const consumeQuota = jest
+        .spyOn(SubscriptionsService.prototype, 'consumeAppointmentQuota')
         .mockResolvedValue({ canCreateAppointment: true });
-      const trialUsage = jest
-        .spyOn(SubscriptionsService.prototype, 'updateTrialAppointmentUsage')
-        .mockResolvedValue(undefined);
       const emit = jest
         .spyOn(app.get(EventEmitter2), 'emit')
         .mockReturnValue(true);
@@ -800,8 +798,7 @@ describe('Aislamiento por tenant (e2e)', () => {
       expect(saved).toHaveLength(1);
       expect(saved[0].ownerId).toBe(owner.id);
       expect(saved[0].professionalId).toBe(employee.id);
-      expect(checkSubscription).toHaveBeenCalledWith(owner.id);
-      expect(trialUsage).toHaveBeenCalledWith(owner.id);
+      expect(consumeQuota).toHaveBeenCalledWith(owner.id, expect.anything());
       expect(emit).toHaveBeenCalledWith(
         'appointment.created',
         expect.anything(),

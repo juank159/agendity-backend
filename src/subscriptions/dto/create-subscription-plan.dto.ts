@@ -6,6 +6,7 @@ import {
   IsEnum,
   IsOptional,
   IsBoolean,
+  IsInt,
   Min,
   IsArray,
 } from 'class-validator';
@@ -28,16 +29,19 @@ export class CreateSubscriptionPlanDto {
   @IsEnum(['month', 'year'])
   billing_interval: string;
 
-  @IsNumber()
+  /** Duración del periodo pagado: de aquí sale `subscription_end_date`. */
+  @IsInt()
   @Min(1)
   @IsOptional()
-  duration_months?: number = 1; // Nuevo campo
+  duration_months?: number = 1;
 
   @IsBoolean()
   @IsOptional()
   is_recurring?: boolean = false; // Nuevo campo
 
-  @IsNumber()
+  /** Citas por periodo; -1 = ilimitado. */
+  @IsInt()
+  @Min(-1)
   appointment_limit: number;
 
   @IsString()

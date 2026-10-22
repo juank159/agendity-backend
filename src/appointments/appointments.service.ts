@@ -7,7 +7,13 @@ import {
   HttpException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, Between, FindOptionsWhere } from 'typeorm';
+import {
+  Repository,
+  Not,
+  Between,
+  FindOptionsWhere,
+  DataSource,
+} from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
@@ -34,6 +40,7 @@ export class AppointmentsService {
     private readonly eventEmitter: EventEmitter2,
     @Inject(forwardRef(() => SubscriptionsService))
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
@@ -64,8 +71,10 @@ export class AppointmentsService {
 
   /**
    * Crea una cita del negocio `tenantId` (Owner o Employee). Cliente, profesional
-   * y servicios deben ser del mismo negocio (si no, 404). Se validan ANTES de
-   * consultar la suscripción, que puede crear la fila del trial.
+   * y servicios deben ser del mismo negocio (si no, 404); se validan antes de
+   * tocar la suscripción. Después, en UNA transacción: se consume el cupo
+   * (trial o plan, con lock por negocio), se comprueba el horario y se guarda.
+   * Si algo falla, el rollback devuelve la cita al cupo.
    */
   async create(
     createAppointmentDto: CreateAppointmentDto,
@@ -97,35 +106,6 @@ export class AppointmentsService {
         throw new NotFoundException('Uno o más servicios no encontrados');
       }
 
-      // Verificar los límites de suscripción del negocio antes de crear la cita
-      const subscriptionStatus =
-        await this.subscriptionsService.checkSubscriptionStatus(tenantId);
-
-      if (!subscriptionStatus.canCreateAppointment) {
-        const code = subscriptionStatus.code ?? ErrorCode.SUBSCRIPTION_INACTIVE;
-        throw new BusinessException(
-          code,
-          subscriptionStatus.message ||
-            'No puedes crear más citas. Verifica tu plan de suscripción.',
-          LEGACY_STATUS[code],
-        );
-      }
-
-      const isAvailable = await this.checkProfessionalAvailability(
-        professional_id,
-        date,
-        services,
-        tenantId,
-      );
-
-      if (!isAvailable) {
-        throw new BusinessException(
-          ErrorCode.SLOT_UNAVAILABLE,
-          'Horario no disponible',
-          LEGACY_STATUS.SLOT_UNAVAILABLE,
-        );
-      }
-
       const appointmentToSave = {
         ownerId: tenantId,
         professionalId: professional_id,
@@ -142,11 +122,34 @@ export class AppointmentsService {
         services: services,
       };
 
-      // Actualizar el contador de citas de prueba si aplica
-      await this.subscriptionsService.updateTrialAppointmentUsage(tenantId);
+      const savedAppointment = await this.dataSource.transaction(
+        async (manager) => {
+          // Lanza TRIAL_LIMIT_REACHED / SUBSCRIPTION_INACTIVE (HTTP 400 legado).
+          await this.subscriptionsService.consumeAppointmentQuota(
+            tenantId,
+            manager,
+          );
 
-      const savedAppointment =
-        await this.appointmentRepository.save(appointmentToSave);
+          const isAvailable = await this.checkProfessionalAvailability(
+            professional_id,
+            date,
+            services,
+            tenantId,
+          );
+
+          if (!isAvailable) {
+            throw new BusinessException(
+              ErrorCode.SLOT_UNAVAILABLE,
+              'Horario no disponible',
+              LEGACY_STATUS.SLOT_UNAVAILABLE,
+            );
+          }
+
+          return await manager
+            .getRepository(Appointment)
+            .save(appointmentToSave);
+        },
+      );
 
       // Emitir el evento después de guardar la cita
       this.eventEmitter.emit('appointment.created', savedAppointment);

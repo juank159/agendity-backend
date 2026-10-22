@@ -30,7 +30,7 @@ export class AppointmentsController {
   ) {}
 
   @Post()
-  // El límite del trial lo comprueba el service (SubscriptionLimitsGuard sigue sin usarse: 2.03).
+  // El cupo (trial o plan) se consume en la transacción que crea la cita (service, 2.03).
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async create(
     @Body() createAppointmentDto: CreateAppointmentDto,

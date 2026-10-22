@@ -3,8 +3,13 @@
 import { IsString, IsUUID, IsOptional, IsEnum, Matches } from 'class-validator';
 
 export class CreateSubscriptionDto {
+  /**
+   * Se ignora: el tenant sale de la sesión (§5). Sigue aceptándose porque la
+   * app lo envía y `forbidNonWhitelisted` rechazaría la petición.
+   */
   @IsUUID()
-  tenant_id: string;
+  @IsOptional()
+  tenant_id?: string;
 
   @IsUUID()
   plan_id: string;

@@ -1,4 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode } from 'src/common/constants/error-codes';
 import { AppointmentsService } from './appointments.service';
 
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
@@ -23,10 +25,17 @@ function build() {
   };
   const events = { emit: jest.fn() };
   const subscriptions = {
-    checkSubscriptionStatus: jest
+    consumeAppointmentQuota: jest
       .fn()
       .mockResolvedValue({ canCreateAppointment: true }),
-    updateTrialAppointmentUsage: jest.fn(),
+  };
+  // Transacción simulada: la cita se guarda con el repositorio del manager.
+  const txRepo = { save: jest.fn(async (a) => ({ id: 'nueva', ...a })) };
+  const manager = { getRepository: jest.fn(() => txRepo) };
+  const dataSource = {
+    transaction: jest.fn(async (work: (m: any) => Promise<any>) =>
+      work(manager),
+    ),
   };
   const service = new AppointmentsService(
     repo as any,
@@ -35,8 +44,20 @@ function build() {
     services as any,
     events as any,
     subscriptions as any,
+    dataSource as any,
   );
-  return { service, repo, clients, users, services, subscriptions };
+  return {
+    service,
+    repo,
+    clients,
+    users,
+    services,
+    subscriptions,
+    txRepo,
+    manager,
+    dataSource,
+    events,
+  };
 }
 
 const dto = {
@@ -51,18 +72,83 @@ describe('AppointmentsService (tenant)', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('create valida cliente, profesional y servicios contra el tenant y guarda owner_id = tenant', async () => {
-    const { service, repo, clients, users, services, subscriptions } = build();
+    const { service, repo, clients, users, services, subscriptions, txRepo } =
+      build();
     await service.create(dto, TENANT);
     expect(clients.findOne).toHaveBeenCalledWith(CLIENT, TENANT);
     expect(users.findTenantMember).toHaveBeenCalledWith(EMPLOYEE, TENANT);
     expect(services.findOne).toHaveBeenCalledWith(SERVICE, TENANT);
-    expect(subscriptions.checkSubscriptionStatus).toHaveBeenCalledWith(TENANT);
-    expect(subscriptions.updateTrialAppointmentUsage).toHaveBeenCalledWith(
-      TENANT,
-    );
-    expect(repo.save).toHaveBeenCalledWith(
+    expect(txRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: TENANT, professionalId: EMPLOYEE }),
     );
+    expect(repo.save).not.toHaveBeenCalled(); // solo dentro de la transacción
+    expect(subscriptions.consumeAppointmentQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it('create consume el cupo DENTRO de la misma transacción que guarda la cita', async () => {
+    const { service, subscriptions, txRepo, manager, dataSource, events } =
+      build();
+    await service.create(dto, TENANT);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(subscriptions.consumeAppointmentQuota).toHaveBeenCalledWith(
+      TENANT,
+      manager,
+    );
+    expect(
+      subscriptions.consumeAppointmentQuota.mock.invocationCallOrder[0],
+    ).toBeLessThan(txRepo.save.mock.invocationCallOrder[0]);
+    expect(events.emit).toHaveBeenCalledWith(
+      'appointment.created',
+      expect.objectContaining({ id: 'nueva' }),
+    );
+  });
+
+  it('trial agotado: el error del cupo sale tal cual (400 TRIAL_LIMIT_REACHED) y no se guarda', async () => {
+    const { service, subscriptions, txRepo, repo, events } = build();
+    subscriptions.consumeAppointmentQuota.mockRejectedValue(
+      new BusinessException(
+        ErrorCode.TRIAL_LIMIT_REACHED,
+        'Has alcanzado el límite de citas de prueba. Por favor, adquiere un plan para continuar.',
+        400,
+      ),
+    );
+    const error = await service.create(dto, TENANT).catch((e) => e);
+    expect(error.getStatus()).toBe(400);
+    expect(error.getResponse()).toMatchObject({ code: 'TRIAL_LIMIT_REACHED' });
+    expect(repo.find).not.toHaveBeenCalled(); // ni siquiera mira el horario
+    expect(txRepo.save).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+
+  it('si la cita no se puede crear después de consumir, la transacción falla (rollback del cupo)', async () => {
+    const { service, repo, txRepo, dataSource, events } = build();
+    repo.find.mockResolvedValue([
+      {
+        date: new Date('2030-01-01T10:00:00'),
+        services: [{ duration: 30 }],
+      },
+    ]);
+    const error = await service.create(dto, TENANT).catch((e) => e);
+    expect(error.getResponse()).toMatchObject({ code: 'SLOT_UNAVAILABLE' });
+    // El error se lanzó dentro del callback: TypeORM hace ROLLBACK de todo,
+    // incluido el +1 del trial.
+    await expect(dataSource.transaction.mock.results[0].value).rejects.toBe(
+      error,
+    );
+    expect(txRepo.save).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+
+  it('si falla el guardado, el error sale de la transacción y no se emite el evento', async () => {
+    const { service, txRepo, dataSource, events } = build();
+    txRepo.save.mockRejectedValue(new Error('fallo de BD'));
+    await expect(service.create(dto, TENANT)).rejects.toThrow(
+      'Error al crear la cita',
+    );
+    await expect(dataSource.transaction.mock.results[0].value).rejects.toThrow(
+      'fallo de BD',
+    );
+    expect(events.emit).not.toHaveBeenCalled();
   });
 
   it('create con un profesional de otro negocio: 404 sin tocar la suscripción ni guardar', async () => {
@@ -73,8 +159,7 @@ describe('AppointmentsService (tenant)', () => {
     await expect(service.create(dto, TENANT)).rejects.toThrow(
       NotFoundException,
     );
-    expect(subscriptions.checkSubscriptionStatus).not.toHaveBeenCalled();
-    expect(subscriptions.updateTrialAppointmentUsage).not.toHaveBeenCalled();
+    expect(subscriptions.consumeAppointmentQuota).not.toHaveBeenCalled();
     expect(repo.save).not.toHaveBeenCalled();
   });
 
