@@ -1,9 +1,9 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
+  HttpException,
 } from '@nestjs/common';
 import { UpdateUserDto } from './dto';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,6 +13,8 @@ import { Repository } from 'typeorm';
 
 import { FindUserQuery } from 'src/auth/interfaces';
 import { UserAccessActor, assertCanManageUser } from './user-access';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode } from 'src/common/constants/error-codes';
 
 @Injectable()
 export class UsersService {
@@ -104,7 +106,10 @@ export class UsersService {
   /** Solo empleados propios. El dueño no puede eliminarse (regla de negocio). */
   async remove(actor: UserAccessActor, id: string): Promise<void> {
     if (id === actor.id) {
-      throw new ConflictException('El dueño del negocio no puede eliminarse');
+      throw new BusinessException(
+        ErrorCode.OWNER_NOT_DELETABLE,
+        'El dueño del negocio no puede eliminarse',
+      );
     }
     const user = await assertCanManageUser(
       this.usersRepository,
@@ -137,10 +142,7 @@ export class UsersService {
   }
 
   private handleError(error: any): never {
-    if (
-      error instanceof NotFoundException ||
-      error instanceof BadRequestException
-    ) {
+    if (error instanceof HttpException) {
       throw error;
     }
 
@@ -174,7 +176,7 @@ export class UsersService {
       const userWithoutPassword = omitUserSecrets(updatedUser);
       return userWithoutPassword as User;
     } catch (error) {
-      if (error instanceof NotFoundException) {
+      if (error instanceof HttpException) {
         throw error;
       }
       throw new InternalServerErrorException(

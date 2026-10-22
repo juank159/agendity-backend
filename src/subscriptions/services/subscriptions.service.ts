@@ -9,6 +9,7 @@ import { CreateSubscriptionPlanDto } from '../dto/create-subscription-plan.dto';
 import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
 import { ConfigService } from '@nestjs/config';
+import { ErrorCode } from 'src/common/constants/error-codes';
 
 @Injectable()
 export class SubscriptionsService {
@@ -328,6 +329,8 @@ export class SubscriptionsService {
   async checkSubscriptionStatus(tenantId: string): Promise<{
     canCreateAppointment: boolean;
     message?: string;
+    /** Por qué no se puede crear la cita (contrato §3). */
+    code?: ErrorCode;
   }> {
     try {
       // Intentar obtener la suscripción
@@ -365,6 +368,7 @@ export class SubscriptionsService {
       ) {
         return {
           canCreateAppointment: false,
+          code: ErrorCode.TRIAL_LIMIT_REACHED,
           message:
             'Has alcanzado el límite de citas de prueba. Por favor, adquiere un plan para continuar.',
         };
@@ -383,6 +387,7 @@ export class SubscriptionsService {
 
           return {
             canCreateAppointment: false,
+            code: ErrorCode.SUBSCRIPTION_INACTIVE,
             message: 'Tu suscripción ha expirado. Por favor, renueva tu plan.',
           };
         }
@@ -406,6 +411,7 @@ export class SubscriptionsService {
         } else {
           return {
             canCreateAppointment: false,
+            code: ErrorCode.SUBSCRIPTION_INACTIVE,
             message: 'Has alcanzado el límite de citas de tu plan actual.',
           };
         }
@@ -414,6 +420,7 @@ export class SubscriptionsService {
       // En otros casos (cancelada, expirada, etc.)
       return {
         canCreateAppointment: false,
+        code: ErrorCode.SUBSCRIPTION_INACTIVE,
         message: 'Tu suscripción no está activa. Por favor, actualiza tu plan.',
       };
     } catch (error) {

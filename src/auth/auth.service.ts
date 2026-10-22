@@ -8,6 +8,7 @@ import {
   Logger,
   NotFoundException,
   UnauthorizedException,
+  HttpException,
 } from '@nestjs/common';
 import { CreateAuthDto, CreateEmployeeDto, LoginAuthDto } from './dto';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,6 +18,8 @@ import {
   omitUserSecrets,
 } from 'src/users/entities/user.entity';
 import { Not, Repository, DataSource, FindOptionsWhere } from 'typeorm';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
 import { UserAccessActor, assertCanManageUser } from 'src/users/user-access';
 import * as bcrypt from 'bcrypt';
 import { randomInt, timingSafeEqual } from 'crypto';
@@ -65,18 +68,33 @@ export class AuthService {
     );
   }
 
+  /**
+   * Email o teléfono repetido. El texto se mantiene igual que antes: la app lo
+   * compara ("Ya existe un usuario con el email"/"teléfono") hasta migrar a `code`.
+   */
+  private duplicateUserError(
+    isEmail: boolean,
+    email: string,
+    phone: string,
+  ): BusinessException {
+    return isEmail
+      ? new BusinessException(
+          ErrorCode.DUPLICATE_EMAIL,
+          `Ya existe un usuario con el email: ${email}`,
+        )
+      : new BusinessException(
+          ErrorCode.DUPLICATE_PHONE,
+          `Ya existe un usuario con el teléfono: ${phone}`,
+        );
+  }
+
   private async validateUserExists(email: string, phone: string) {
     const existingUser = await this.userRepository.findOne({
       where: [{ email }, { phone }],
     });
 
     if (existingUser) {
-      const duplicatedField =
-        existingUser.email === email ? 'email' : 'teléfono';
-      const duplicatedValue = duplicatedField === 'email' ? email : phone;
-      throw new ConflictException(
-        `Ya existe un usuario con el ${duplicatedField}: ${duplicatedValue}`,
-      );
+      throw this.duplicateUserError(existingUser.email === email, email, phone);
     }
   }
 
@@ -436,14 +454,10 @@ export class AuthService {
             });
 
             if (existingUser && existingUser.id !== employeeId) {
-              const duplicatedField =
-                existingUser.email === updateData.email ? 'email' : 'teléfono';
-              const duplicatedValue =
-                duplicatedField === 'email'
-                  ? updateData.email
-                  : updateData.phone;
-              throw new ConflictException(
-                `Ya existe un usuario con el ${duplicatedField}: ${duplicatedValue}`,
+              throw this.duplicateUserError(
+                existingUser.email === updateData.email,
+                updateData.email,
+                updateData.phone,
               );
             }
           }
@@ -583,10 +597,7 @@ export class AuthService {
       });
     } catch (error) {
       // Propagar errores conocidos, envolver errores desconocidos
-      if (
-        error instanceof NotFoundException ||
-        error instanceof ConflictException
-      ) {
+      if (error instanceof HttpException) {
         throw error;
       }
       console.error('Error al actualizar empleado:', error);
@@ -622,8 +633,10 @@ export class AuthService {
       // 2. Verificar que no sea el dueño
       const isOwner = employee.roles.some((role) => role.name === 'Owner');
       if (isOwner) {
-        throw new ForbiddenException(
+        throw new BusinessException(
+          ErrorCode.OWNER_NOT_DELETABLE,
           'No se puede eliminar al dueño del negocio',
+          LEGACY_STATUS.OWNER_NOT_DELETABLE_EMPLOYEES,
         );
       }
 
@@ -657,11 +670,7 @@ export class AuthService {
     } catch (error) {
       console.error(`❌ Error eliminando empleado ${employeeId}:`, error);
 
-      if (
-        error instanceof NotFoundException ||
-        error instanceof ForbiddenException ||
-        error instanceof ConflictException
-      ) {
+      if (error instanceof HttpException) {
         throw error;
       }
 
@@ -842,10 +851,7 @@ export class AuthService {
 
       return { message: 'Código de verificación enviado' };
     } catch (error) {
-      if (
-        error instanceof NotFoundException ||
-        error instanceof InternalServerErrorException
-      ) {
+      if (error instanceof HttpException) {
         throw error;
       }
       this.logger.error(
@@ -1183,10 +1189,7 @@ export class AuthService {
       return this.transformUserResponse(updatedEmployee);
     } catch (error) {
       // Propagar errores conocidos, envolver errores desconocidos
-      if (
-        error instanceof NotFoundException ||
-        error instanceof ConflictException
-      ) {
+      if (error instanceof HttpException) {
         throw error;
       }
       console.error('Error al cambiar el estado del empleado:', error);

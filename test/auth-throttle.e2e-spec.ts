@@ -39,17 +39,20 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
   describe('throttle por IP', () => {
     it(`POST /auth/login responde 429 después de ${AUTH_RATE_LIMITS.login} intentos por minuto`, async () => {
       const statuses: number[] = [];
+      let lastBody: Record<string, unknown> = {};
       for (let i = 0; i <= AUTH_RATE_LIMITS.login; i++) {
         // Se crea y se envía cada petición en orden (ver user-access.e2e-spec).
         const res = await http
           .post('/api/auth/login')
           .send({ email: 'nadie@e2e.example', password: 'x' });
         statuses.push(res.status);
+        lastBody = res.body;
       }
       expect(statuses.slice(0, AUTH_RATE_LIMITS.login)).toEqual(
         Array(AUTH_RATE_LIMITS.login).fill(401),
       );
       expect(statuses[AUTH_RATE_LIMITS.login]).toBe(429);
+      expect(lastBody.code).toBe('TOO_MANY_REQUESTS');
     });
 
     it(`POST /auth/verify/email responde 429 después de ${AUTH_RATE_LIMITS.verifyCode} intentos por minuto`, async () => {

@@ -20,7 +20,8 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ClassSerializerInterceptor } from '@nestjs/common';
 import { JwtAuthGuard } from './auth/jwt/jwt.auth.guard';
 import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
@@ -79,6 +80,8 @@ import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
     { provide: APP_GUARD, useClass: JwtRolesGuard },
     // Aplica @Exclude() de las entidades (p. ej. secretos de User) a toda respuesta.
     { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
+    // Formato único de errores (ARQUITECTURA.md §3).
+    { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],
 })
 export class AppModule {}

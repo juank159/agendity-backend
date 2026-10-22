@@ -78,6 +78,7 @@ export class DemoPaymentController {
 </html>`;
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(html);
+    // Sin `return`: con @Res() la respuesta ya se envió y no debe pasar por el serializador.
+    res.send(html);
   }
 }

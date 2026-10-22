@@ -1,10 +1,10 @@
 import {
   Injectable,
   NotFoundException,
-  BadRequestException,
   InternalServerErrorException,
   Inject,
   forwardRef,
+  HttpException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, Between } from 'typeorm';
@@ -16,6 +16,8 @@ import { UsersService } from '../users/users.service';
 import { ServicesService } from '../services/services.service';
 import { RELATIONS, RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
 import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
@@ -36,10 +38,7 @@ export class AppointmentsService {
   private handleError(error: any, options: ErrorHandlerOptions): never {
     console.error(`Error al ${options.operation} ${options.entity}:`, error);
 
-    if (
-      error instanceof BadRequestException ||
-      error instanceof NotFoundException
-    ) {
+    if (error instanceof HttpException) {
       throw error;
     }
 
@@ -140,15 +139,17 @@ export class AppointmentsService {
     userId: string,
   ): Promise<Appointment> {
     try {
-
       // Verificar los límites de suscripción antes de crear la cita
       const subscriptionStatus =
         await this.subscriptionsService.checkSubscriptionStatus(userId);
 
       if (!subscriptionStatus.canCreateAppointment) {
-        throw new BadRequestException(
+        const code = subscriptionStatus.code ?? ErrorCode.SUBSCRIPTION_INACTIVE;
+        throw new BusinessException(
+          code,
           subscriptionStatus.message ||
             'No puedes crear más citas. Verifica tu plan de suscripción.',
+          LEGACY_STATUS[code],
         );
       }
 
@@ -191,7 +192,11 @@ export class AppointmentsService {
       );
 
       if (!isAvailable) {
-        throw new BadRequestException('Horario no disponible');
+        throw new BusinessException(
+          ErrorCode.SLOT_UNAVAILABLE,
+          'Horario no disponible',
+          LEGACY_STATUS.SLOT_UNAVAILABLE,
+        );
       }
 
       const appointmentToSave = {
@@ -225,10 +230,7 @@ export class AppointmentsService {
       return savedAppointment;
     } catch (error) {
       console.error('Error en create:', error);
-      if (
-        error instanceof NotFoundException ||
-        error instanceof BadRequestException
-      ) {
+      if (error instanceof HttpException) {
         throw error;
       }
       throw new InternalServerErrorException('Error al crear la cita');
@@ -425,7 +427,11 @@ export class AppointmentsService {
         );
 
         if (!isAvailable) {
-          throw new BadRequestException('Horario no disponible');
+          throw new BusinessException(
+            ErrorCode.SLOT_UNAVAILABLE,
+            'Horario no disponible',
+            LEGACY_STATUS.SLOT_UNAVAILABLE,
+          );
         }
       }
 
@@ -678,15 +684,16 @@ export class AppointmentsService {
   async markReminderAsSent(id: string, userId: string): Promise<Appointment> {
     try {
       const appointment = await this.findOne(id, userId);
-      
+
       // Marcar el recordatorio como enviado
       appointment.reminderSent = true;
       appointment.reminderSentAt = new Date();
-      
-      const updatedAppointment = await this.appointmentRepository.save(appointment);
-      
+
+      const updatedAppointment =
+        await this.appointmentRepository.save(appointment);
+
       console.log(`Recordatorio marcado como enviado para cita ${id}`);
-      
+
       return updatedAppointment;
     } catch (error) {
       this.handleError(error, {
