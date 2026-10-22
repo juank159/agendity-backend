@@ -18,9 +18,13 @@ import { SubscriptionsService } from './services/subscriptions.service';
     TypeOrmModule.forFeature([SubscriptionPlan, Subscription, PaymentHistory]),
     ConfigModule,
     // La página de pago simulada solo existe en desarrollo.
+    // `registerWhen` espera a `ConfigModule.forRoot()` (en AppModule) y, por defecto,
+    // lanza un error no capturado si tarda más de 5 s. En un arranque en frío con
+    // ts-jest (e2e) la carga de módulos puede pasar de 5 s: se amplía el margen.
     ConditionalModule.registerWhen(
       DemoPaymentModule,
       (env: NodeJS.ProcessEnv) => env.NODE_ENV === 'development',
+      { timeout: 60000 },
     ),
   ],
   controllers: [SubscriptionsController, WompiWebhookController],

@@ -19,7 +19,8 @@ import { DataSourceConfig } from './config/data.postgres.source';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ClassSerializerInterceptor } from '@nestjs/common';
 import { JwtAuthGuard } from './auth/jwt/jwt.auth.guard';
 import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
 
@@ -72,6 +73,8 @@ import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
     // El orden importa: primero se autentica (JWT) y después se comprueban los roles.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: JwtRolesGuard },
+    // Aplica @Exclude() de las entidades (p. ej. secretos de User) a toda respuesta.
+    { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
   ],
 })
 export class AppModule {}

@@ -10,8 +10,12 @@ import {
 } from '@nestjs/common';
 import { CreateAuthDto, CreateEmployeeDto, LoginAuthDto } from './dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { User } from 'src/users/entities/user.entity';
-import { Not, Repository, DataSource } from 'typeorm';
+import {
+  User,
+  UserSecretField,
+  omitUserSecrets,
+} from 'src/users/entities/user.entity';
+import { Not, Repository, DataSource, FindOptionsWhere } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from './interfaces';
@@ -98,8 +102,27 @@ export class AuthService {
     return this.getJwtToken(payload);
   }
 
+  /**
+   * Las columnas secretas de `User` tienen `select: false`. Solo los flujos que
+   * comparan contraseña o códigos las piden aquí, de forma explícita.
+   */
+  private findUserWithSecrets(
+    where: FindOptionsWhere<User>,
+    secrets: UserSecretField[],
+    relations: string[] = [],
+  ): Promise<User | null> {
+    const qb = this.userRepository.createQueryBuilder('user').where(where);
+    for (const field of secrets) {
+      qb.addSelect(`user.${field}`);
+    }
+    for (const relation of relations) {
+      qb.leftJoinAndSelect(`user.${relation}`, relation);
+    }
+    return qb.getOne();
+  }
+
   private transformUserResponse(user: User) {
-    const { password, ...userData } = user;
+    const userData = omitUserSecrets(user);
     return {
       ...userData,
       roles: userData.roles.map((role) => ({ name: role.name })),
@@ -483,7 +506,7 @@ export class AuthService {
         }
 
         // 10. Construir y devolver la respuesta
-        const { password, ...userData } = updatedEmployee;
+        const userData = omitUserSecrets(updatedEmployee);
         return {
           ...userData,
           roles: userData.roles.map((role) => ({ name: role.name })),
@@ -638,10 +661,11 @@ export class AuthService {
   async login(loginAuthDto: LoginAuthDto) {
     try {
       const { email, password } = loginAuthDto;
-      const user = await this.userRepository.findOne({
-        where: { email },
-        relations: ['roles', 'owner'],
-      });
+      const user = await this.findUserWithSecrets(
+        { email },
+        ['password'],
+        ['roles', 'owner'],
+      );
 
       if (!user || !(await bcrypt.compare(password, user.password))) {
         throw new UnauthorizedException('Credenciales inválidas');
@@ -835,7 +859,10 @@ export class AuthService {
 
   async verifyEmail(email: string, code: string) {
     try {
-      const user = await this.userRepository.findOne({ where: { email } });
+      const user = await this.findUserWithSecrets({ email }, [
+        'verification_code',
+        'verification_code_expires',
+      ]);
 
       if (!user) {
         console.log(`Usuario no encontrado para email: ${email}`);
@@ -927,7 +954,7 @@ export class AuthService {
 
       // Transformar respuesta
       return allUsers.map((user) => {
-        const { password, ...userData } = user;
+        const userData = omitUserSecrets(user);
 
         // Convertir schedules a formato de frontend
         const schedule = {};
@@ -1003,7 +1030,7 @@ export class AuthService {
       const deletedEmployees = employees.filter((emp) => emp.deletedAt);
 
       return deletedEmployees.map((user) => {
-        const { password, ...userData } = user;
+        const userData = omitUserSecrets(user);
         return {
           ...userData,
           roles: userData.roles.map((role) => ({ name: role.name })),
@@ -1055,7 +1082,7 @@ export class AuthService {
       });
     }
 
-    const { password, ...userData } = employee;
+    const userData = omitUserSecrets(employee);
     return {
       ...userData,
       roles: userData.roles.map((role) => ({ name: role.name })),
@@ -1117,7 +1144,10 @@ export class AuthService {
 
   async resetPassword(email: string, code: string, newPassword: string) {
     try {
-      const user = await this.userRepository.findOne({ where: { email } });
+      const user = await this.findUserWithSecrets({ email }, [
+        'reset_password_code',
+        'reset_password_expires',
+      ]);
 
       if (!user) {
         throw new NotFoundException('Usuario no encontrado');
@@ -1226,9 +1256,10 @@ export class AuthService {
   async verifyEmployeeEmail(employeeId: string, code: string) {
     try {
       // Buscar el empleado
-      const employee = await this.userRepository.findOne({
-        where: { id: employeeId },
-      });
+      const employee = await this.findUserWithSecrets({ id: employeeId }, [
+        'verification_code',
+        'verification_code_expires',
+      ]);
 
       if (!employee) {
         throw new NotFoundException('Empleado no encontrado');

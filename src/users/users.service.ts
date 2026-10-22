@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { User } from './entities/user.entity';
+import { User, omitUserSecrets } from './entities/user.entity';
 import { isUUID } from 'class-validator';
 import { Repository } from 'typeorm';
 
@@ -21,7 +21,7 @@ export class UsersService {
   async findAll() {
     const users = await this.usersRepository.find({ relations: ['roles'] });
     return users.map((user) => {
-      const { password, ...dataUser } = user;
+      const dataUser = omitUserSecrets(user);
       return {
         ...dataUser,
         roles: dataUser.roles.map((role) => ({ name: role.name })),
@@ -138,7 +138,7 @@ export class UsersService {
       });
 
       // Omitimos el password en la respuesta
-      const { password, ...userWithoutPassword } = updatedUser;
+      const userWithoutPassword = omitUserSecrets(updatedUser);
       return userWithoutPassword as User;
     } catch (error) {
       if (error instanceof NotFoundException) {

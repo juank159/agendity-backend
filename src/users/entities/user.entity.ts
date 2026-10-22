@@ -20,6 +20,32 @@ import {
 import { Service } from 'src/services/entities/service.entity';
 import { Category } from 'src/categories/entities/category.entity';
 import { Client } from 'src/clients/entities/client.entity';
+import { Exclude } from 'class-transformer';
+
+/**
+ * Columnas de `users` que nunca deben salir en una respuesta HTTP.
+ * Tienen `select: false` (no se cargan salvo `addSelect` explícito) y `@Exclude()`
+ * para el `ClassSerializerInterceptor` global.
+ */
+export const USER_SECRET_FIELDS = [
+  'password',
+  'verification_code',
+  'verification_code_expires',
+  'reset_password_code',
+  'reset_password_expires',
+] as const;
+export type UserSecretField = (typeof USER_SECRET_FIELDS)[number];
+
+/** Copia plana del usuario sin las columnas secretas (para respuestas armadas a mano). */
+export function omitUserSecrets<T extends object>(
+  user: T,
+): Omit<T, UserSecretField> {
+  const copy = { ...user };
+  for (const field of USER_SECRET_FIELDS) {
+    delete (copy as Record<string, unknown>)[field];
+  }
+  return copy;
+}
 
 @Entity({ name: 'users' })
 export class User {
@@ -60,9 +86,11 @@ export class User {
   })
   image: string;
 
+  @Exclude({ toPlainOnly: true })
   @Column({
     type: 'varchar',
     nullable: false,
+    select: false,
   })
   password: string;
 
@@ -87,16 +115,20 @@ export class User {
   @Column({ default: false })
   is_email_verified: boolean;
 
-  @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
+  @Column({ nullable: true, select: false })
   verification_code: string;
 
-  @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
+  @Column({ nullable: true, select: false })
   reset_password_code: string;
 
-  @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
+  @Column({ nullable: true, select: false })
   reset_password_expires: Date;
 
-  @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
+  @Column({ nullable: true, select: false })
   verification_code_expires: Date;
 
   // 🆕 NUEVO: Soft Delete - TypeORM maneja esto automáticamente

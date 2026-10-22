@@ -4,30 +4,14 @@
  * - Lee todas las rutas del documento Swagger de la app real (mismo setup que main.ts).
  * - Solo hace peticiones SIN token válido: los guards cortan antes del handler,
  *   así que el test no escribe en la BD.
- * - La conexión a Postgres se abre con synchronize/migrationsRun desactivados
- *   para no tocar el esquema.
  */
 import { INestApplication, RequestMethod } from '@nestjs/common';
 import { DiscoveryModule, DiscoveryService, Reflector } from '@nestjs/core';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { JwtService } from '@nestjs/jwt';
-import { Test } from '@nestjs/testing';
 import * as request from 'supertest';
-import { DataSourceConfig } from '../src/config/data.postgres.source';
-
-// Debe ir antes de cargar AppModule: AppModule copia esta config al evaluarse.
-Object.assign(DataSourceConfig, {
-  synchronize: false,
-  migrationsRun: false,
-  entities: [],
-  logging: false,
-});
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { AppModule } = require('../src/app.module');
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { setupApp } = require('../src/config/app.setup');
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { IS_PUBLIC_KEY } = require('../src/common/decorators/public.decorator');
+import { IS_PUBLIC_KEY } from '../src/common/decorators/public.decorator';
+import { createE2EApp } from './utils/create-e2e-app';
 
 /** Rutas públicas aprobadas (método + ruta Swagger). Cualquier cambio se revisa. */
 const PUBLIC_ROUTES = new Set<string>([
@@ -68,13 +52,9 @@ describe('Guard JWT global (e2e)', () => {
   let jwt: JwtService;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule, DiscoveryModule],
-    }).compile();
-
-    app = moduleRef.createNestApplication({ logger: ['error'] });
-    const document = setupApp(app);
-    await app.init();
+    const created = await createE2EApp([DiscoveryModule]);
+    app = created.app;
+    const document = created.document;
 
     routes = [];
     for (const [swaggerPath, item] of Object.entries(document.paths)) {
