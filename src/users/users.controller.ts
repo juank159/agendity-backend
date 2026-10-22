@@ -13,12 +13,10 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { FindUserQuery } from 'src/auth/interfaces';
+import { FindUserQuery, JwtPayload } from 'src/auth/interfaces';
+import { GetUser } from 'src/common/decorators/get-user.decorator';
 import { isUUID } from 'class-validator';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import * as path from 'path';
-import { CloudinaryService } from 'src/static/cloudinary.service';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
 import { UploadService } from 'src/common/upload/upload.service';
@@ -32,16 +30,15 @@ export class UsersController {
 
   @hasRoles(JwtRoles.Owner)
   @Get()
-  findAll() {
-    return this.usersService.findAll();
+  findAll(@GetUser() actor: JwtPayload) {
+    return this.usersService.findAll(actor);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Get(':param')
-  findOne(@Param('param') param: string) {
-    // Transformar el parámetro en un objeto FindUserQuery
+  findOne(@Param('param') param: string, @GetUser() actor: JwtPayload) {
     const query: FindUserQuery = this.buildQueryObject(param);
-    return this.usersService.findOne(query);
+    return this.usersService.findOneForActor(actor, query);
   }
 
   private buildQueryObject(param: string): FindUserQuery {
@@ -58,8 +55,12 @@ export class UsersController {
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.usersService.update(id, updateUserDto);
+  update(
+    @Param('id') id: string,
+    @Body() updateUserDto: UpdateUserDto,
+    @GetUser() actor: JwtPayload,
+  ) {
+    return this.usersService.update(actor, id, updateUserDto);
   }
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
@@ -81,12 +82,16 @@ export class UsersController {
   async updateUserImage(
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: Express.Multer.File,
+    @GetUser() actor: JwtPayload,
   ) {
+    // Comprobar el acceso ANTES de subir la imagen (404 si no es suyo).
+    await this.usersService.findOneForActor(actor, { id });
     try {
       const result = await this.uploadService.uploadImage(file, {
         folder: 'users',
       });
       const updatedUser = await this.usersService.updateUserImage(
+        actor,
         id,
         result.url,
       );
@@ -105,7 +110,7 @@ export class UsersController {
 
   @hasRoles(JwtRoles.Owner)
   @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.usersService.remove(id);
+  remove(@Param('id', ParseUUIDPipe) id: string, @GetUser() actor: JwtPayload) {
+    return this.usersService.remove(actor, id);
   }
 }

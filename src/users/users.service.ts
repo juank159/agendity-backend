@@ -1,16 +1,18 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { CreateUserDto, UpdateUserDto } from './dto';
+import { UpdateUserDto } from './dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User, omitUserSecrets } from './entities/user.entity';
 import { isUUID } from 'class-validator';
 import { Repository } from 'typeorm';
 
 import { FindUserQuery } from 'src/auth/interfaces';
+import { UserAccessActor, assertCanManageUser } from './user-access';
 
 @Injectable()
 export class UsersService {
@@ -18,8 +20,12 @@ export class UsersService {
     @InjectRepository(User) private readonly usersRepository: Repository<User>,
   ) {}
 
-  async findAll() {
-    const users = await this.usersRepository.find({ relations: ['roles'] });
+  /** El actor y sus empleados (nunca usuarios de otro negocio). */
+  async findAll(actor: UserAccessActor) {
+    const users = await this.usersRepository.find({
+      where: [{ id: actor.id }, { owner: { id: actor.id } }],
+      relations: ['roles'],
+    });
     return users.map((user) => {
       const dataUser = omitUserSecrets(user);
       return {
@@ -60,10 +66,26 @@ export class UsersService {
     }
   }
 
+  /** `GET /users/:param`: solo uno mismo o un empleado propio; si no, 404. */
+  async findOneForActor(
+    actor: UserAccessActor,
+    query: FindUserQuery,
+  ): Promise<Omit<User, 'password'>> {
+    this.validateQuery(query);
+    const target = await assertCanManageUser(
+      this.usersRepository,
+      actor,
+      query,
+    );
+    return this.findOne({ id: target.id });
+  }
+
   async update(
+    actor: UserAccessActor,
     id: string,
     updateUserDto: UpdateUserDto,
   ): Promise<Omit<User, 'password'>> {
+    await assertCanManageUser(this.usersRepository, actor, { id });
     const user = await this.findOne({ id });
 
     const updatedUser = this.usersRepository.create({
@@ -79,11 +101,17 @@ export class UsersService {
     }
   }
 
-  async remove(id: string): Promise<void> {
-    const user = await this.usersRepository.findOne({ where: { id } });
-    if (!user) {
-      throw new NotFoundException(`Usuario con id ${id} no fue encontrado`);
+  /** Solo empleados propios. El dueño no puede eliminarse (regla de negocio). */
+  async remove(actor: UserAccessActor, id: string): Promise<void> {
+    if (id === actor.id) {
+      throw new ConflictException('El dueño del negocio no puede eliminarse');
     }
+    const user = await assertCanManageUser(
+      this.usersRepository,
+      actor,
+      { id },
+      { employeesOnly: true },
+    );
     await this.usersRepository.remove(user);
   }
 
@@ -124,8 +152,13 @@ export class UsersService {
     throw new InternalServerErrorException('Please check server logs');
   }
 
-  async updateUserImage(userId: string, imageUrl: string): Promise<User> {
+  async updateUserImage(
+    actor: UserAccessActor,
+    userId: string,
+    imageUrl: string,
+  ): Promise<User> {
     try {
+      await assertCanManageUser(this.usersRepository, actor, { id: userId });
       const user = await this.findOne({ id: userId });
 
       if (!user) {

@@ -15,6 +15,7 @@ import { AuthService } from './auth.service';
 import { JwtRoles } from './jwt/jwt.role';
 import { hasRoles } from './jwt/has.roles';
 import { User } from '../users/entities/user.entity';
+import { JwtPayload } from './interfaces';
 import { GetUser } from 'src/common/decorators/get-user.decorator';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { CreateEmployeeWithDetailsDto } from './dto/create-employee-with-details.dto';
@@ -184,9 +185,10 @@ export class AuthController {
   @hasRoles(JwtRoles.Owner)
   @Post('verify/employee-email')
   verifyEmployeeEmail(
+    @GetUser() owner: JwtPayload,
     @Body('employee_id') employeeId: string,
     @Body('code') code: string,
   ) {
-    return this.authService.verifyEmployeeEmail(employeeId, code);
+    return this.authService.verifyEmployeeEmail(owner, employeeId, code);
   }
 }

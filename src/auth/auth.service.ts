@@ -16,6 +16,10 @@ import {
   omitUserSecrets,
 } from 'src/users/entities/user.entity';
 import { Not, Repository, DataSource, FindOptionsWhere } from 'typeorm';
+import {
+  UserAccessActor,
+  assertCanManageUser,
+} from 'src/users/user-access';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from './interfaces';
@@ -764,7 +768,8 @@ export class AuthService {
             name: 'Pendiente',
             lastname: 'Pendiente',
             phone: 'Pendiente',
-            password: 'temporal',
+            // Nunca en texto plano: contraseña aleatoria con hash hasta el registro real.
+            password: await this.hashPassword(uuid()),
             is_google_account: false,
           });
           console.log(`👤 Usuario temporal creado en memoria`);
@@ -1253,9 +1258,19 @@ export class AuthService {
     }
   }
 
-  async verifyEmployeeEmail(employeeId: string, code: string) {
+  async verifyEmployeeEmail(
+    owner: UserAccessActor,
+    employeeId: string,
+    code: string,
+  ) {
     try {
-      // Buscar el empleado
+      // Solo empleados del Owner que llama (404 si es de otro negocio).
+      await assertCanManageUser(
+        this.userRepository,
+        owner,
+        { id: employeeId },
+        { employeesOnly: true },
+      );
       const employee = await this.findUserWithSecrets({ id: employeeId }, [
         'verification_code',
         'verification_code_expires',

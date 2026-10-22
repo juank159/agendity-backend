@@ -6,7 +6,6 @@
  * - no se cambia ninguna contraseña ni código.
  */
 import { INestApplication } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { instanceToPlain } from 'class-transformer';
 import * as request from 'supertest';
@@ -14,6 +13,7 @@ import { DataSource } from 'typeorm';
 import { Schedule } from '../src/schedules/entities/schedule.entity';
 import { USER_SECRET_FIELDS, User } from '../src/users/entities/user.entity';
 import { createE2EApp } from './utils/create-e2e-app';
+import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
 const SECRET_KEYS = new Set<string>(USER_SECRET_FIELDS);
 
@@ -34,41 +34,16 @@ function findSecretKeys(value: unknown, path = '$'): string[] {
 describe('Secretos de User fuera de las respuestas (e2e)', () => {
   let app: INestApplication;
   let ds: DataSource;
-  let jwt: JwtService;
   let owner: User;
   let employee: User | null;
   let ownerToken: string;
 
-  const sign = (user: User, roles: string[]) =>
-    jwt.sign(
-      {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        roles,
-        tenant_id: user.tenant_id,
-      },
-      { expiresIn: '5m' },
-    );
+  const sign = signToken;
 
   beforeAll(async () => {
     ({ app } = await createE2EApp());
     ds = app.get(DataSource);
-    jwt = new JwtService({ secret: process.env.SECRET_KEY_JWT });
-
-    const owners = await ds
-      .getRepository(User)
-      .createQueryBuilder('user')
-      .innerJoin('user.roles', 'role', 'role.name = :role', { role: 'Owner' })
-      .orderBy('user.created_at', 'ASC')
-      .getMany();
-    if (owners.length === 0) {
-      throw new Error('La BD de desarrollo no tiene ningún Owner');
-    }
-    owner = owners[0];
-    employee = await ds.getRepository(User).findOne({
-      where: { owner: { id: owner.id } },
-    });
+    ({ owner, employee } = await findDevOwnerAndEmployee(ds));
     ownerToken = sign(owner, ['Owner']);
   }, 60000);
 
