@@ -22,12 +22,11 @@ import { TimeBlocksService } from './time-blocks.service';
 import { CreateTimeBlockDto } from './dto/create-time-block.dto';
 import { UpdateTimeBlockDto } from './dto/update-time-block.dto';
 import { TimeBlock } from './entities/time-block.entity';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ParseDatePipe } from '../common/pipes/parse-date.pipe';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
-import { AuthUser } from '../auth/interfaces';
 
 @ApiTags('Bloques de Tiempo')
 @ApiBearerAuth()
@@ -48,10 +47,10 @@ export class TimeBlocksController {
     description: 'Fechas inválidas o horario no disponible',
   })
   create(
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
     @Body() createTimeBlockDto: CreateTimeBlockDto,
   ) {
-    return this.timeBlocksService.create(createTimeBlockDto, user.id);
+    return this.timeBlocksService.create(createTimeBlockDto, tenantId);
   }
 
   @Get()
@@ -62,8 +61,8 @@ export class TimeBlocksController {
     description: 'Lista de bloques de tiempo',
     type: [TimeBlockResponseDto],
   })
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.timeBlocksService.findAll(user.id);
+  findAll(@Tenant() tenantId: string) {
+    return this.timeBlocksService.findAll(tenantId);
   }
 
   @Get('user/:userId')
@@ -78,7 +77,7 @@ export class TimeBlocksController {
     type: [TimeBlockResponseDto],
   })
   findByUser(
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Query('startDate', ParseDatePipe) startDate?: Date,
     @Query('endDate', ParseDatePipe) endDate?: Date,
@@ -87,7 +86,7 @@ export class TimeBlocksController {
       userId,
       startDate,
       endDate,
-      user.id,
+      tenantId,
     );
   }
 
@@ -111,7 +110,7 @@ export class TimeBlocksController {
     },
   })
   getAvailableSlots(
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Query('date', ParseDatePipe) date: Date,
     @Query('duration', ParseIntPipe) duration: number,
@@ -120,7 +119,7 @@ export class TimeBlocksController {
       userId,
       date,
       duration,
-      user.id,
+      tenantId,
     );
   }
 
@@ -134,11 +133,8 @@ export class TimeBlocksController {
     type: TimeBlockResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Bloque no encontrado' })
-  findOne(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
-    return this.timeBlocksService.findOne(id, user.id);
+  findOne(@Tenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.timeBlocksService.findOne(id, tenantId);
   }
 
   @Patch(':id')
@@ -153,11 +149,11 @@ export class TimeBlocksController {
   @ApiResponse({ status: 404, description: 'Bloque no encontrado' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
   update(
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateTimeBlockDto: UpdateTimeBlockDto,
   ) {
-    return this.timeBlocksService.update(id, updateTimeBlockDto, user.id);
+    return this.timeBlocksService.update(id, updateTimeBlockDto, tenantId);
   }
 
   @Delete(':id')
@@ -166,10 +162,7 @@ export class TimeBlocksController {
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Bloque eliminado' })
   @ApiResponse({ status: 404, description: 'Bloque no encontrado' })
-  remove(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
-    return this.timeBlocksService.remove(id, user.id);
+  remove(@Tenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.timeBlocksService.remove(id, tenantId);
   }
 }

@@ -1,3 +1,5 @@
+import { JwtRoles } from '../jwt/jwt.role';
+
 /**
  * Usuario autenticado (lo que `JwtStrategy.validate` deja en `req.user` y
  * devuelve `@CurrentUser()`).
@@ -21,4 +23,13 @@ export function tenantOf(user: {
   owner?: { id: string } | null;
 }): string {
   return user.owner?.id ?? user.id;
+}
+
+/**
+ * Empleado que no es además Owner. A estos usuarios se les limita a "sus" datos
+ * dentro del tenant (por ejemplo, solo ven las citas donde son el profesional).
+ */
+export function isOnlyEmployee(user: Pick<AuthUser, 'roles'>): boolean {
+  const roles = user?.roles ?? [];
+  return roles.includes(JwtRoles.Employee) && !roles.includes(JwtRoles.Owner);
 }

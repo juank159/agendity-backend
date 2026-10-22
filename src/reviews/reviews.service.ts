@@ -73,10 +73,10 @@ export class ReviewsService {
     }
   }
 
-  private async validateAppointment(appointmentId: string, userId: string) {
+  private async validateAppointment(appointmentId: string, tenantId: string) {
     const appointment = await this.appointmentsService.findOne(
       appointmentId,
-      userId,
+      tenantId,
     );
 
     if (appointment.status !== AppointmentStatus.COMPLETED) {
@@ -90,17 +90,17 @@ export class ReviewsService {
 
   async create(
     createReviewDto: CreateReviewDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Review> {
     try {
       const appointment = await this.validateAppointment(
         createReviewDto.appointment_id,
-        userId,
+        tenantId,
       );
 
       const existingReview = await this.findReview({
         appointmentId: appointment.id,
-        ownerId: userId,
+        ownerId: tenantId,
         loadRelations: false,
       });
 
@@ -113,7 +113,7 @@ export class ReviewsService {
         appointment,
         client: appointment.client,
         professional: appointment.professional,
-        ownerId: userId,
+        ownerId: tenantId,
       });
 
       return await this.reviewRepository.save(review);
@@ -125,10 +125,10 @@ export class ReviewsService {
     }
   }
 
-  async findAll(userId: string): Promise<Review[]> {
+  async findAll(tenantId: string): Promise<Review[]> {
     try {
       return await this.reviewRepository.find({
-        where: { ownerId: userId },
+        where: { ownerId: tenantId },
         relations: RELATION_GROUPS.default,
       });
     } catch (error) {
@@ -141,13 +141,13 @@ export class ReviewsService {
 
   async findByProfessional(
     professionalId: string,
-    userId: string,
+    tenantId: string,
   ): Promise<Review[]> {
     try {
       return await this.reviewRepository.find({
         where: {
           professional: { id: professionalId },
-          ownerId: userId,
+          ownerId: tenantId,
         },
         relations: RELATION_GROUPS.default,
       });
@@ -159,17 +159,17 @@ export class ReviewsService {
     }
   }
 
-  async findOne(id: string, userId: string): Promise<Review> {
-    return await this.findReview({ id, ownerId: userId });
+  async findOne(id: string, tenantId: string): Promise<Review> {
+    return await this.findReview({ id, ownerId: tenantId });
   }
 
   async update(
     id: string,
     updateReviewDto: UpdateReviewDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Review> {
     try {
-      const review = await this.findReview({ id, ownerId: userId });
+      const review = await this.findReview({ id, ownerId: tenantId });
 
       const updatedReview = this.reviewRepository.create({
         ...review,
@@ -185,9 +185,9 @@ export class ReviewsService {
     }
   }
 
-  async remove(id: string, userId: string): Promise<void> {
+  async remove(id: string, tenantId: string): Promise<void> {
     try {
-      const review = await this.findReview({ id, ownerId: userId });
+      const review = await this.findReview({ id, ownerId: tenantId });
       await this.reviewRepository.remove(review);
     } catch (error) {
       this.handleError(error, {
@@ -199,13 +199,13 @@ export class ReviewsService {
 
   async getProfessionalRating(
     professionalId: string,
-    userId: string,
+    tenantId: string,
   ): Promise<ProfessionalRating> {
     try {
       const result = await this.reviewRepository
         .createQueryBuilder('review')
         .where('review.professional.id = :professionalId', { professionalId })
-        .andWhere('review.ownerId = :userId', { userId })
+        .andWhere('review.ownerId = :tenantId', { tenantId })
         .select('AVG(review.rating)', 'average')
         .addSelect('COUNT(*)', 'total')
         .getRawOne();

@@ -50,14 +50,14 @@ export class CategoriesService {
     );
   }
 
-  private async validateUser(userId: string): Promise<User> {
+  private async validateUser(tenantId: string): Promise<User> {
     try {
-      if (!userId) {
+      if (!tenantId) {
         throw new BadRequestException('Se requiere el ID del usuario');
       }
 
       const user = await this.userRepository.findOne({
-        where: { id: userId },
+        where: { id: tenantId },
         relations: ['roles'],
       });
 
@@ -117,12 +117,12 @@ export class CategoriesService {
 
   private async checkDuplicateCategory(
     name: string,
-    userId: string,
+    tenantId: string,
     excludeId?: string,
   ): Promise<void> {
     const whereConditions: any = {
       name,
-      ownerId: userId,
+      ownerId: tenantId,
     };
 
     if (excludeId) {
@@ -142,16 +142,16 @@ export class CategoriesService {
 
   async create(
     createCategoryDto: CreateCategoryDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Category> {
-    await this.validateUser(userId);
+    await this.validateUser(tenantId);
 
     try {
-      await this.checkDuplicateCategory(createCategoryDto.name, userId);
+      await this.checkDuplicateCategory(createCategoryDto.name, tenantId);
 
       const newCategory = this.categoryRepository.create({
         ...createCategoryDto,
-        ownerId: userId,
+        ownerId: tenantId,
       });
 
       return await this.categoryRepository.save(newCategory);
@@ -164,12 +164,12 @@ export class CategoriesService {
     }
   }
 
-  async findAll(userId: string): Promise<Category[]> {
+  async findAll(tenantId: string): Promise<Category[]> {
     try {
-      await this.validateUser(userId);
+      await this.validateUser(tenantId);
 
       return await this.categoryRepository.find({
-        where: { ownerId: userId },
+        where: { ownerId: tenantId },
         relations: ['services'],
       });
     } catch (error) {
@@ -180,30 +180,34 @@ export class CategoriesService {
     }
   }
 
-  async findOne(term: string, userId: string): Promise<Category> {
+  async findOne(term: string, tenantId: string): Promise<Category> {
     const isUUID = this.UUID_REGEX.test(term);
 
     return await this.findCategory({
       ...(isUUID ? { id: term } : { name: term }),
-      ownerId: userId,
+      ownerId: tenantId,
     });
   }
 
   async update(
     id: string,
     updateCategoryDto: UpdateCategoryDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Category> {
     try {
-      const currentCategory = await this.findCategory({ id, ownerId: userId });
+      const currentCategory = await this.findCategory({
+        id,
+        ownerId: tenantId,
+      });
 
       if (updateCategoryDto.name) {
-        await this.checkDuplicateCategory(updateCategoryDto.name, userId, id);
+        await this.checkDuplicateCategory(updateCategoryDto.name, tenantId, id);
       }
 
       const updatedCategory = this.categoryRepository.create({
         ...currentCategory,
         ...updateCategoryDto,
+        ownerId: currentCategory.ownerId, // nunca cambia de negocio
       });
 
       return await this.categoryRepository.save(updatedCategory);
@@ -215,9 +219,9 @@ export class CategoriesService {
     }
   }
 
-  async remove(id: string, userId: string): Promise<void> {
+  async remove(id: string, tenantId: string): Promise<void> {
     try {
-      const category = await this.findCategory({ id, ownerId: userId });
+      const category = await this.findCategory({ id, ownerId: tenantId });
       await this.categoryRepository.remove(category);
     } catch (error) {
       this.handleError(error, {

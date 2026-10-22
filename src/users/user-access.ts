@@ -59,3 +59,37 @@ export async function assertCanManageUser(
 
   return user;
 }
+
+/**
+ * Usuarios de un negocio: el Owner (`id = tenantId`) y sus empleados
+ * (`users.owner = tenantId`). Es un OR para `find*`; en una relación se usa así:
+ * `where: tenantMembersWhere(t).map((user) => ({ id, user }))`.
+ */
+export function tenantMembersWhere(tenantId: string): FindOptionsWhere<User>[] {
+  // TypeORM ignora `{ id: undefined }`: sin tenant devolvería usuarios de todos.
+  if (!tenantId) throw new NotFoundException('Profesional no encontrado');
+  return [{ id: tenantId }, { owner: { id: tenantId } }];
+}
+
+/**
+ * Un usuario (profesional) del negocio indicado o 404. Sirve para validar los
+ * `professional_id`/`user_id` que llegan en las peticiones.
+ */
+export async function assertUserInTenant(
+  repository: Repository<User>,
+  tenantId: string,
+  userId: string,
+): Promise<User> {
+  const notFound = () => new NotFoundException('Profesional no encontrado');
+  if (!tenantId || !userId || !isUUID(userId)) throw notFound();
+  if (userId === tenantId) {
+    const owner = await repository.findOne({ where: { id: userId } });
+    if (!owner) throw notFound();
+    return owner;
+  }
+  const user = await repository.findOne({
+    where: { id: userId, owner: { id: tenantId } },
+  });
+  if (!user) throw notFound();
+  return user;
+}

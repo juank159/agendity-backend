@@ -123,14 +123,14 @@ export class ClientsService {
 
   async create(
     createClientDto: CreateClientDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Client> {
     try {
-      await this.validateUniqueFields(createClientDto, userId);
+      await this.validateUniqueFields(createClientDto, tenantId);
 
       const client = this.clientRepository.create({
         ...createClientDto,
-        ownerId: userId,
+        ownerId: tenantId,
         showNotes: createClientDto.showNotes ?? false, // Valor por defecto para nuevos campos
         notes: createClientDto.notes ?? null,
         birthday: createClientDto.birthday
@@ -149,7 +149,7 @@ export class ClientsService {
     }
   }
 
-  async findAll(userId: string, paginationDto?: PaginationDto): Promise<PaginationResult<Client>> {
+  async findAll(tenantId: string, paginationDto?: PaginationDto): Promise<PaginationResult<Client>> {
     try {
       const {
         page = 1,
@@ -169,7 +169,7 @@ export class ClientsService {
         sortOrder,
         status,
         source,
-        userId
+        tenantId
       });
 
       const skip = (page - 1) * limit;
@@ -177,7 +177,7 @@ export class ClientsService {
       // Construcción dinámica de la consulta
       const queryBuilder = this.clientRepository
         .createQueryBuilder('client')
-        .where('client.ownerId = :ownerId', { ownerId: userId });
+        .where('client.ownerId = :ownerId', { ownerId: tenantId });
 
       // ✅ FILTRO DE BÚSQUEDA
       if (search) {
@@ -252,10 +252,10 @@ export class ClientsService {
   }
 
   // ✅ MANTENER MÉTODO LEGACY PARA RETROCOMPATIBILIDAD
-  async findAllLegacy(userId: string): Promise<Client[]> {
+  async findAllLegacy(tenantId: string): Promise<Client[]> {
     try {
       return await this.clientRepository.find({
-        where: { ownerId: userId },
+        where: { ownerId: tenantId },
         relations: RELATION_GROUPS.default,
       });
     } catch (error) {
@@ -266,15 +266,15 @@ export class ClientsService {
     }
   }
 
-  async findOne(id: string, userId: string): Promise<Client> {
-    return await this.findClient({ id, ownerId: userId });
+  async findOne(id: string, tenantId: string): Promise<Client> {
+    return await this.findClient({ id, ownerId: tenantId });
   }
 
-  async importBatch(createClientDtos: CreateClientDto[], userId: string) {
+  async importBatch(createClientDtos: CreateClientDto[], tenantId: string) {
     try {
       console.log('Iniciando importación:', {
         totalClients: createClientDtos.length,
-        userId,
+        tenantId,
       });
 
       const results: Client[] = [];
@@ -289,7 +289,7 @@ export class ClientsService {
                 {
                   where: {
                     phone: dto.phone,
-                    ownerId: userId,
+                    ownerId: tenantId,
                   },
                 },
               );
@@ -305,7 +305,7 @@ export class ClientsService {
 
               const client = transactionalEntityManager.create(Client, {
                 ...dto,
-                ownerId: userId,
+                ownerId: tenantId,
                 isFromDevice: true,
                 showNotes: dto.showNotes ?? false,
                 notes: dto.notes ?? null,
@@ -355,11 +355,11 @@ export class ClientsService {
   async updateClientImage(
     clientId: string,
     imageUrl: string,
-    userId: string,
+    tenantId: string,
   ): Promise<Client> {
     try {
       // Ahora pasamos ambos parámetros requeridos
-      const client = await this.findOne(clientId, userId);
+      const client = await this.findOne(clientId, tenantId);
 
       if (!client) {
         throw new NotFoundException(`Cliente con ID ${clientId} no encontrado`);
@@ -382,9 +382,9 @@ export class ClientsService {
     }
   }
 
-  async remove(id: string, userId: string): Promise<void> {
+  async remove(id: string, tenantId: string): Promise<void> {
     try {
-      const client = await this.findClient({ id, ownerId: userId });
+      const client = await this.findClient({ id, ownerId: tenantId });
       await this.clientRepository.remove(client);
     } catch (error) {
       this.handleError(error, {
@@ -397,16 +397,12 @@ export class ClientsService {
   async update(
     id: string,
     updateClientDto: UpdateClientDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Client> {
     try {
-      console.log('Updating client with data:', {
-        id,
-        updateClientDto,
-        userId,
-      });
-      const currentClient = await this.findClient({ id, ownerId: userId });
-      await this.validateUniqueFields(updateClientDto, id, userId);
+      const currentClient = await this.findClient({ id, ownerId: tenantId });
+      // Unicidad dentro del negocio, excluyendo al propio cliente
+      await this.validateUniqueFields(updateClientDto, tenantId, id);
 
       const updatedClient = this.clientRepository.create({
         ...currentClient,
@@ -415,7 +411,6 @@ export class ClientsService {
         image: updateClientDto.image || currentClient.image,
       });
 
-      console.log('Final update object:', updatedClient);
       return await this.clientRepository.save(updatedClient);
     } catch (error) {
       this.handleError(error, {

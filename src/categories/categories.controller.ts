@@ -12,10 +12,9 @@ import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { Category } from './entities/category.entity';
-import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { Tenant } from 'src/common/decorators/tenant.decorator';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
-import { AuthUser } from '../auth/interfaces';
 
 @Controller('categories')
 export class CategoriesController {
@@ -24,22 +23,23 @@ export class CategoriesController {
   @hasRoles(JwtRoles.Owner)
   @Post()
   create(
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
     @Body() createCategoryDto: CreateCategoryDto,
   ) {
-    return this.categoriesService.create(createCategoryDto, user.id);
+    return this.categoriesService.create(createCategoryDto, tenantId);
   }
 
-  @hasRoles(JwtRoles.Owner)
+  // Lecturas: Owner y Employee (catálogo de su negocio). Escrituras: solo Owner.
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get()
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.categoriesService.findAll(user.id);
+  findAll(@Tenant() tenantId: string) {
+    return this.categoriesService.findAll(tenantId);
   }
 
-  @hasRoles(JwtRoles.Owner)
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get(':term')
-  findOne(@Param('term') term: string, @CurrentUser() user: AuthUser) {
-    return this.categoriesService.findOne(term, user.id);
+  findOne(@Param('term') term: string, @Tenant() tenantId: string) {
+    return this.categoriesService.findOne(term, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -47,17 +47,14 @@ export class CategoriesController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateCategoryDto: UpdateCategoryDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.categoriesService.update(id, updateCategoryDto, user.id);
+    return this.categoriesService.update(id, updateCategoryDto, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Delete(':id')
-  remove(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.categoriesService.remove(id, user.id);
+  remove(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.categoriesService.remove(id, tenantId);
   }
 }

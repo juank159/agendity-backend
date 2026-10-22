@@ -21,13 +21,15 @@ export class UserServicesService {
     private readonly servicesService: ServicesService,
   ) {}
 
+  /** Profesional y servicio deben ser del negocio (si no, 404). */
   private async validateUserAndService(
     userId: string,
     serviceId: string,
+    tenantId: string,
   ): Promise<void> {
     await Promise.all([
-      this.usersService.findOne({ id: userId }),
-      this.servicesService.findOne(serviceId, userId),
+      this.usersService.findTenantMember(userId, tenantId),
+      this.servicesService.findOne(serviceId, tenantId),
     ]);
   }
 
@@ -49,8 +51,13 @@ export class UserServicesService {
   async assignService(
     userId: string,
     assignServiceDto: AssignServiceDto,
+    tenantId: string,
   ): Promise<UserService> {
-    await this.validateUserAndService(userId, assignServiceDto.serviceId);
+    await this.validateUserAndService(
+      userId,
+      assignServiceDto.serviceId,
+      tenantId,
+    );
 
     try {
       const existingAssignment = await this.findUserService(
@@ -86,27 +93,31 @@ export class UserServicesService {
     }
   }
 
-  // Nuevo método para asignar múltiples servicios a la vez
   async assignMultipleServices(
     userId: string,
     assignServicesDto: AssignServiceDto[],
+    tenantId: string,
   ): Promise<UserService[]> {
-    // Verificar que el usuario existe
-    await this.usersService.findOne({ id: userId });
+    await this.usersService.findTenantMember(userId, tenantId);
 
     const result = [];
-
-    // Procesar cada servicio
     for (const serviceDto of assignServicesDto) {
-      const userService = await this.assignService(userId, serviceDto);
+      const userService = await this.assignService(
+        userId,
+        serviceDto,
+        tenantId,
+      );
       result.push(userService);
     }
 
     return result;
   }
 
-  async getUserServices(userId: string): Promise<UserService[]> {
-    await this.usersService.findOne({ id: userId });
+  async getUserServices(
+    userId: string,
+    tenantId: string,
+  ): Promise<UserService[]> {
+    await this.usersService.findTenantMember(userId, tenantId);
 
     return this.userServiceRepository.find({
       where: { userId },
@@ -114,7 +125,12 @@ export class UserServicesService {
     });
   }
 
-  async removeService(userId: string, serviceId: string): Promise<void> {
+  async removeService(
+    userId: string,
+    serviceId: string,
+    tenantId: string,
+  ): Promise<void> {
+    await this.usersService.findTenantMember(userId, tenantId);
     const userService = await this.findUserService(userId, serviceId);
     await this.userServiceRepository.remove(userService);
   }

@@ -7,22 +7,19 @@ import {
   Param,
   Delete,
   ParseUUIDPipe,
-  Query,
   BadRequestException,
   Logger,
-  UseInterceptors,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
-import { Appointment } from './entities/appointment.entity';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { AppointmentReminderService } from './appointment-reminder.service';
-import { SubscriptionLimitsGuard } from 'src/subscriptions/guards/subscription-limits.guard';
-import { SubscriptionLimitInterceptor } from '../subscriptions/interceptors/subscription-limit.interceptor';
 import { AuthUser } from '../auth/interfaces';
+import { appointmentScopeOf } from './appointment-scope';
 
 @Controller('appointments')
 export class AppointmentsController {
@@ -33,178 +30,61 @@ export class AppointmentsController {
   ) {}
 
   @Post()
-  //@UseGuards(SubscriptionLimitsGuard) (JWT y roles los aplican los guards globales)
-  //@UseInterceptors(SubscriptionLimitInterceptor)
+  // El límite del trial lo comprueba el service (SubscriptionLimitsGuard sigue sin usarse: 2.03).
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async create(
     @Body() createAppointmentDto: CreateAppointmentDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    console.log('=== CREATE APPOINTMENT DEBUG ===');
-
     // Validar formato ISO 8601
     const date = new Date(createAppointmentDto.date);
     if (isNaN(date.getTime())) {
       throw new BadRequestException('Invalid date format');
     }
-
-    console.log('Fecha parseada:', date);
-    return this.appointmentsService.create(createAppointmentDto, user.id);
+    return this.appointmentsService.create(createAppointmentDto, tenantId);
   }
 
   @Post(':id/send-reminder')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async sendAppointmentReminder(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.appointmentReminderService.sendManualReminder(id, user.id);
+    return this.appointmentReminderService.sendManualReminder(
+      id,
+      appointmentScopeOf(user),
+    );
   }
 
-  // ✅ NUEVO ENDPOINT: Marcar recordatorio como enviado
   @Patch(':id/reminder/mark-sent')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async markReminderAsSent(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
   ) {
-    try {
-      this.logger.log(
-        `Marcando recordatorio como enviado para cita ${id} por usuario ${user.id}`,
-      );
-
-      const result = await this.appointmentsService.markReminderAsSent(
-        id,
-        user.id,
-      );
-
-      this.logger.log(
-        `Recordatorio marcado como enviado exitosamente para cita ${id}`,
-      );
-
-      return {
-        success: true,
-        message: 'Recordatorio marcado como enviado',
-        appointmentId: id,
-        sentAt: new Date(),
-      };
-    } catch (error) {
-      this.logger.error(
-        `Error marcando recordatorio como enviado para cita ${id}: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
+    await this.appointmentsService.markReminderAsSent(
+      id,
+      appointmentScopeOf(user),
+    );
+    this.logger.log(`Recordatorio marcado como enviado para la cita ${id}`);
+    return {
+      success: true,
+      message: 'Recordatorio marcado como enviado',
+      appointmentId: id,
+      sentAt: new Date(),
+    };
   }
 
-  // @Get()
-  // @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  // async findAll(
-  //   @CurrentUser() user: AuthUser,
-  //   @Query('startDate') startDate?: string,
-  //   @Query('endDate') endDate?: string,
-  // ) {
-  //   try {
-  //     console.log('Received request with params:', {
-  //       userId: user.id,
-  //       startDate,
-  //       endDate,
-  //     });
-
-  //     let parsedStartDate: Date | undefined;
-  //     let parsedEndDate: Date | undefined;
-
-  //     if (startDate && endDate) {
-  //       parsedStartDate = new Date(startDate);
-  //       parsedEndDate = new Date(endDate);
-
-  //       // Validar que las fechas sean válidas
-  //       if (
-  //         isNaN(parsedStartDate.getTime()) ||
-  //         isNaN(parsedEndDate.getTime())
-  //       ) {
-  //         throw new BadRequestException('Fechas inválidas');
-  //       }
-
-  //       // Validar que startDate no sea mayor que endDate
-  //       if (parsedStartDate > parsedEndDate) {
-  //         throw new BadRequestException(
-  //           'La fecha inicial no puede ser mayor que la fecha final',
-  //         );
-  //       }
-
-  //       console.log('Parsed dates:', {
-  //         parsedStartDate,
-  //         parsedEndDate,
-  //       });
-  //     }
-
-  //     const appointments = await this.appointmentsService.findAll(
-  //       user.id,
-  //       parsedStartDate,
-  //       parsedEndDate,
-  //     );
-
-  //     console.log(`Returning ${appointments.length} appointments`);
-  //     return appointments;
-  //   } catch (error) {
-  //     console.error('Error in findAll controller:', error);
-  //     throw error;
-  //   }
-  // }
-
+  /**
+   * Citas del negocio. Un Employee (que no es Owner) solo ve las suyas
+   * (`professionalId = su id`); el Owner ve todas las del negocio.
+   * Los query `startDate`/`endDate` que manda la app se ignoran (como antes:
+   * el filtro por fechas nunca se implementó en esta ruta).
+   */
   @Get()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  async findAll(
-    @CurrentUser() user: AuthUser,
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-  ) {
-    try {
-      const userRoles = user.roles;
-
-      // Log para depuración
-      console.log('Received request with params:', {
-        userId: user.id,
-        userRoles,
-        startDate,
-        endDate,
-      });
-
-      let parsedStartDate: Date | undefined;
-      let parsedEndDate: Date | undefined;
-
-      if (startDate && endDate) {
-        // Parsing de fechas (código existente)
-        // ...
-      }
-
-      // Ahora determinar qué consulta hacer según el rol extraído
-      let appointments = [];
-
-      if (userRoles.includes('Employee') && !userRoles.includes('Owner')) {
-        // Si es empleado, buscar citas donde es el profesional
-        console.log(`Buscando citas para el profesional ID: ${user.id}`);
-        appointments = await this.appointmentsService.findByProfessionalId(
-          user.id,
-          parsedStartDate,
-          parsedEndDate,
-        );
-      } else {
-        // Caso Owner u otros roles: Obtener todas las citas donde el usuario es owner
-        appointments = await this.appointmentsService.findAll(
-          user.id,
-          parsedStartDate,
-          parsedEndDate,
-        );
-      }
-
-      console.log(`Returning ${appointments.length} appointments`);
-      return appointments;
-    } catch (error) {
-      console.error('Error in findAll controller:', error);
-      throw error;
-    }
+  async findAll(@CurrentUser() user: AuthUser) {
+    return this.appointmentsService.findAll(appointmentScopeOf(user));
   }
 
   // Las rutas estáticas van ANTES de ':id' (si no, ':id' + ParseUUIDPipe las captura con 400).
@@ -221,7 +101,7 @@ export class AppointmentsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.appointmentsService.findOne(id, user.id);
+    return this.appointmentsService.findOne(id, appointmentScopeOf(user));
   }
 
   @Patch(':id')
@@ -229,17 +109,14 @@ export class AppointmentsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateAppointmentDto: UpdateAppointmentDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.appointmentsService.update(id, updateAppointmentDto, user.id);
+    return this.appointmentsService.update(id, updateAppointmentDto, tenantId);
   }
 
   @Delete(':id')
   @hasRoles(JwtRoles.Owner)
-  remove(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.appointmentsService.remove(id, user.id);
+  remove(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.appointmentsService.remove(id, tenantId);
   }
 }

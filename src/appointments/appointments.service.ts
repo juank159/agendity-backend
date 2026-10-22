@@ -7,20 +7,21 @@ import {
   HttpException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, Between } from 'typeorm';
+import { Repository, Not, Between, FindOptionsWhere } from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { ClientsService } from '../clients/clients.service';
 import { UsersService } from '../users/users.service';
 import { ServicesService } from '../services/services.service';
-import { RELATIONS, RELATION_GROUPS } from './constants/relations.constants';
+import { RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
 import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
+import { AppointmentScope, toAppointmentScope } from './appointment-scope';
 
 @Injectable()
 export class AppointmentsService {
@@ -36,7 +37,10 @@ export class AppointmentsService {
   ) {}
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
-    console.error(`Error al ${options.operation} ${options.entity}:`, error);
+    console.error(
+      `Error al ${options.operation} ${options.entity}:`,
+      error?.message,
+    );
 
     if (error instanceof HttpException) {
       throw error;
@@ -47,101 +51,55 @@ export class AppointmentsService {
     );
   }
 
-  // async create(
-  //   createAppointmentDto: CreateAppointmentDto,
-  //   userId: string,
-  // ): Promise<Appointment> {
-  //   try {
-  //     console.log('Datos recibidos:', createAppointmentDto);
+  /** `where` de una cita según el alcance (negocio y, si aplica, profesional). */
+  private scopeWhere(scope: AppointmentScope): FindOptionsWhere<Appointment> {
+    if (!scope?.tenantId) {
+      // TypeORM ignora `ownerId: undefined`: nunca consultar sin tenant.
+      throw new NotFoundException('Cita no encontrada');
+    }
+    return scope.professionalId
+      ? { ownerId: scope.tenantId, professionalId: scope.professionalId }
+      : { ownerId: scope.tenantId };
+  }
 
-  //     const {
-  //       client_id,
-  //       professional_id,
-  //       service_ids,
-  //       date,
-  //       ...appointmentData
-  //     } = createAppointmentDto;
-
-  //     const [client, professional] = await Promise.all([
-  //       this.clientsService.findOne(client_id, userId),
-  //       this.usersService.findOne({ id: professional_id }),
-  //     ]);
-
-  //     console.log('Cliente:', client);
-  //     console.log('Profesional:', professional);
-
-  //     if (!client || !professional) {
-  //       throw new NotFoundException('Cliente o profesional no encontrado');
-  //     }
-
-  //     const services = await Promise.all(
-  //       service_ids.map((id) => this.servicesService.findOne(id, userId)),
-  //     );
-
-  //     console.log('Servicios:', services);
-
-  //     if (services.some((service) => !service)) {
-  //       throw new NotFoundException('Uno o más servicios no encontrados');
-  //     }
-
-  //     // Verificar disponibilidad con el nuevo método
-  //     const isAvailable = await this.checkProfessionalAvailability(
-  //       professional_id,
-  //       date,
-  //       services,
-  //       userId,
-  //     );
-
-  //     if (!isAvailable) {
-  //       throw new BadRequestException('Horario no disponible');
-  //     }
-
-  //     const appointmentToSave = {
-  //       ownerId: userId,
-  //       professionalId: professional_id,
-  //       date: new Date(date),
-  //       total_price: services.reduce(
-  //         (sum, service) => sum + Number(service.price),
-  //         0,
-  //       ),
-  //       status: AppointmentStatus.PENDING,
-  //       payment_status: PaymentStatus.PENDING,
-  //       notes: appointmentData.notes || '',
-  //       client: client,
-  //       professional: professional,
-  //       services: services,
-  //     };
-
-  //     console.log('Objeto a guardar:', appointmentToSave);
-
-  //     const savedAppointment =
-  //       await this.appointmentRepository.save(appointmentToSave);
-  //     console.log('Cita guardada:', savedAppointment);
-
-  //     // Emitir el evento después de guardar la cita
-  //     this.eventEmitter.emit('appointment.created', savedAppointment);
-
-  //     return savedAppointment;
-  //   } catch (error) {
-  //     console.error('Error en create:', error);
-  //     if (
-  //       error instanceof NotFoundException ||
-  //       error instanceof BadRequestException
-  //     ) {
-  //       throw error;
-  //     }
-  //     throw new InternalServerErrorException('Error al crear la cita');
-  //   }
-  // }
-
+  /**
+   * Crea una cita del negocio `tenantId` (Owner o Employee). Cliente, profesional
+   * y servicios deben ser del mismo negocio (si no, 404). Se validan ANTES de
+   * consultar la suscripción, que puede crear la fila del trial.
+   */
   async create(
     createAppointmentDto: CreateAppointmentDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Appointment> {
     try {
-      // Verificar los límites de suscripción antes de crear la cita
+      const {
+        client_id,
+        professional_id,
+        service_ids,
+        date,
+        ...appointmentData
+      } = createAppointmentDto;
+
+      const [client, professional] = await Promise.all([
+        this.clientsService.findOne(client_id, tenantId),
+        this.usersService.findTenantMember(professional_id, tenantId),
+      ]);
+
+      if (!client || !professional) {
+        throw new NotFoundException('Cliente o profesional no encontrado');
+      }
+
+      const services = await Promise.all(
+        service_ids.map((id) => this.servicesService.findOne(id, tenantId)),
+      );
+
+      if (services.some((service) => !service)) {
+        throw new NotFoundException('Uno o más servicios no encontrados');
+      }
+
+      // Verificar los límites de suscripción del negocio antes de crear la cita
       const subscriptionStatus =
-        await this.subscriptionsService.checkSubscriptionStatus(userId);
+        await this.subscriptionsService.checkSubscriptionStatus(tenantId);
 
       if (!subscriptionStatus.canCreateAppointment) {
         const code = subscriptionStatus.code ?? ErrorCode.SUBSCRIPTION_INACTIVE;
@@ -153,42 +111,11 @@ export class AppointmentsService {
         );
       }
 
-      const {
-        client_id,
-        professional_id,
-        service_ids,
-        date,
-        ...appointmentData
-      } = createAppointmentDto;
-
-      const [client, professional] = await Promise.all([
-        this.clientsService.findOne(client_id, userId),
-        this.usersService.findOne({ id: professional_id }),
-      ]);
-
-      console.log('Cliente:', client);
-      console.log('Profesional:', professional);
-
-      if (!client || !professional) {
-        throw new NotFoundException('Cliente o profesional no encontrado');
-      }
-
-      const services = await Promise.all(
-        service_ids.map((id) => this.servicesService.findOne(id, userId)),
-      );
-
-      console.log('Servicios:', services);
-
-      if (services.some((service) => !service)) {
-        throw new NotFoundException('Uno o más servicios no encontrados');
-      }
-
-      // Verificar disponibilidad con el nuevo método
       const isAvailable = await this.checkProfessionalAvailability(
         professional_id,
         date,
         services,
-        userId,
+        tenantId,
       );
 
       if (!isAvailable) {
@@ -200,7 +127,7 @@ export class AppointmentsService {
       }
 
       const appointmentToSave = {
-        ownerId: userId,
+        ownerId: tenantId,
         professionalId: professional_id,
         date: new Date(date),
         total_price: services.reduce(
@@ -215,21 +142,18 @@ export class AppointmentsService {
         services: services,
       };
 
-      console.log('Objeto a guardar:', appointmentToSave);
-
       // Actualizar el contador de citas de prueba si aplica
-      await this.subscriptionsService.updateTrialAppointmentUsage(userId);
+      await this.subscriptionsService.updateTrialAppointmentUsage(tenantId);
 
       const savedAppointment =
         await this.appointmentRepository.save(appointmentToSave);
-      console.log('Cita guardada:', savedAppointment);
 
       // Emitir el evento después de guardar la cita
       this.eventEmitter.emit('appointment.created', savedAppointment);
 
       return savedAppointment;
     } catch (error) {
-      console.error('Error en create:', error);
+      console.error('Error en create:', error?.message);
       if (error instanceof HttpException) {
         throw error;
       }
@@ -237,12 +161,12 @@ export class AppointmentsService {
     }
   }
 
-  // Nuevo método para verificar disponibilidad del profesional
+  // Verifica que el profesional no tenga otra cita del negocio que se solape (regla actual; la revisa 2.04).
   async checkProfessionalAvailability(
     professionalId: string,
     appointmentDateTime: string | Date,
     services: any[],
-    userId: string,
+    tenantId: string,
   ): Promise<boolean> {
     try {
       const appointmentDate = new Date(appointmentDateTime);
@@ -260,12 +184,6 @@ export class AppointmentsService {
         appointmentEndTime.getMinutes() + totalDurationMinutes,
       );
 
-      console.log(`Verificando disponibilidad:`);
-      console.log(`- Profesional: ${professionalId}`);
-      console.log(`- Inicio: ${appointmentDate.toISOString()}`);
-      console.log(`- Fin estimado: ${appointmentEndTime.toISOString()}`);
-      console.log(`- Duración total: ${totalDurationMinutes} minutos`);
-
       // 3. Buscar todas las citas del profesional para ese día
       const startOfDay = new Date(appointmentDate);
       startOfDay.setHours(0, 0, 0, 0);
@@ -276,35 +194,25 @@ export class AppointmentsService {
       const appointmentsForDay = await this.appointmentRepository.find({
         where: {
           professionalId,
-          ownerId: userId,
+          ownerId: tenantId,
           date: Between(startOfDay, endOfDay),
         },
         relations: ['services'],
       });
 
-      console.log(`Citas existentes para el día: ${appointmentsForDay.length}`);
-
       // 4. Verificar si hay solapamiento con alguna cita existente
       for (const existingAppointment of appointmentsForDay) {
-        // Calcular duración de la cita existente
         const existingDuration = existingAppointment.services.reduce(
           (sum, service) => sum + (service.duration || 30),
           0,
         );
 
-        // Calcular hora de finalización de la cita existente
         const existingStartTime = new Date(existingAppointment.date);
         const existingEndTime = new Date(existingStartTime);
         existingEndTime.setMinutes(
           existingEndTime.getMinutes() + existingDuration,
         );
 
-        console.log(`Comparando con cita existente:`);
-        console.log(`- ID: ${existingAppointment.id}`);
-        console.log(`- Inicio: ${existingStartTime.toISOString()}`);
-        console.log(`- Fin: ${existingEndTime.toISOString()}`);
-
-        // Verificar solapamiento
         const hasOverlap =
           // Caso 1: La nueva cita comienza durante una cita existente
           (appointmentDate >= existingStartTime &&
@@ -317,16 +225,13 @@ export class AppointmentsService {
             appointmentEndTime >= existingEndTime);
 
         if (hasOverlap) {
-          console.log(`¡Solapamiento detectado!`);
           return false;
         }
       }
 
-      // Si no hay solapamientos, el profesional está disponible
-      console.log(`Horario disponible`);
       return true;
     } catch (error) {
-      console.error('Error al verificar disponibilidad:', error);
+      console.error('Error al verificar disponibilidad:', error?.message);
       throw new InternalServerErrorException(
         'Error al verificar disponibilidad',
       );
@@ -336,10 +241,10 @@ export class AppointmentsService {
   async update(
     id: string,
     updateAppointmentDto: UpdateAppointmentDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Appointment> {
     try {
-      const appointment = await this.findOne(id, userId);
+      const appointment = await this.findOne(id, tenantId);
 
       // Crear objeto para actualización
       const updateData: any = {};
@@ -355,27 +260,21 @@ export class AppointmentsService {
       if (updateAppointmentDto.payment_status)
         updateData.payment_status = updateAppointmentDto.payment_status;
 
-      // Importante: Manejar explícitamente el cambio de profesional
+      // El nuevo profesional debe ser del mismo negocio (si no, 404)
       if (updateAppointmentDto.professional_id) {
-        // Verificar que exista el profesional
-        const professional = await this.usersService.findOne({
-          id: updateAppointmentDto.professional_id,
-        });
+        const professional = await this.usersService.findTenantMember(
+          updateAppointmentDto.professional_id,
+          tenantId,
+        );
 
-        if (!professional) {
-          throw new NotFoundException('Profesional no encontrado');
-        }
-
-        // Asignar el profesional directamente - aquí está la clave
         updateData.professionalId = updateAppointmentDto.professional_id;
         updateData.professional = professional;
       }
 
-      // Manejar cliente y otros campos
       if (updateAppointmentDto.client_id) {
         const client = await this.clientsService.findOne(
           updateAppointmentDto.client_id,
-          userId,
+          tenantId,
         );
         if (!client) {
           throw new NotFoundException('Cliente no encontrado');
@@ -383,14 +282,13 @@ export class AppointmentsService {
         updateData.client = client;
       }
 
-      // Manejar servicios
       if (
         updateAppointmentDto.service_ids &&
         updateAppointmentDto.service_ids.length > 0
       ) {
         const services = await Promise.all(
           updateAppointmentDto.service_ids.map((id) =>
-            this.servicesService.findOne(id, userId),
+            this.servicesService.findOne(id, tenantId),
           ),
         );
 
@@ -422,7 +320,7 @@ export class AppointmentsService {
           professionalId,
           date,
           services,
-          userId,
+          tenantId,
           id, // ID de la cita actual para excluirla
         );
 
@@ -435,20 +333,17 @@ export class AppointmentsService {
         }
       }
 
-      // Importante: El orden en el merge de objetos
       // Primero va el objeto original, luego los datos de actualización
       const appointmentToUpdate = {
         ...appointment,
         ...updateData,
       };
 
-      // Guardar y devolver la cita actualizada
-      const result = await this.appointmentRepository.save(appointmentToUpdate);
+      await this.appointmentRepository.save(appointmentToUpdate);
 
       // Para asegurar que obtenemos todos los datos relacionados
-      return this.findOne(id, userId);
+      return this.findOne(id, tenantId);
     } catch (error) {
-      // Manejar errores
       this.handleError(error, {
         entity: 'la cita',
         operation: 'actualizar',
@@ -461,26 +356,23 @@ export class AppointmentsService {
     professionalId: string,
     appointmentDateTime: string | Date,
     services: any[],
-    userId: string,
+    tenantId: string,
     excludeAppointmentId: string,
   ): Promise<boolean> {
     try {
       const appointmentDate = new Date(appointmentDateTime);
 
-      // Calcular la duración total
       const totalDurationMinutes = services.reduce(
         (sum, service) =>
           sum + (service.duration ? parseInt(service.duration) : 30),
         0,
       );
 
-      // Calcular hora de finalización
       const appointmentEndTime = new Date(appointmentDate);
       appointmentEndTime.setMinutes(
         appointmentEndTime.getMinutes() + totalDurationMinutes,
       );
 
-      // Buscar todas las citas del profesional para ese día, excepto la que estamos actualizando
       const startOfDay = new Date(appointmentDate);
       startOfDay.setHours(0, 0, 0, 0);
 
@@ -490,14 +382,13 @@ export class AppointmentsService {
       const appointmentsForDay = await this.appointmentRepository.find({
         where: {
           professionalId,
-          ownerId: userId,
+          ownerId: tenantId,
           date: Between(startOfDay, endOfDay),
           id: Not(excludeAppointmentId), // Excluir la cita actual
         },
         relations: ['services'],
       });
 
-      // Verificar solapamientos
       for (const existingAppointment of appointmentsForDay) {
         const existingDuration = existingAppointment.services.reduce(
           (sum, service) => sum + (service.duration || 30),
@@ -527,7 +418,7 @@ export class AppointmentsService {
     } catch (error) {
       console.error(
         'Error al verificar disponibilidad para actualización:',
-        error,
+        error?.message,
       );
       throw new InternalServerErrorException(
         'Error al verificar disponibilidad',
@@ -535,112 +426,23 @@ export class AppointmentsService {
     }
   }
 
-  // async findAllByDateRange(
-  //   userId: string,
-  //   startDate: Date,
-  //   endDate: Date,
-  // ): Promise<Appointment[]> {
-  //   try {
-  //     return await this.appointmentRepository.find({
-  //       where: {
-  //         ownerId: userId,
-  //         date: Between(startDate, endDate),
-  //       },
-  //       relations: ['client', 'professional', 'services'],
-  //       order: {
-  //         date: 'ASC',
-  //       },
-  //     });
-  //   } catch (error) {
-  //     this.handleError(error, {
-  //       entity: 'las citas',
-  //       operation: 'listar',
-  //       detail: 'por rango de fechas',
-  //     });
-  //   }
-  // }
-
-  async findAllByDateRange(
-    userId: string,
-    startDate: Date,
-    endDate: Date,
-    isEmployee = false,
-  ): Promise<Appointment[]> {
-    try {
-      const whereClause = isEmployee
-        ? {
-            professionalId: userId,
-            date: Between(startDate, endDate),
-          }
-        : {
-            ownerId: userId,
-            date: Between(startDate, endDate),
-          };
-
-      return await this.appointmentRepository.find({
-        where: whereClause,
-        relations: ['client', 'professional', 'services'],
-        order: {
-          date: 'ASC',
-        },
-      });
-    } catch (error) {
-      this.handleError(error, {
-        entity: 'las citas',
-        operation: 'listar',
-        detail: 'por rango de fechas',
-      });
-    }
-  }
-
-  // async findAll(
-  //   userId: string,
-  //   startDate?: Date,
-  //   endDate?: Date,
-  // ): Promise<Appointment[]> {
-  //   try {
-  //     if (startDate && endDate) {
-  //       return this.findAllByDateRange(userId, startDate, endDate);
-  //     }
-
-  //     return await this.appointmentRepository.find({
-  //       where: { ownerId: userId },
-  //       relations: ['client', 'professional', 'services'],
-  //       order: {
-  //         date: 'ASC',
-  //       },
-  //     });
-  //   } catch (error) {
-  //     this.handleError(error, {
-  //       entity: 'las citas',
-  //       operation: 'listar',
-  //       detail: startDate && endDate ? 'filtrado por fechas' : 'todas',
-  //     });
-  //   }
-  // }
-
+  /**
+   * Citas visibles para el alcance (todas las del negocio para el Owner; las
+   * suyas para el Employee), opcionalmente entre dos fechas.
+   */
   async findAll(
-    userId: string,
+    scope: AppointmentScope,
     startDate?: Date,
     endDate?: Date,
-    userRoles?: string[],
   ): Promise<Appointment[]> {
     try {
-      // Determinar si es un empleado
-      const isEmployee =
-        userRoles?.includes('Employee') && !userRoles?.includes('Owner');
-
+      const where: FindOptionsWhere<Appointment> = this.scopeWhere(scope);
       if (startDate && endDate) {
-        return this.findAllByDateRange(userId, startDate, endDate, isEmployee);
+        where.date = Between(startDate, endDate);
       }
 
-      // Construir consulta según el rol
-      const whereClause = isEmployee
-        ? { professionalId: userId } // Empleado: ver citas donde es profesional
-        : { ownerId: userId }; // Propietario: ver todas sus citas
-
       return await this.appointmentRepository.find({
-        where: whereClause,
+        where,
         relations: ['client', 'professional', 'services'],
         order: {
           date: 'ASC',
@@ -650,14 +452,20 @@ export class AppointmentsService {
       this.handleError(error, {
         entity: 'las citas',
         operation: 'listar',
-        detail: startDate && endDate ? 'filtrado por fechas' : 'todas',
       });
     }
   }
 
-  async findOne(id: string, userId: string): Promise<Appointment> {
+  /**
+   * Una cita del negocio. Acepta el `tenantId` (llamadas internas: pagos,
+   * reseñas, bloques) o un `AppointmentScope` (rutas de citas). Ajena = 404.
+   */
+  async findOne(
+    id: string,
+    scope: AppointmentScope | string,
+  ): Promise<Appointment> {
     const appointment = await this.appointmentRepository.findOne({
-      where: { id, ownerId: userId },
+      where: { id, ...this.scopeWhere(toAppointmentScope(scope)) },
       relations: RELATION_GROUPS.default,
     });
 
@@ -668,9 +476,9 @@ export class AppointmentsService {
     return appointment;
   }
 
-  async remove(id: string, userId: string): Promise<void> {
+  async remove(id: string, tenantId: string): Promise<void> {
     try {
-      const appointment = await this.findOne(id, userId);
+      const appointment = await this.findOne(id, tenantId);
       await this.appointmentRepository.remove(appointment);
     } catch (error) {
       this.handleError(error, {
@@ -680,90 +488,21 @@ export class AppointmentsService {
     }
   }
 
-  // ✅ NUEVO MÉTODO: Marcar recordatorio como enviado
-  async markReminderAsSent(id: string, userId: string): Promise<Appointment> {
+  async markReminderAsSent(
+    id: string,
+    scope: AppointmentScope,
+  ): Promise<Appointment> {
     try {
-      const appointment = await this.findOne(id, userId);
+      const appointment = await this.findOne(id, scope);
 
-      // Marcar el recordatorio como enviado
       appointment.reminderSent = true;
       appointment.reminderSentAt = new Date();
 
-      const updatedAppointment =
-        await this.appointmentRepository.save(appointment);
-
-      console.log(`Recordatorio marcado como enviado para cita ${id}`);
-
-      return updatedAppointment;
+      return await this.appointmentRepository.save(appointment);
     } catch (error) {
       this.handleError(error, {
         entity: 'la cita',
         operation: 'actualizar',
-      });
-    }
-  }
-
-  async findByProfessionalId(
-    professionalId: string,
-    startDate?: Date,
-    endDate?: Date,
-  ): Promise<Appointment[]> {
-    try {
-      console.log(`Buscando citas para el profesional ${professionalId}`);
-
-      // Construir la consulta base
-      let whereClause: any = {
-        professionalId,
-      };
-
-      // Agregar filtro de fecha si corresponde
-      if (startDate && endDate) {
-        whereClause.date = Between(startDate, endDate);
-      }
-
-      console.log('Query criteria:', JSON.stringify(whereClause));
-
-      // Realizar la consulta
-      const appointments = await this.appointmentRepository.find({
-        where: whereClause,
-        relations: ['client', 'professional', 'services'],
-        order: {
-          date: 'ASC',
-        },
-      });
-
-      console.log(
-        `Encontradas ${appointments.length} citas para el profesional`,
-      );
-      return appointments;
-    } catch (error) {
-      console.error('Error en findByProfessionalId:', error);
-      this.handleError(error, {
-        entity: 'las citas',
-        operation: 'listar',
-        detail: 'por profesional',
-      });
-    }
-  }
-
-  async findByProfessionalAndDate(
-    professionalId: string,
-    date: Date,
-    userId: string,
-  ): Promise<Appointment[]> {
-    try {
-      return await this.appointmentRepository.find({
-        where: {
-          professional: { id: professionalId },
-          date,
-          ownerId: userId,
-        },
-        relations: RELATION_GROUPS.minimal,
-      });
-    } catch (error) {
-      this.handleError(error, {
-        entity: 'las citas',
-        operation: 'buscar',
       });
     }
   }

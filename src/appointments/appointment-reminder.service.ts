@@ -16,6 +16,7 @@ import { format, subHours, isAfter, addHours, subMinutes } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { AppointmentStatus } from '../common/enums/status.enum';
 import { OnEvent } from '@nestjs/event-emitter';
+import { AppointmentScope } from './appointment-scope';
 
 @Injectable()
 export class AppointmentReminderService {
@@ -215,10 +216,25 @@ export class AppointmentReminderService {
     }
   }
 
-  public async sendManualReminder(appointmentId: string, userId: string) {
+  /** Recordatorio manual de una cita visible para el alcance (negocio y, para el Employee, solo las suyas). */
+  public async sendManualReminder(
+    appointmentId: string,
+    scope: AppointmentScope,
+  ) {
     try {
+      if (!scope?.tenantId) {
+        throw new NotFoundException(
+          `Appointment with ID ${appointmentId} not found`,
+        );
+      }
       const appointment = await this.appointmentsRepository.findOne({
-        where: { id: appointmentId, ownerId: userId },
+        where: {
+          id: appointmentId,
+          ownerId: scope.tenantId,
+          ...(scope.professionalId
+            ? { professionalId: scope.professionalId }
+            : {}),
+        },
         relations: ['client', 'professional', 'services'],
       });
 

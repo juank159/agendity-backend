@@ -19,13 +19,13 @@ export class CustomPaymentMethodsService {
 
   async create(
     createDto: CreateCustomPaymentMethodDto,
-    userId: string,
+    tenantId: string,
   ): Promise<CustomPaymentMethod> {
     // Verificar si ya existe un método con el mismo nombre para este usuario
     const existingMethod = await this.customPaymentMethodRepository.findOne({
       where: {
         name: createDto.name,
-        ownerId: userId,
+        ownerId: tenantId,
       },
     });
 
@@ -37,30 +37,30 @@ export class CustomPaymentMethodsService {
 
     const customPaymentMethod = this.customPaymentMethodRepository.create({
       ...createDto,
-      ownerId: userId,
+      ownerId: tenantId,
     });
 
     return this.customPaymentMethodRepository.save(customPaymentMethod);
   }
 
-  async findAll(userId: string): Promise<CustomPaymentMethod[]> {
+  async findAll(tenantId: string): Promise<CustomPaymentMethod[]> {
     return this.customPaymentMethodRepository.find({
-      where: { ownerId: userId },
+      where: { ownerId: tenantId },
       order: { name: 'ASC' },
     });
   }
 
-  async findAllActive(userId: string): Promise<CustomPaymentMethod[]> {
+  async findAllActive(tenantId: string): Promise<CustomPaymentMethod[]> {
     return this.customPaymentMethodRepository.find({
-      where: { ownerId: userId, isActive: true },
+      where: { ownerId: tenantId, isActive: true },
       order: { name: 'ASC' },
     });
   }
 
-  async findOne(id: string, userId: string): Promise<CustomPaymentMethod> {
+  async findOne(id: string, tenantId: string): Promise<CustomPaymentMethod> {
     const customPaymentMethod =
       await this.customPaymentMethodRepository.findOne({
-        where: { id, ownerId: userId },
+        where: { id, ownerId: tenantId },
       });
 
     if (!customPaymentMethod) {
@@ -73,16 +73,16 @@ export class CustomPaymentMethodsService {
   async update(
     id: string,
     updateDto: UpdateCustomPaymentMethodDto,
-    userId: string,
+    tenantId: string,
   ): Promise<CustomPaymentMethod> {
-    const customPaymentMethod = await this.findOne(id, userId);
+    const customPaymentMethod = await this.findOne(id, tenantId);
 
     // Si se está actualizando el nombre, verificar que no haya conflictos
     if (updateDto.name && updateDto.name !== customPaymentMethod.name) {
       const existingMethod = await this.customPaymentMethodRepository.findOne({
         where: {
           name: updateDto.name,
-          ownerId: userId,
+          ownerId: tenantId,
         },
       });
 
@@ -98,8 +98,8 @@ export class CustomPaymentMethodsService {
     return this.customPaymentMethodRepository.save(customPaymentMethod);
   }
 
-  async remove(id: string, userId: string): Promise<void> {
-    const customPaymentMethod = await this.findOne(id, userId);
+  async remove(id: string, tenantId: string): Promise<void> {
+    const customPaymentMethod = await this.findOne(id, tenantId);
     await this.customPaymentMethodRepository.remove(customPaymentMethod);
   }
 }

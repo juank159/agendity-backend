@@ -6,13 +6,17 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
 import { Schedule } from './entities/schedule.entity';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { UsersService } from '../users/users.service';
-import { User } from 'src/users/entities/user.entity';
+import { tenantMembersWhere } from 'src/users/user-access';
 
+/**
+ * Los horarios no tienen `owner_id`: pertenecen a un profesional (`user`), que es
+ * el Owner o un empleado del negocio. Todo se filtra por ese vínculo.
+ */
 @Injectable()
 export class SchedulesService {
   constructor(
@@ -22,11 +26,22 @@ export class SchedulesService {
     private readonly usersService: UsersService,
   ) {}
 
-  async create(createScheduleDto: CreateScheduleDto): Promise<Schedule> {
+  /** `where` de horarios del negocio (OR: del Owner o de sus empleados). */
+  private tenantWhere(
+    tenantId: string,
+    extra: FindOptionsWhere<Schedule> = {},
+  ): FindOptionsWhere<Schedule>[] {
+    return tenantMembersWhere(tenantId).map((user) => ({ ...extra, user }));
+  }
+
+  async create(
+    createScheduleDto: CreateScheduleDto,
+    tenantId: string,
+  ): Promise<Schedule> {
     const { user_id, ...scheduleData } = createScheduleDto;
 
-    // Verificar que existe el profesional
-    const user = await this.usersService.findOne({ id: user_id });
+    // El profesional debe ser del negocio (si no, 404)
+    const user = await this.usersService.findTenantMember(user_id, tenantId);
 
     // Verificar que no exista solapamiento de horarios
     await this.validateScheduleOverlap(
@@ -45,19 +60,19 @@ export class SchedulesService {
 
     const schedule = this.scheduleRepository.create({
       ...scheduleData,
-      user, // Asignamos el usuario directamente
+      user,
     });
 
     return await this.scheduleRepository.save(schedule);
   }
 
-  // Nuevo método para crear horarios en lote
   async createBatch(
     userId: string,
     schedules: Omit<CreateScheduleDto, 'user_id'>[],
+    tenantId: string,
   ): Promise<Schedule[]> {
-    // Verificar que existe el profesional
-    const user = await this.usersService.findOne({ id: userId });
+    // El profesional debe ser del negocio (si no, 404)
+    const user = await this.usersService.findTenantMember(userId, tenantId);
 
     const createdSchedules: Schedule[] = [];
 
@@ -88,22 +103,24 @@ export class SchedulesService {
     return createdSchedules;
   }
 
-  async findAll(): Promise<Schedule[]> {
+  /** Todos los horarios de todos los negocios: solo para Admin. */
+  async findAllForAdmin(): Promise<Schedule[]> {
     return await this.scheduleRepository.find({
       relations: ['user'],
     });
   }
 
-  async findByUser(userId: string): Promise<Schedule[]> {
+  async findByUser(userId: string, tenantId: string): Promise<Schedule[]> {
+    await this.usersService.findTenantMember(userId, tenantId);
     return await this.scheduleRepository.find({
       where: { user: { id: userId } },
       relations: ['user'],
     });
   }
 
-  async findOne(id: string): Promise<Schedule> {
+  async findOne(id: string, tenantId: string): Promise<Schedule> {
     const schedule = await this.scheduleRepository.findOne({
-      where: { id },
+      where: this.tenantWhere(tenantId, { id }),
       relations: ['user'],
     });
 
@@ -117,14 +134,17 @@ export class SchedulesService {
   async update(
     id: string,
     updateScheduleDto: UpdateScheduleDto,
+    tenantId: string,
   ): Promise<Schedule> {
-    const schedule = await this.findOne(id);
+    const schedule = await this.findOne(id, tenantId);
     const { user_id, ...scheduleData } = updateScheduleDto;
 
     if (user_id) {
-      const newUser = await this.usersService.findOne({ id: user_id });
-      // Usamos type assertion para forzar el tipo User
-      schedule.user = newUser as unknown as User;
+      // El nuevo profesional también debe ser del negocio
+      schedule.user = await this.usersService.findTenantMember(
+        user_id,
+        tenantId,
+      );
     }
 
     if (
@@ -153,8 +173,8 @@ export class SchedulesService {
     return await this.scheduleRepository.save(schedule);
   }
 
-  async remove(id: string): Promise<void> {
-    const schedule = await this.findOne(id);
+  async remove(id: string, tenantId: string): Promise<void> {
+    const schedule = await this.findOne(id, tenantId);
     await this.scheduleRepository.remove(schedule);
   }
 

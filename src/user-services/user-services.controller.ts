@@ -13,6 +13,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { UserServicesService } from './user-services.service';
 import { AssignServiceDto } from './dto/assign-service.dto';
 import { UserService } from './entities/user-service.entity';
+import { Tenant } from '../common/decorators/tenant.decorator';
 
 @ApiTags('Servicios de Usuario')
 @Controller('users/:userId/services')
@@ -44,8 +45,13 @@ export class UserServicesController {
   assignService(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() assignServiceDto: AssignServiceDto,
+    @Tenant() tenantId: string,
   ) {
-    return this.userServicesService.assignService(userId, assignServiceDto);
+    return this.userServicesService.assignService(
+      userId,
+      assignServiceDto,
+      tenantId,
+    );
   }
 
   // Nuevo endpoint para asignar múltiples servicios
@@ -66,10 +72,12 @@ export class UserServicesController {
   assignMultipleServices(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() assignServicesDto: AssignServiceDto[],
+    @Tenant() tenantId: string,
   ) {
     return this.userServicesService.assignMultipleServices(
       userId,
       assignServicesDto,
+      tenantId,
     );
   }
 
@@ -95,8 +103,11 @@ export class UserServicesController {
     status: 404,
     description: 'Usuario no encontrado',
   })
-  getUserServices(@Param('userId', ParseUUIDPipe) userId: string) {
-    return this.userServicesService.getUserServices(userId);
+  getUserServices(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Tenant() tenantId: string,
+  ) {
+    return this.userServicesService.getUserServices(userId, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -129,7 +140,8 @@ export class UserServicesController {
   removeService(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Param('serviceId', ParseUUIDPipe) serviceId: string,
+    @Tenant() tenantId: string,
   ) {
-    return this.userServicesService.removeService(userId, serviceId);
+    return this.userServicesService.removeService(userId, serviceId, tenantId);
   }
 }

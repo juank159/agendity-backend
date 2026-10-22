@@ -40,11 +40,13 @@ export class CreateAppointmentDto {
 
   @ApiProperty({
     example: '123e4567-e89b-12d3-a456-426614174000',
-    description: 'ID del dueño del negocio',
+    description:
+      'Obsoleto e ignorado: el negocio sale del JWT (ARQUITECTURA §3). Se acepta por compatibilidad con la app.',
+    required: false,
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsUUID()
-  owner_id: string;
+  owner_id?: string;
 
   @IsNotEmpty()
   @IsISO8601()

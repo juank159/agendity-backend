@@ -1,10 +1,4 @@
-import {
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-} from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateCategoryDto {
@@ -28,13 +22,4 @@ export class CreateCategoryDto {
   @IsOptional()
   @IsString()
   description?: string;
-
-  @ApiProperty({
-    description: 'ID único del dueño del negocio',
-    example: 'e7cd5752-9c12-4d4b-9c9f-3c0b93b9c467',
-    required: false,
-  })
-  @IsOptional()
-  @IsUUID()
-  ownerId?: string;
 }

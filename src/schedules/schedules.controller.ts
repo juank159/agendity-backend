@@ -6,6 +6,7 @@ import {
   Patch,
   Param,
   Delete,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
@@ -14,6 +15,7 @@ import { SchedulesService } from './schedules.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { Schedule } from './entities/schedule.entity';
+import { Tenant } from '../common/decorators/tenant.decorator';
 
 @ApiTags('Horarios')
 @Controller('schedules')
@@ -28,8 +30,11 @@ export class SchedulesController {
     description: 'Horario creado exitosamente',
     type: Schedule,
   })
-  create(@Body() createScheduleDto: CreateScheduleDto) {
-    return this.schedulesService.create(createScheduleDto);
+  create(
+    @Body() createScheduleDto: CreateScheduleDto,
+    @Tenant() tenantId: string,
+  ) {
+    return this.schedulesService.create(createScheduleDto, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -43,11 +48,12 @@ export class SchedulesController {
   createBatch(
     @Param('userId') userId: string,
     @Body() schedules: Omit<CreateScheduleDto, 'user_id'>[],
+    @Tenant() tenantId: string,
   ) {
-    return this.schedulesService.createBatch(userId, schedules);
+    return this.schedulesService.createBatch(userId, schedules, tenantId);
   }
 
-  // Devuelve los horarios de todos los negocios: solo Admin hasta filtrar por tenant (2.02).
+  // Vista global de todos los negocios: solo Admin. Para un negocio: GET /schedules/user/:userId.
   @hasRoles(JwtRoles.Admin)
   @Get()
   @ApiOperation({ summary: 'Obtener todos los horarios' })
@@ -57,7 +63,7 @@ export class SchedulesController {
     type: [Schedule],
   })
   findAll() {
-    return this.schedulesService.findAll();
+    return this.schedulesService.findAllForAdmin();
   }
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
@@ -68,8 +74,8 @@ export class SchedulesController {
     description: 'Horarios del profesional',
     type: [Schedule],
   })
-  findByUser(@Param('userId') userId: string) {
-    return this.schedulesService.findByUser(userId);
+  findByUser(@Param('userId') userId: string, @Tenant() tenantId: string) {
+    return this.schedulesService.findByUser(userId, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
@@ -80,8 +86,8 @@ export class SchedulesController {
     description: 'Horario encontrado',
     type: Schedule,
   })
-  findOne(@Param('id') id: string) {
-    return this.schedulesService.findOne(id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.schedulesService.findOne(id, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -93,17 +99,18 @@ export class SchedulesController {
     type: Schedule,
   })
   update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updateScheduleDto: UpdateScheduleDto,
+    @Tenant() tenantId: string,
   ) {
-    return this.schedulesService.update(id, updateScheduleDto);
+    return this.schedulesService.update(id, updateScheduleDto, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Delete(':id')
   @ApiOperation({ summary: 'Eliminar un horario' })
   @ApiResponse({ status: 200, description: 'Horario eliminado' })
-  remove(@Param('id') id: string) {
-    return this.schedulesService.remove(id);
+  remove(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.schedulesService.remove(id, tenantId);
   }
 }

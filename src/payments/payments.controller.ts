@@ -13,12 +13,12 @@ import {
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
-import { Payment } from './entities/payment.entity';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Tenant, tenantIdFrom } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ParseDatePipe } from 'src/common/pipes/parse-date.pipe';
-import { AuthUser } from '../auth/interfaces';
+import { AuthUser, isOnlyEmployee } from '../auth/interfaces';
 
 @Controller('payments')
 export class PaymentsController {
@@ -28,9 +28,9 @@ export class PaymentsController {
   @hasRoles(JwtRoles.Owner)
   create(
     @Body() createPaymentDto: CreatePaymentDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.create(createPaymentDto, user.id);
+    return this.paymentsService.create(createPaymentDto, tenantId);
   }
 
   @Post(':id/refund')
@@ -38,15 +38,15 @@ export class PaymentsController {
   refund(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() refundDto: RefundPaymentDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.refund(id, refundDto, user.id);
+    return this.paymentsService.refund(id, refundDto, tenantId);
   }
 
   @Get()
   @hasRoles(JwtRoles.Owner)
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.paymentsService.findAll(user.id);
+  findAll(@Tenant() tenantId: string) {
+    return this.paymentsService.findAll(tenantId);
   }
 
   @Get('stats')
@@ -54,9 +54,9 @@ export class PaymentsController {
   getStats(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getPaymentStats(startDate, endDate, user.id);
+    return this.paymentsService.getPaymentStats(startDate, endDate, tenantId);
   }
 
   @Get('employee-stats')
@@ -67,56 +67,45 @@ export class PaymentsController {
     @Query('professionalId') professionalId: string,
     @CurrentUser() user: AuthUser,
   ) {
-    const isOnlyEmployee =
-      user.roles.includes(JwtRoles.Employee) &&
-      !user.roles.includes(JwtRoles.Owner);
+    const tenantId = tenantIdFrom(user);
 
-    if (isOnlyEmployee) {
-      // El owner del empleado sale del AuthUser (2.01), no del token a mano.
-      const ownerId = user.ownerId;
-      if (!ownerId || ownerId === user.id) {
+    if (isOnlyEmployee(user)) {
+      // Un empleado sin owner sería su propio tenant: no tiene negocio que consultar.
+      if (tenantId === user.id) {
         throw new BadRequestException(
           'No se puede determinar el propietario del empleado',
         );
       }
-
-      // Empleado ve solo sus propias estadísticas
+      // Empleado: solo sus propias estadísticas, dentro de su negocio
       return this.paymentsService.getEmployeeStats(
-        user.id, // El ID del empleado actual
-        startDate,
-        endDate,
-        ownerId, // El ID del propietario del negocio
-      );
-    } else {
-      // Owner: Necesita un professionalId o devolvemos error
-      if (!professionalId) {
-        throw new BadRequestException(
-          'Se requiere professionalId para consultar estadísticas de un profesional específico',
-        );
-      }
-
-      console.log(
-        'Obteniendo estadísticas para profesional con ID:',
-        professionalId,
-      );
-      console.log('Usuario propietario ID:', user.id);
-
-      return this.paymentsService.getEmployeeStats(
-        professionalId,
-        startDate,
-        endDate,
         user.id,
+        startDate,
+        endDate,
+        tenantId,
       );
     }
+
+    // Owner: necesita un professionalId (los datos se filtran por su negocio)
+    if (!professionalId) {
+      throw new BadRequestException(
+        'Se requiere professionalId para consultar estadísticas de un profesional específico',
+      );
+    }
+    return this.paymentsService.getEmployeeStats(
+      professionalId,
+      startDate,
+      endDate,
+      tenantId,
+    );
   }
 
   @Get('appointment/:id')
   @hasRoles(JwtRoles.Owner)
   findByAppointment(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.findByAppointment(id, user.id);
+    return this.paymentsService.findByAppointment(id, tenantId);
   }
 
   // Las rutas estáticas van ANTES de ':id' (si no, ':id' + ParseUUIDPipe las captura con 400).
@@ -129,11 +118,8 @@ export class PaymentsController {
 
   @Get(':id')
   @hasRoles(JwtRoles.Owner)
-  findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.paymentsService.findOne(id, user.id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.paymentsService.findOne(id, tenantId);
   }
 
   @Get('stats/by-method')
@@ -141,12 +127,12 @@ export class PaymentsController {
   getStatsByMethod(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
     return this.paymentsService.getPaymentStatsByMethod(
       startDate,
       endDate,
-      user.id,
+      tenantId,
     );
   }
 
@@ -155,12 +141,12 @@ export class PaymentsController {
   getStatsComparison(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
     return this.paymentsService.getPaymentStatsComparison(
       startDate,
       endDate,
-      user.id,
+      tenantId,
     );
   }
 
@@ -169,12 +155,12 @@ export class PaymentsController {
   getStatsByService(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
     return this.paymentsService.getPaymentStatsByService(
       startDate,
       endDate,
-      user.id,
+      tenantId,
     );
   }
 
@@ -183,12 +169,12 @@ export class PaymentsController {
   getStatsByProfessional(
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
     return this.paymentsService.getPaymentStatsByProfessional(
       startDate,
       endDate,
-      user.id,
+      tenantId,
     );
   }
 
@@ -198,12 +184,12 @@ export class PaymentsController {
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
     return this.paymentsService.getPaymentStatsByClient(
       startDate,
       endDate,
-      user.id,
+      tenantId,
       limit,
     );
   }
@@ -214,12 +200,12 @@ export class PaymentsController {
     @Query('startDate', ParseDatePipe) startDate: Date,
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Query('limit', new DefaultValuePipe(5), ParseIntPipe) limit: number,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
     return this.paymentsService.getTopClients(
       startDate,
       endDate,
-      user.id,
+      tenantId,
       limit,
     );
   }

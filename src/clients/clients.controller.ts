@@ -11,7 +11,7 @@ import {
   BadRequestException,
   Query,
 } from '@nestjs/common';
-import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { Tenant } from 'src/common/decorators/tenant.decorator';
 import { Client } from './entities/client.entity';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -24,7 +24,6 @@ import { diskStorage } from 'multer';
 import * as path from 'path';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
-import { AuthUser } from '../auth/interfaces';
 
 @Controller('clients')
 export class ClientsController {
@@ -34,60 +33,48 @@ export class ClientsController {
   ) {}
 
   @Post()
-  create(
-    @Body() createClientDto: CreateClientDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.clientsService.create(createClientDto, user.id);
+  create(@Body() createClientDto: CreateClientDto, @Tenant() tenantId: string) {
+    return this.clientsService.create(createClientDto, tenantId);
   }
 
   @Post('batch')
   async importBatch(
     @Body() importClientsDto: ImportClientsDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.clientsService.importBatch(importClientsDto.clients, user.id);
+    return this.clientsService.importBatch(importClientsDto.clients, tenantId);
   }
 
   @Get()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  findAll(
-    @CurrentUser() user: AuthUser,
-    @Query() paginationDto: PaginationDto,
-  ) {
-    console.log('🔍 GET /clients - Parámetros recibidos:', {
-      userId: user.id,
-      query: paginationDto,
-    });
-
-    return this.clientsService.findAll(user.id, paginationDto);
+  findAll(@Tenant() tenantId: string, @Query() paginationDto: PaginationDto) {
+    return this.clientsService.findAll(tenantId, paginationDto);
   }
 
   // ✅ ENDPOINT LEGACY PARA RETROCOMPATIBILIDAD
   @Get('all')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  findAllLegacy(@CurrentUser() user: AuthUser) {
-    console.log('🔄 GET /clients/all - Endpoint legacy usado');
-    return this.clientsService.findAllLegacy(user.id);
+  findAllLegacy(@Tenant() tenantId: string) {
+    return this.clientsService.findAllLegacy(tenantId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.clientsService.findOne(id, user.id);
+  findOne(@Param('id') id: string, @Tenant() tenantId: string) {
+    return this.clientsService.findOne(id, tenantId);
   }
 
   @Patch(':id')
   update(
     @Param('id') id: string,
     @Body() updateClientDto: UpdateClientDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.clientsService.update(id, updateClientDto, user.id);
+    return this.clientsService.update(id, updateClientDto, tenantId);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.clientsService.remove(id, user.id);
+  remove(@Param('id') id: string, @Tenant() tenantId: string) {
+    return this.clientsService.remove(id, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)

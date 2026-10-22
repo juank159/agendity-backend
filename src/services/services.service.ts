@@ -84,13 +84,13 @@ export class ServicesService {
 
   async create(
     createServiceDto: CreateServiceDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Service> {
     try {
       // Verificar si ya existe un servicio con el mismo nombre y propietario
       const existingService = await this.findService({
         name: createServiceDto.name,
-        ownerId: userId,
+        ownerId: tenantId,
         loadRelations: false,
       }).catch((error) => {
         if (error instanceof NotFoundException) return null;
@@ -104,12 +104,15 @@ export class ServicesService {
       }
 
       // Validar que la categoría exista
-      await this.categoriesService.findOne(createServiceDto.categoryId, userId);
+      await this.categoriesService.findOne(
+        createServiceDto.categoryId,
+        tenantId,
+      );
 
       // Crear el servicio con valores predeterminados para los campos opcionales
       const service = this.serviceRepository.create({
         ...createServiceDto,
-        ownerId: userId,
+        ownerId: tenantId,
         color: createServiceDto.color || '#1c94f4',
         priceType: createServiceDto.priceType || 'Precio fijo',
         onlineBooking: createServiceDto.onlineBooking ?? true,
@@ -128,10 +131,10 @@ export class ServicesService {
     }
   }
 
-  async findAll(userId: string): Promise<Service[]> {
+  async findAll(tenantId: string): Promise<Service[]> {
     try {
       return await this.serviceRepository.find({
-        where: { ownerId: userId, isActive: true },
+        where: { ownerId: tenantId, isActive: true },
         relations: RELATION_GROUPS.default,
       });
     } catch (error) {
@@ -142,16 +145,19 @@ export class ServicesService {
     }
   }
 
-  async findOne(id: string, userId: string): Promise<Service> {
-    return await this.findService({ id, ownerId: userId });
+  async findOne(id: string, tenantId: string): Promise<Service> {
+    return await this.findService({ id, ownerId: tenantId });
   }
 
-  async findByCategory(categoryId: string, userId: string): Promise<Service[]> {
+  async findByCategory(
+    categoryId: string,
+    tenantId: string,
+  ): Promise<Service[]> {
     try {
-      await this.categoriesService.findOne(categoryId, userId);
+      await this.categoriesService.findOne(categoryId, tenantId);
 
       return await this.serviceRepository.find({
-        where: { categoryId, ownerId: userId },
+        where: { categoryId, ownerId: tenantId },
         relations: RELATION_GROUPS.default,
       });
     } catch (error) {
@@ -165,15 +171,15 @@ export class ServicesService {
   async update(
     id: string,
     updateServiceDto: UpdateServiceDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Service> {
     try {
-      let currentService = await this.findService({ id, ownerId: userId });
+      let currentService = await this.findService({ id, ownerId: tenantId });
 
       if (updateServiceDto.categoryId) {
         const category = await this.categoriesService.findOne(
           updateServiceDto.categoryId,
-          userId,
+          tenantId,
         );
 
         currentService = {
@@ -192,9 +198,9 @@ export class ServicesService {
     }
   }
 
-  async remove(id: string, userId: string): Promise<void> {
+  async remove(id: string, tenantId: string): Promise<void> {
     try {
-      const service = await this.findService({ id, ownerId: userId });
+      const service = await this.findService({ id, ownerId: tenantId });
       await this.serviceRepository.remove(service);
     } catch (error) {
       this.handleError(error, {

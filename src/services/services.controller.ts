@@ -12,10 +12,9 @@ import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
 import { Service } from './entities/service.entity';
-import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { Tenant } from 'src/common/decorators/tenant.decorator';
 import { hasRoles } from 'src/auth/jwt/has.roles';
 import { JwtRoles } from 'src/auth/jwt/jwt.role';
-import { AuthUser } from '../auth/interfaces';
 
 @Controller('services')
 export class ServicesController {
@@ -25,33 +24,31 @@ export class ServicesController {
   @Post()
   create(
     @Body() createServiceDto: CreateServiceDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.servicesService.create(createServiceDto, user.id);
+    return this.servicesService.create(createServiceDto, tenantId);
+  }
+
+  // Lecturas del catálogo: Owner y Employee (el empleado ve el catálogo de su negocio). Escrituras: solo Owner.
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  @Get()
+  findAll(@Tenant() tenantId: string) {
+    return this.servicesService.findAll(tenantId);
   }
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  @Get()
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.servicesService.findAll(user.id);
-  }
-
-  @hasRoles(JwtRoles.Owner)
   @Get('category/:categoryId')
   findByCategory(
     @Param('categoryId', ParseUUIDPipe) categoryId: string,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.servicesService.findByCategory(categoryId, user.id);
+    return this.servicesService.findByCategory(categoryId, tenantId);
   }
 
-  @hasRoles(JwtRoles.Owner)
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   @Get(':id')
-  findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.servicesService.findOne(id, user.id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.servicesService.findOne(id, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -59,17 +56,14 @@ export class ServicesController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateServiceDto: UpdateServiceDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.servicesService.update(id, updateServiceDto, user.id);
+    return this.servicesService.update(id, updateServiceDto, tenantId);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Delete(':id')
-  remove(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.servicesService.remove(id, user.id);
+  remove(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.servicesService.remove(id, tenantId);
   }
 }

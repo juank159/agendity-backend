@@ -12,7 +12,11 @@ import { isUUID } from 'class-validator';
 import { Repository } from 'typeorm';
 
 import { FindUserQuery } from 'src/auth/interfaces';
-import { UserAccessActor, assertCanManageUser } from './user-access';
+import {
+  UserAccessActor,
+  assertCanManageUser,
+  assertUserInTenant,
+} from './user-access';
 
 @Injectable()
 export class UsersService {
@@ -64,6 +68,11 @@ export class UsersService {
     } catch (error) {
       this.handleError(error);
     }
+  }
+
+  /** Un usuario (profesional) del negocio `tenantId`; si no, 404. */
+  async findTenantMember(userId: string, tenantId: string): Promise<User> {
+    return assertUserInTenant(this.usersRepository, tenantId, userId);
   }
 
   /** `GET /users/:param`: solo uno mismo o un empleado propio; si no, 404. */

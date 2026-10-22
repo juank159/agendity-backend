@@ -14,8 +14,7 @@ import { CreateCustomPaymentMethodDto } from './dto/create-custom-payment-method
 import { UpdateCustomPaymentMethodDto } from './dto/update-custom-payment-method.dto';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { AuthUser } from '../auth/interfaces';
+import { Tenant } from '../common/decorators/tenant.decorator';
 
 @Controller('custom-payment-methods')
 export class CustomPaymentMethodsController {
@@ -27,30 +26,27 @@ export class CustomPaymentMethodsController {
   @hasRoles(JwtRoles.Owner)
   create(
     @Body() createDto: CreateCustomPaymentMethodDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.customPaymentMethodsService.create(createDto, user.id);
+    return this.customPaymentMethodsService.create(createDto, tenantId);
   }
 
   @Get()
   @hasRoles(JwtRoles.Owner)
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.customPaymentMethodsService.findAll(user.id);
+  findAll(@Tenant() tenantId: string) {
+    return this.customPaymentMethodsService.findAll(tenantId);
   }
 
   @Get('active')
   @hasRoles(JwtRoles.Owner)
-  findAllActive(@CurrentUser() user: AuthUser) {
-    return this.customPaymentMethodsService.findAllActive(user.id);
+  findAllActive(@Tenant() tenantId: string) {
+    return this.customPaymentMethodsService.findAllActive(tenantId);
   }
 
   @Get(':id')
   @hasRoles(JwtRoles.Owner)
-  findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.customPaymentMethodsService.findOne(id, user.id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.customPaymentMethodsService.findOne(id, tenantId);
   }
 
   @Patch(':id')
@@ -58,17 +54,14 @@ export class CustomPaymentMethodsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateDto: UpdateCustomPaymentMethodDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.customPaymentMethodsService.update(id, updateDto, user.id);
+    return this.customPaymentMethodsService.update(id, updateDto, tenantId);
   }
 
   @Delete(':id')
   @hasRoles(JwtRoles.Owner)
-  remove(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.customPaymentMethodsService.remove(id, user.id);
+  remove(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.customPaymentMethodsService.remove(id, tenantId);
   }
 }

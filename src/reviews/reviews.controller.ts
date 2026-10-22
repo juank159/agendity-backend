@@ -19,10 +19,9 @@ import { ReviewsService } from './reviews.service';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { UpdateReviewDto } from './dto/update-review.dto';
 import { Review } from './entities/review.entity';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { AuthUser } from '../auth/interfaces';
 
 @ApiTags('Reseñas')
 @ApiBearerAuth()
@@ -43,19 +42,16 @@ export class ReviewsController {
     description: 'Datos inválidos o cita no completada',
   })
   @ApiResponse({ status: 404, description: 'Cita no encontrada' })
-  create(
-    @Body() createReviewDto: CreateReviewDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.reviewsService.create(createReviewDto, user.id);
+  create(@Body() createReviewDto: CreateReviewDto, @Tenant() tenantId: string) {
+    return this.reviewsService.create(createReviewDto, tenantId);
   }
 
   @Get()
   @hasRoles(JwtRoles.Owner)
   @ApiOperation({ summary: 'Obtener todas las reseñas' })
   @ApiResponse({ status: 200, description: 'Lista de reseñas', type: [Review] })
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.reviewsService.findAll(user.id);
+  findAll(@Tenant() tenantId: string) {
+    return this.reviewsService.findAll(tenantId);
   }
 
   @Get('professional/:id')
@@ -70,9 +66,9 @@ export class ReviewsController {
   @ApiResponse({ status: 404, description: 'Profesional no encontrado' })
   findByProfessional(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.reviewsService.findByProfessional(id, user.id);
+    return this.reviewsService.findByProfessional(id, tenantId);
   }
 
   @Get('professional/:id/rating')
@@ -92,9 +88,9 @@ export class ReviewsController {
   @ApiResponse({ status: 404, description: 'Profesional no encontrado' })
   getProfessionalRating(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.reviewsService.getProfessionalRating(id, user.id);
+    return this.reviewsService.getProfessionalRating(id, tenantId);
   }
 
   @Get(':id')
@@ -103,11 +99,8 @@ export class ReviewsController {
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Reseña encontrada', type: Review })
   @ApiResponse({ status: 404, description: 'Reseña no encontrada' })
-  findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.reviewsService.findOne(id, user.id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.reviewsService.findOne(id, tenantId);
   }
 
   @Patch(':id')
@@ -120,9 +113,9 @@ export class ReviewsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateReviewDto: UpdateReviewDto,
-    @CurrentUser() user: AuthUser,
+    @Tenant() tenantId: string,
   ) {
-    return this.reviewsService.update(id, updateReviewDto, user.id);
+    return this.reviewsService.update(id, updateReviewDto, tenantId);
   }
 
   @Delete(':id')
@@ -131,10 +124,7 @@ export class ReviewsController {
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Reseña eliminada' })
   @ApiResponse({ status: 404, description: 'Reseña no encontrada' })
-  remove(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.reviewsService.remove(id, user.id);
+  remove(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
+    return this.reviewsService.remove(id, tenantId);
   }
 }

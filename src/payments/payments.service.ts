@@ -117,15 +117,23 @@ export class PaymentsService {
 
   async create(
     createPaymentDto: CreatePaymentDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Payment> {
     try {
       const appointment = await this.appointmentsService.findOne(
         createPaymentDto.appointment_id,
-        userId,
+        tenantId,
       );
 
       await this.validateExistingPayment(appointment.id);
+
+      // El método de pago personalizado también debe ser del negocio (si no, 404)
+      if (createPaymentDto.custom_payment_method_id) {
+        await this.customPaymentMethodsService.findOne(
+          createPaymentDto.custom_payment_method_id,
+          tenantId,
+        );
+      }
 
       // Validaciones habituales...
 
@@ -144,7 +152,7 @@ export class PaymentsService {
         payment_details: createPaymentDto.payment_details,
         appointment,
         status: PaymentStatus.COMPLETED,
-        ownerId: userId,
+        ownerId: tenantId,
       });
 
       // PASO 3: Guardar inicialmente
@@ -179,7 +187,7 @@ export class PaymentsService {
           status: AppointmentStatus.CONFIRMED,
           payment_status: PaymentStatus.COMPLETED,
         },
-        userId,
+        tenantId,
       );
 
       // PASO 6: Enviar notificación
@@ -294,10 +302,10 @@ export class PaymentsService {
 
   // Agrega este método en tu PaymentsService
 
-  async findAll(userId: string): Promise<Payment[]> {
+  async findAll(tenantId: string): Promise<Payment[]> {
     try {
       return await this.paymentRepository.find({
-        where: { ownerId: userId },
+        where: { ownerId: tenantId },
         relations: RELATIONS.APPOINTMENT_WITH_CUSTOM_METHOD,
       });
     } catch (error) {
@@ -310,15 +318,15 @@ export class PaymentsService {
 
   async findByAppointment(
     appointmentId: string,
-    userId: string,
+    tenantId: string,
   ): Promise<Payment[]> {
     try {
-      await this.appointmentsService.findOne(appointmentId, userId);
+      await this.appointmentsService.findOne(appointmentId, tenantId);
 
       return await this.paymentRepository.find({
         where: {
           appointment: { id: appointmentId },
-          ownerId: userId,
+          ownerId: tenantId,
         },
         relations: RELATIONS.MINIMAL,
       });
@@ -330,11 +338,11 @@ export class PaymentsService {
     }
   }
 
-  async findOne(id: string, userId: string): Promise<Payment> {
+  async findOne(id: string, tenantId: string): Promise<Payment> {
     const payment = await this.paymentRepository.findOne({
       where: {
         id,
-        ownerId: userId,
+        ownerId: tenantId,
       },
       relations: RELATIONS.APPOINTMENT,
     });
@@ -349,10 +357,10 @@ export class PaymentsService {
   async refund(
     id: string,
     refundDto: RefundPaymentDto,
-    userId: string,
+    tenantId: string,
   ): Promise<Payment> {
     try {
-      const payment = await this.findOne(id, userId);
+      const payment = await this.findOne(id, tenantId);
 
       if (payment.status !== PaymentStatus.COMPLETED) {
         throw new BadRequestException(
@@ -378,7 +386,7 @@ export class PaymentsService {
         {
           payment_status: PaymentStatus.REFUNDED,
         },
-        userId,
+        tenantId,
       );
 
       await this.sendPaymentNotification(
@@ -403,7 +411,7 @@ export class PaymentsService {
   async getPaymentStats(
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
   ): Promise<PaymentStats> {
     try {
       // Asegúrate de que endDate incluya todo el día (hasta las 23:59:59.999)
@@ -421,7 +429,7 @@ export class PaymentsService {
       const allPayments = await this.paymentRepository.find({
         where: {
           status: PaymentStatus.COMPLETED,
-          ownerId: userId,
+          ownerId: tenantId,
         },
       });
       console.log(
@@ -443,7 +451,7 @@ export class PaymentsService {
       const result = await this.paymentRepository
         .createQueryBuilder('payment')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :userId', { userId })
+        .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere(
           'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
           {
@@ -474,7 +482,7 @@ export class PaymentsService {
     professionalId: string,
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
   ): Promise<any> {
     try {
       // Ajustar la fecha final para incluir todo el día
@@ -505,7 +513,7 @@ export class PaymentsService {
       AND p.status = 'COMPLETED'
       AND a."professional_id" = $2
     `,
-        [userId, professionalId],
+        [tenantId, professionalId],
       );
 
       console.log(
@@ -526,7 +534,7 @@ export class PaymentsService {
       AND p.created_at BETWEEN $3 AND $4
     `,
           [
-            userId,
+            tenantId,
             professionalId,
             startDate.toISOString(),
             adjustedEndDate.toISOString(),
@@ -555,7 +563,7 @@ export class PaymentsService {
       WHERE p.owner_id = $1
       LIMIT 5
     `,
-        [userId],
+        [tenantId],
       );
       console.log('Muestra de pagos:', samplePayments);
 
@@ -570,7 +578,7 @@ export class PaymentsService {
         .andWhere('appointment.professional_id = :professionalId', {
           professionalId,
         })
-        .andWhere('payment.ownerId = :userId', { userId })
+        .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere(
           'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
           {
@@ -597,7 +605,7 @@ export class PaymentsService {
       AND p.created_at BETWEEN $3 AND $4
     `,
         [
-          userId,
+          tenantId,
           professionalId,
           startDate.toISOString(),
           adjustedEndDate.toISOString(),
@@ -628,7 +636,7 @@ export class PaymentsService {
         ORDER BY service_total DESC
       `,
           [
-            userId,
+            tenantId,
             professionalId,
             startDate.toISOString(),
             adjustedEndDate.toISOString(),
@@ -659,7 +667,7 @@ export class PaymentsService {
         ORDER BY date ASC
       `,
           [
-            userId,
+            tenantId,
             professionalId,
             startDate.toISOString(),
             adjustedEndDate.toISOString(),
@@ -725,7 +733,7 @@ export class PaymentsService {
   async getPaymentStatsByMethod(
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
   ): Promise<PaymentMethodStats[]> {
     try {
       // Asegúrate de que endDate incluya todo el día
@@ -743,7 +751,7 @@ export class PaymentsService {
       const totalStats = await this.getPaymentStats(
         startDate,
         adjustedEndDate,
-        userId,
+        tenantId,
       );
 
       // Consulta para pagos con métodos estándar
@@ -754,7 +762,7 @@ export class PaymentsService {
         .addSelect('COUNT(*)', 'count')
         .addSelect('SUM(payment.amount)', 'total')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :userId', { userId })
+        .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere(
           'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
           {
@@ -797,7 +805,7 @@ export class PaymentsService {
   async getPaymentStatsComparison(
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
   ): Promise<PaymentComparisonStats> {
     try {
       // Calcular la duración del período actual en milisegundos
@@ -829,12 +837,12 @@ export class PaymentsService {
       const currentStats = await this.getPaymentStats(
         startDate,
         adjustedEndDate,
-        userId,
+        tenantId,
       );
       const previousStats = await this.getPaymentStats(
         previousStartDate,
         adjustedPreviousEndDate,
-        userId,
+        tenantId,
       );
 
       // Calcular diferencias y cambios porcentuales
@@ -901,7 +909,7 @@ export class PaymentsService {
   async getPaymentStatsByService(
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
   ): Promise<ServiceStats[]> {
     try {
       // Ajustar la fecha final para incluir todo el día
@@ -919,7 +927,7 @@ export class PaymentsService {
       const totalStats = await this.getPaymentStats(
         startDate,
         adjustedEndDate,
-        userId,
+        tenantId,
       );
       console.log('Total general de pagos:', totalStats);
 
@@ -930,7 +938,7 @@ export class PaymentsService {
         .addSelect('s.name', 'name')
         .addSelect('s.price', 'price')
         .from('services', 's')
-        .where('s.ownerId = :userId', { userId })
+        .where('s.ownerId = :tenantId', { tenantId })
         .getRawMany();
 
       console.log('Servicios con precios:', servicesWithPrices);
@@ -960,7 +968,7 @@ export class PaymentsService {
       `;
 
       const serviceUsage = await entityManager.query(query, [
-        userId,
+        tenantId,
         startDate.toISOString(),
         adjustedEndDate.toISOString(),
       ]);
@@ -1008,7 +1016,7 @@ export class PaymentsService {
   async getPaymentStatsByProfessional(
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
   ): Promise<ProfessionalStats[]> {
     try {
       // Asegúrate de que endDate incluya todo el día (hasta las 23:59:59.999)
@@ -1021,13 +1029,13 @@ export class PaymentsService {
         'y',
         adjustedEndDate,
       );
-      console.log('Usuario ID:', userId);
+      console.log('Usuario ID:', tenantId);
 
       // Primero obtenemos el total general para calcular porcentajes
       const totalStats = await this.getPaymentStats(
         startDate,
         adjustedEndDate,
-        userId,
+        tenantId,
       );
       console.log('Total stats encontrados:', totalStats);
 
@@ -1051,7 +1059,7 @@ export class PaymentsService {
         .innerJoin('payment.appointment', 'appointment')
         .innerJoin('appointment.professional', 'professional')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :userId', { userId })
+        .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere(
           'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
           {
@@ -1100,7 +1108,7 @@ export class PaymentsService {
   async getPaymentStatsByClient(
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
     limit: number = 10,
   ): Promise<ClientStats[]> {
     try {
@@ -1120,7 +1128,7 @@ export class PaymentsService {
         .innerJoin('payment.appointment', 'appointment')
         .innerJoin('appointment.client', 'client')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :userId', { userId })
+        .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
           startDate,
           endDate,
@@ -1172,7 +1180,7 @@ export class PaymentsService {
   async getTopClients(
     startDate: Date,
     endDate: Date,
-    userId: string,
+    tenantId: string,
     limit: number = 5,
   ): Promise<any[]> {
     try {
@@ -1189,7 +1197,9 @@ export class PaymentsService {
 
       // Consulta SQL nativa simplificada
       const entityManager = this.paymentRepository.manager;
-      const topClients = await entityManager.query(`
+      // Consulta parametrizada: nada del usuario se interpola en el SQL
+      const topClients = await entityManager.query(
+        `
         SELECT 
           c.id as client_id,
           CONCAT(c.name, ' ', COALESCE(c.lastname, '')) as client_name,
@@ -1198,13 +1208,20 @@ export class PaymentsService {
         FROM payments p
         JOIN appointments a ON p."appointmentId" = a.id
         JOIN clients c ON a."clientId" = c.id
-        WHERE p.owner_id = '${userId}'
+        WHERE p.owner_id = $1
         AND p.status = 'COMPLETED'
-        AND p.created_at BETWEEN '${startDate.toISOString()}' AND '${adjustedEndDate.toISOString()}'
+        AND p.created_at BETWEEN $2 AND $3
         GROUP BY c.id, c.name, c.lastname
         ORDER BY total_spent DESC
-        LIMIT ${limit}
-      `);
+        LIMIT $4
+      `,
+        [
+          tenantId,
+          startDate.toISOString(),
+          adjustedEndDate.toISOString(),
+          limit,
+        ],
+      );
 
       console.log('Resultados:', topClients);
 

@@ -4,13 +4,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, FindOptionsWhere } from 'typeorm';
 import { TimeBlock } from './entities/time-block.entity';
 import { CreateTimeBlockDto } from './dto/create-time-block.dto';
 import { UpdateTimeBlockDto } from './dto/update-time-block.dto';
 import { UsersService } from '../users/users.service';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { User } from '../users/entities/user.entity';
+import { tenantMembersWhere } from '../users/user-access';
 
 import {
   TIME_BLOCK_RELATIONS,
@@ -18,10 +19,10 @@ import {
 } from './constants/time-block.constants';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
 
-interface FindUserOptions {
-  id: string;
-}
-
+/**
+ * Los bloques no tienen `owner_id`: pertenecen al profesional (`user`), y el
+ * profesional pertenece al negocio (es el Owner o uno de sus empleados).
+ */
 @Injectable()
 export class TimeBlocksService {
   constructor(
@@ -31,15 +32,20 @@ export class TimeBlocksService {
     private readonly appointmentsService: AppointmentsService,
   ) {}
 
+  /** `where` de bloques del negocio (OR: del Owner o de sus empleados). */
+  private tenantWhere(
+    tenantId: string,
+    extra: FindOptionsWhere<TimeBlock> = {},
+  ): FindOptionsWhere<TimeBlock>[] {
+    return tenantMembersWhere(tenantId).map((user) => ({ ...extra, user }));
+  }
+
   private async getTimeBlockEntity(
     id: string,
-    userId: string,
+    tenantId: string,
   ): Promise<TimeBlock> {
     const timeBlock = await this.timeBlockRepository.findOne({
-      where: {
-        id,
-        user: { id: userId }, // Añadido filtro por userId para multitenant
-      },
+      where: this.tenantWhere(tenantId, { id }),
       relations: [TIME_BLOCK_RELATIONS.USER, TIME_BLOCK_RELATIONS.APPOINTMENT],
     });
 
@@ -50,12 +56,12 @@ export class TimeBlocksService {
     return timeBlock;
   }
 
+  /** Solapamiento con otros bloques del mismo profesional (ya validado en el negocio). */
   private async checkTimeBlockAvailability(
     professionalId: string,
     startDatetime: Date,
     endDatetime: Date,
     excludeBlockId?: string,
-    userId?: string,
   ): Promise<boolean> {
     const queryBuilder = this.timeBlockRepository
       .createQueryBuilder('time_block')
@@ -71,17 +77,13 @@ export class TimeBlocksService {
       });
     }
 
-    if (userId) {
-      queryBuilder.andWhere('time_block.user.id = :userId', { userId });
-    }
-
     const overlappingBlock = await queryBuilder.getOne();
     return !overlappingBlock;
   }
 
-  async findAll(userId: string): Promise<TimeBlockResponseDto[]> {
+  async findAll(tenantId: string): Promise<TimeBlockResponseDto[]> {
     const timeBlocks = await this.timeBlockRepository.find({
-      where: { user: { id: userId } }, // Filtro por userId para multitenant
+      where: this.tenantWhere(tenantId),
       relations: [TIME_BLOCK_RELATIONS.USER, TIME_BLOCK_RELATIONS.APPOINTMENT],
     });
 
@@ -90,29 +92,18 @@ export class TimeBlocksService {
 
   async findByUser(
     professionalId: string,
-    startDate?: Date,
-    endDate?: Date,
-    userId?: string,
+    startDate: Date | undefined,
+    endDate: Date | undefined,
+    tenantId: string,
   ): Promise<TimeBlockResponseDto[]> {
-    const where: any = {
+    // El profesional debe ser del negocio (si no, 404)
+    await this.usersService.findTenantMember(professionalId, tenantId);
+
+    const where: FindOptionsWhere<TimeBlock> = {
       user: { id: professionalId },
     };
-
     if (startDate && endDate) {
       where.start_datetime = Between(startDate, endDate);
-    }
-
-    // Validar que el profesional pertenece al tenant si se proporciona userId
-    if (userId) {
-      const professional = await this.usersService.findOne({
-        id: professionalId,
-      });
-      if (!professional) {
-        throw new NotFoundException(
-          `Profesional con ID ${professionalId} no encontrado`,
-        );
-      }
-      // Aquí podrías agregar validación adicional del tenant si es necesario
     }
 
     const timeBlocks = await this.timeBlockRepository.find({
@@ -124,14 +115,14 @@ export class TimeBlocksService {
     return timeBlocks.map(TimeBlockResponseDto.fromEntity);
   }
 
-  async findOne(id: string, userId: string): Promise<TimeBlockResponseDto> {
-    const timeBlock = await this.getTimeBlockEntity(id, userId);
+  async findOne(id: string, tenantId: string): Promise<TimeBlockResponseDto> {
+    const timeBlock = await this.getTimeBlockEntity(id, tenantId);
     return TimeBlockResponseDto.fromEntity(timeBlock);
   }
 
   async create(
     createTimeBlockDto: CreateTimeBlockDto,
-    userId: string,
+    tenantId: string,
   ): Promise<TimeBlockResponseDto> {
     const { user_id, appointment_id, start_datetime, end_datetime, notes } =
       createTimeBlockDto;
@@ -143,32 +134,24 @@ export class TimeBlocksService {
     );
 
     try {
-      // Verificar disponibilidad
+      // Profesional y cita deben ser del negocio (si no, 404)
+      const [userFound, appointmentFound] = await Promise.all([
+        this.usersService.findTenantMember(user_id, tenantId),
+        appointment_id
+          ? this.appointmentsService.findOne(appointment_id, tenantId)
+          : null,
+      ]);
+
       const isAvailable = await this.checkTimeBlockAvailability(
         user_id,
         new Date(start_datetime),
         new Date(end_datetime),
-        undefined,
-        userId,
       );
 
       if (!isAvailable) {
         throw new BadRequestException(ERROR_MESSAGES.UNAVAILABLE_SCHEDULE);
       }
 
-      // Obtener el usuario y validar que pertenece al tenant
-      const [userFound, appointmentFound] = await Promise.all([
-        this.usersService.findOne({ id: user_id }),
-        appointment_id
-          ? this.appointmentsService.findOne(appointment_id, userId)
-          : null,
-      ]);
-
-      if (!userFound) {
-        throw new NotFoundException(`Usuario con ID ${user_id} no encontrado`);
-      }
-
-      // Crear el time block
       const timeBlock = this.timeBlockRepository.create({
         start_datetime: new Date(start_datetime),
         end_datetime: new Date(end_datetime),
@@ -193,12 +176,20 @@ export class TimeBlocksService {
   async update(
     id: string,
     updateTimeBlockDto: UpdateTimeBlockDto,
-    userId: string,
+    tenantId: string,
   ): Promise<TimeBlockResponseDto> {
-    const timeBlock = await this.getTimeBlockEntity(id, userId);
+    const timeBlock = await this.getTimeBlockEntity(id, tenantId);
     const { start_datetime, end_datetime, user_id, notes } = updateTimeBlockDto;
 
     try {
+      if (user_id) {
+        // El nuevo profesional también debe ser del negocio
+        timeBlock.user = await this.usersService.findTenantMember(
+          user_id,
+          tenantId,
+        );
+      }
+
       if (start_datetime && end_datetime) {
         TimeBlock.validateDateRange(
           new Date(start_datetime),
@@ -206,26 +197,15 @@ export class TimeBlocksService {
         );
 
         const isAvailable = await this.checkTimeBlockAvailability(
-          user_id || timeBlock.user.id,
+          timeBlock.user.id,
           new Date(start_datetime),
           new Date(end_datetime),
           id,
-          userId,
         );
 
         if (!isAvailable) {
           throw new BadRequestException(ERROR_MESSAGES.UNAVAILABLE_SCHEDULE);
         }
-      }
-
-      if (user_id) {
-        const userFound = await this.usersService.findOne({ id: user_id });
-        if (!userFound) {
-          throw new NotFoundException(
-            `Usuario con ID ${user_id} no encontrado`,
-          );
-        }
-        timeBlock.user = userFound as User;
       }
 
       if (start_datetime) {
@@ -253,8 +233,8 @@ export class TimeBlocksService {
     }
   }
 
-  async remove(id: string, userId: string): Promise<void> {
-    const timeBlock = await this.getTimeBlockEntity(id, userId);
+  async remove(id: string, tenantId: string): Promise<void> {
+    const timeBlock = await this.getTimeBlockEntity(id, tenantId);
     await this.timeBlockRepository.remove(timeBlock);
   }
 
@@ -262,29 +242,20 @@ export class TimeBlocksService {
     professionalId: string,
     date: Date,
     duration: number,
-    userId: string,
+    tenantId: string,
   ): Promise<Array<{ start: Date; end: Date }>> {
-    // Validar que el profesional existe y pertenece al tenant
-    const professional = await this.usersService.findOne({
-      id: professionalId,
-    });
-    if (!professional) {
-      throw new NotFoundException(
-        `Profesional con ID ${professionalId} no encontrado`,
-      );
-    }
-
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
 
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
+    // findByUser valida que el profesional sea del negocio (404 si no)
     const timeBlocks = await this.findByUser(
       professionalId,
       startOfDay,
       endOfDay,
-      userId,
+      tenantId,
     );
 
     const workingHours = {
