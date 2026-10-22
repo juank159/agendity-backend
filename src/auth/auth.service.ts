@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -16,11 +17,9 @@ import {
   omitUserSecrets,
 } from 'src/users/entities/user.entity';
 import { Not, Repository, DataSource, FindOptionsWhere } from 'typeorm';
-import {
-  UserAccessActor,
-  assertCanManageUser,
-} from 'src/users/user-access';
+import { UserAccessActor, assertCanManageUser } from 'src/users/user-access';
 import * as bcrypt from 'bcrypt';
+import { randomInt, timingSafeEqual } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from './interfaces';
 import { Role } from 'src/roles/entities/role.entity';
@@ -36,9 +35,14 @@ import { UserServicesService } from 'src/user-services/user-services.service';
 import { SchedulesService } from 'src/schedules/schedules.service';
 import { CreateEmployeeWithDetailsDto } from './dto/create-employee-with-details.dto';
 import { ToggleEmployeeStatusDto } from './dto/toggle-employee-status.dto';
+import {
+  VerificationAttemptsService,
+  VerificationPurpose,
+} from './verification-attempts.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private googleClient: OAuth2Client;
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
@@ -53,6 +57,7 @@ export class AuthService {
     private readonly userServicesService: UserServicesService,
     @Inject(forwardRef(() => SchedulesService))
     private readonly schedulesService: SchedulesService,
+    private readonly verificationAttempts: VerificationAttemptsService,
   ) {
     // Inicializar cliente de Google con tu Client ID
     this.googleClient = new OAuth2Client(
@@ -125,6 +130,82 @@ export class AuthService {
     return qb.getOne();
   }
 
+  /** Código de 6 dígitos con aleatoriedad criptográfica. */
+  private generateCode(): string {
+    return randomInt(100000, 1000000).toString();
+  }
+
+  private codeExpiry(): Date {
+    const expires = new Date();
+    expires.setMinutes(expires.getMinutes() + 10);
+    return expires;
+  }
+
+  /**
+   * Comprueba un código de verificación o de reset. Cada fallo cuenta; al llegar a
+   * MAX_CODE_ATTEMPTS el código se borra de la BD y hay que pedir uno nuevo.
+   * `user` debe traer las columnas del código (`findUserWithSecrets`).
+   */
+  private async assertValidCode(
+    purpose: VerificationPurpose,
+    user: User,
+    input: string,
+  ): Promise<void> {
+    const stored =
+      purpose === 'reset' ? user.reset_password_code : user.verification_code;
+    const expires =
+      purpose === 'reset'
+        ? user.reset_password_expires
+        : user.verification_code_expires;
+
+    if (!this.codesMatch(stored, input)) {
+      const exhausted = this.verificationAttempts.registerFailure(
+        purpose,
+        user.id,
+      );
+      if (exhausted) {
+        if (stored) await this.invalidateCode(purpose, user.id);
+        this.verificationAttempts.reset(purpose, user.id);
+        throw new UnauthorizedException(
+          'Demasiados intentos fallidos. Solicita un código nuevo.',
+        );
+      }
+      throw new UnauthorizedException(
+        purpose === 'reset'
+          ? 'Código de recuperación inválido'
+          : 'Código de verificación inválido',
+      );
+    }
+
+    if (!expires || new Date() > expires) {
+      throw new UnauthorizedException(
+        purpose === 'reset'
+          ? 'El código de recuperación ha expirado'
+          : 'El código de verificación ha expirado',
+      );
+    }
+    this.verificationAttempts.reset(purpose, user.id);
+  }
+
+  private codesMatch(stored: string | null, input: unknown): boolean {
+    if (!stored || typeof input !== 'string') return false;
+    const a = Buffer.from(stored);
+    const b = Buffer.from(input);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+
+  private async invalidateCode(
+    purpose: VerificationPurpose,
+    userId: string,
+  ): Promise<void> {
+    await this.userRepository.update(
+      userId,
+      purpose === 'reset'
+        ? { reset_password_code: null, reset_password_expires: null }
+        : { verification_code: null, verification_code_expires: null },
+    );
+  }
+
   private transformUserResponse(user: User) {
     const userData = omitUserSecrets(user);
     return {
@@ -194,12 +275,6 @@ export class AuthService {
 
         // Extraer schedule del DTO original
         const { password, schedule, ...userData } = createEmployeeDto;
-
-        console.log('Datos recibidos para crear empleado:', {
-          email: createEmployeeDto.email,
-          services: isWithDetails ? services : 'No disponible',
-          schedule: schedule,
-        });
 
         // Crear el empleado base
         const newEmployee = manager.create(User, {
@@ -324,26 +399,6 @@ export class AuthService {
     employeeId: string,
     updateData: UpdateEmployeeDto,
   ) {
-    console.log(
-      '🟢 DATOS RECIBIDOS BACKEND:',
-      JSON.stringify({
-        empleadoId: employeeId,
-        nombre: updateData.name,
-        apellido: updateData.lastname,
-        servicios: updateData.services?.length || 0,
-        diasHorario: updateData.schedule
-          ? Object.keys(updateData.schedule).length
-          : 0,
-      }),
-    );
-
-    if (updateData.services && updateData.services.length > 0) {
-      console.log(
-        '🟢 SERVICIOS RECIBIDOS:',
-        JSON.stringify(updateData.services),
-      );
-    }
-
     try {
       // Usamos transacción para garantizar consistencia
       return await this.dataSource.transaction(async (manager) => {
@@ -743,171 +798,85 @@ export class AuthService {
 
   async generateVerificationCode(email: string, isNewUser: boolean = false) {
     try {
-      console.log(`🔥🔥🔥 MÉTODO GENERATEVERIFICATIONCODE LLAMADO`);
-      console.log(`📧 Email: ${email}`);
-      console.log(`👤 isNewUser: ${isNewUser}`);
-      console.log(`⏰ Timestamp: ${new Date().toISOString()}`);
+      let user = await this.userRepository.findOne({ where: { email } });
 
-      let user;
-
-      if (isNewUser) {
-        console.log(`🆕 Procesando como NUEVO USUARIO...`);
-
-        // ← CORREGIDO: Para nuevos usuarios, primero buscar si ya existe
-        user = await this.userRepository.findOne({ where: { email } });
-
-        if (user) {
-          console.log(`✅ Usuario ya existe en BD: ${user.id}`);
-          // Si el usuario ya existe, solo actualizamos el código
-        } else {
-          console.log(`👤 Usuario no existe, creando registro temporal...`);
-          // Solo crear si no existe
-          user = this.userRepository.create({
-            email: email,
-            is_email_verified: false,
-            name: 'Pendiente',
-            lastname: 'Pendiente',
-            phone: 'Pendiente',
-            // Nunca en texto plano: contraseña aleatoria con hash hasta el registro real.
-            password: await this.hashPassword(uuid()),
-            is_google_account: false,
-          });
-          console.log(`👤 Usuario temporal creado en memoria`);
-        }
-      } else {
-        console.log(`👤 Buscando usuario EXISTENTE...`);
-
-        user = await this.userRepository.findOne({ where: { email } });
-
-        if (!user) {
-          console.log(`❌ Usuario no encontrado para email: ${email}`);
+      if (!user) {
+        if (!isNewUser) {
           throw new NotFoundException('Usuario no encontrado');
         }
-
-        console.log(`✅ Usuario existente encontrado: ${user.id}`);
+        // Registro temporal hasta completar el alta.
+        user = this.userRepository.create({
+          email: email,
+          is_email_verified: false,
+          name: 'Pendiente',
+          lastname: 'Pendiente',
+          phone: 'Pendiente',
+          // Nunca en texto plano: contraseña aleatoria con hash hasta el registro real.
+          password: await this.hashPassword(uuid()),
+          is_google_account: false,
+        });
       }
 
-      // Generar código de 6 dígitos
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      console.log(`📝 Código generado: ${code}`);
-
-      // Establecer expiración (10 minutos)
-      const expires = new Date();
-      expires.setMinutes(expires.getMinutes() + 10);
-      console.log(`⏰ Código expira en: ${expires.toISOString()}`);
-
-      // Actualizar el usuario con el código
+      const code = this.generateCode();
       user.verification_code = code;
-      user.verification_code_expires = expires;
-
-      console.log(`💾 Guardando código en base de datos...`);
+      user.verification_code_expires = this.codeExpiry();
       await this.userRepository.save(user);
-      console.log(`✅ Código guardado exitosamente en BD`);
+      this.verificationAttempts.reset('verify', user.id);
 
-      // ENVIAR EMAIL
-      console.log(`📧 INICIANDO PROCESO DE ENVÍO DE EMAIL...`);
-      console.log(`📧 Servicio de email disponible: ${!!this.emailService}`);
-      console.log(
-        `📧 Método sendVerificationCode disponible: ${!!this.emailService?.sendVerificationCode}`,
-      );
-
+      let emailSent: boolean;
       try {
-        console.log(`📨 Llamando a emailService.sendVerificationCode...`);
-        const emailSent = await this.emailService.sendVerificationCode(
-          email,
-          code,
-        );
-
-        console.log(`📧 Resultado del envío: ${emailSent}`);
-        console.log(`📧 Tipo de resultado: ${typeof emailSent}`);
-        console.log(`📧 Es truthy: ${!!emailSent}`);
-
-        if (!emailSent) {
-          console.log(`❌❌❌ EMAIL NO SE ENVIÓ - emailSent es falsy`);
-          throw new InternalServerErrorException(
-            'Error al enviar el código de verificación',
-          );
-        }
-
-        console.log(`✅✅✅ EMAIL ENVIADO EXITOSAMENTE`);
+        emailSent = await this.emailService.sendVerificationCode(email, code);
       } catch (emailError) {
-        console.error(`❌❌❌ ERROR EN ENVÍO DE EMAIL:`);
-        console.error(`Tipo de error: ${emailError.constructor.name}`);
-        console.error(`Mensaje: ${emailError.message}`);
-        console.error(`Stack: ${emailError.stack}`);
-
+        this.logger.error(
+          `Error enviando el código de verificación: ${emailError.message}`,
+        );
         throw new InternalServerErrorException(
-          `Error al enviar email de verificación: ${emailError.message}`,
+          'Error al enviar el código de verificación',
+        );
+      }
+      if (!emailSent) {
+        throw new InternalServerErrorException(
+          'Error al enviar el código de verificación',
         );
       }
 
-      console.log(`🎉 MÉTODO GENERATEVERIFICATIONCODE COMPLETADO EXITOSAMENTE`);
       return { message: 'Código de verificación enviado' };
     } catch (error) {
-      console.error('❌❌❌ ERROR COMPLETO EN GENERATEVERIFICATIONCODE:');
-      console.error('Tipo de error:', error.constructor.name);
-      console.error('Mensaje:', error.message);
-      console.error('Stack:', error.stack);
-
       if (
         error instanceof NotFoundException ||
         error instanceof InternalServerErrorException
       ) {
         throw error;
       }
-
+      this.logger.error(
+        `Error inesperado generando el código: ${error.message}`,
+      );
       throw new InternalServerErrorException(
-        `Error inesperado en generación de código: ${error.message}`,
+        'Error inesperado en generación de código',
       );
     }
   }
 
   async verifyEmail(email: string, code: string) {
-    try {
-      const user = await this.findUserWithSecrets({ email }, [
-        'verification_code',
-        'verification_code_expires',
-      ]);
-
-      if (!user) {
-        console.log(`Usuario no encontrado para email: ${email}`);
-        throw new NotFoundException('Usuario no encontrado');
-      }
-
-      console.log(
-        `Código almacenado: ${user.verification_code}, Código ingresado: ${code}`,
-      );
-      console.log(
-        `Fecha de expiración: ${user.verification_code_expires}, Fecha actual: ${new Date()}`,
-      );
-
-      // Verificar si el código es válido y no ha expirado
-      if (user.verification_code !== code) {
-        console.log('Código inválido');
-        throw new UnauthorizedException('Código de verificación inválido');
-      }
-
-      if (new Date() > user.verification_code_expires) {
-        console.log('Código expirado');
-        throw new UnauthorizedException(
-          'El código de verificación ha expirado',
-        );
-      }
-
-      // Marcar email como verificado
-      user.is_email_verified = true;
-      user.verification_code = null;
-      user.verification_code_expires = null;
-      await this.userRepository.save(user);
-
-      return {
-        message: 'Email verificado correctamente',
-        is_verified: true,
-      };
-    } catch (error) {
-      console.error('Error en verificación de email:', error);
-      throw error;
+    const user = await this.findUserWithSecrets({ email }, [
+      'verification_code',
+      'verification_code_expires',
+    ]);
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
     }
+
+    await this.assertValidCode('verify', user, code);
+
+    user.is_email_verified = true;
+    user.verification_code = null;
+    user.verification_code_expires = null;
+    await this.userRepository.save(user);
+
+    return {
+      message: 'Email verificado correctamente',
+      is_verified: true,
+    };
   }
 
   async getEmployeesByOwner(ownerId: string, includeDeleted: boolean = false) {
@@ -1116,17 +1085,11 @@ export class AuthService {
         throw new NotFoundException('Usuario no encontrado');
       }
 
-      // Generar código de 6 dígitos
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-
-      // Establecer expiración (10 minutos)
-      const expires = new Date();
-      expires.setMinutes(expires.getMinutes() + 10);
-
-      // Guardar en el usuario
+      const code = this.generateCode();
       user.reset_password_code = code;
-      user.reset_password_expires = expires;
+      user.reset_password_expires = this.codeExpiry();
       await this.userRepository.save(user);
+      this.verificationAttempts.reset('reset', user.id);
 
       // Enviar email
       const emailSent = await this.emailService.sendPasswordResetCode(
@@ -1142,59 +1105,34 @@ export class AuthService {
 
       return { message: 'Código de recuperación enviado' };
     } catch (error) {
-      console.error('Error generando código de recuperación:', error);
+      this.logger.error(
+        `Error generando código de recuperación: ${error.message}`,
+      );
       throw error;
     }
   }
 
   async resetPassword(email: string, code: string, newPassword: string) {
-    try {
-      const user = await this.findUserWithSecrets({ email }, [
-        'reset_password_code',
-        'reset_password_expires',
-      ]);
-
-      if (!user) {
-        throw new NotFoundException('Usuario no encontrado');
-      }
-
-      console.log(
-        `Código almacenado: ${user.reset_password_code}, Código ingresado: ${code}`,
-      );
-      console.log(
-        `Fecha de expiración: ${user.reset_password_expires}, Fecha actual: ${new Date()}`,
-      );
-
-      // Verificar si el código es válido y no ha expirado
-      if (user.reset_password_code !== code) {
-        throw new UnauthorizedException('Código de recuperación inválido');
-      }
-
-      if (
-        !user.reset_password_expires ||
-        new Date() > user.reset_password_expires
-      ) {
-        throw new UnauthorizedException(
-          'El código de recuperación ha expirado',
-        );
-      }
-
-      // Actualizar la contraseña
-      user.password = await this.hashPassword(newPassword);
-      user.reset_password_code = null;
-      user.reset_password_expires = null;
-      await this.userRepository.save(user);
-
-      return {
-        message: 'Contraseña actualizada correctamente',
-      };
-    } catch (error) {
-      console.error('Error restableciendo contraseña:', error);
-      throw error;
+    const user = await this.findUserWithSecrets({ email }, [
+      'reset_password_code',
+      'reset_password_expires',
+    ]);
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
     }
+
+    await this.assertValidCode('reset', user, code);
+
+    user.password = await this.hashPassword(newPassword);
+    user.reset_password_code = null;
+    user.reset_password_expires = null;
+    await this.userRepository.save(user);
+
+    return {
+      message: 'Contraseña actualizada correctamente',
+    };
   }
 
-  // En auth.service.ts - Modificar el método toggleEmployeeStatus
   async toggleEmployeeStatus(
     ownerId: string,
     employeeId: string,
@@ -1280,16 +1218,7 @@ export class AuthService {
         throw new NotFoundException('Empleado no encontrado');
       }
 
-      // Verificar el código
-      if (employee.verification_code !== code) {
-        throw new UnauthorizedException('Código de verificación inválido');
-      }
-
-      if (new Date() > employee.verification_code_expires) {
-        throw new UnauthorizedException(
-          'El código de verificación ha expirado',
-        );
-      }
+      await this.assertValidCode('verify', employee, code);
 
       // Activar el empleado
       employee.isActive = true;

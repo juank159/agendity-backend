@@ -321,7 +321,7 @@ export class WompiService {
     type: 'CARD' | 'NEQUI',
   ): Promise<number> {
     try {
-      this.logger.log(`Creando fuente de pago con token: ${token}`);
+      this.logger.log('Creando fuente de pago');
 
       // Modo stub para desarrollo
       if (this.stubMode) {

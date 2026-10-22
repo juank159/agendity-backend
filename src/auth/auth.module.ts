@@ -36,6 +36,7 @@
 
 import { forwardRef, Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { VerificationAttemptsService } from './verification-attempts.service';
 import { AuthController } from './auth.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from 'src/users/entities/user.entity';
@@ -68,7 +69,7 @@ import { SchedulesModule } from 'src/schedules/schedules.module';
     EmailModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, VerificationAttemptsService],
   exports: [JwtStrategy, AuthService], // Exportar AuthService para que pueda ser usado por otros módulos
 })
 export class AuthModule {}

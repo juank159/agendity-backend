@@ -41,8 +41,6 @@ export class AppointmentsController {
     @GetUser() user: User,
   ) {
     console.log('=== CREATE APPOINTMENT DEBUG ===');
-    console.log('Fecha recibida:', createAppointmentDto.date);
-    console.log('DTO completo:', createAppointmentDto);
 
     // Validar formato ISO 8601
     const date = new Date(createAppointmentDto.date);
@@ -164,7 +162,6 @@ export class AppointmentsController {
   ) {
     try {
       // Imprimir el objeto completo para depuración
-      console.log('User object from JWT:', JSON.stringify(user, null, 2));
 
       // Extraer roles de manera más robusta
       let userRoles = [];

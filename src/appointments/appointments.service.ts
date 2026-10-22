@@ -140,7 +140,6 @@ export class AppointmentsService {
     userId: string,
   ): Promise<Appointment> {
     try {
-      console.log('Datos recibidos:', createAppointmentDto);
 
       // Verificar los límites de suscripción antes de crear la cita
       const subscriptionStatus =

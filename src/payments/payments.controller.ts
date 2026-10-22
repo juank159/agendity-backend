@@ -101,10 +101,6 @@ export class PaymentsController {
 
           // Extraer owner_id del token
           ownerId = decodedToken.owner_id;
-          console.log(
-            'Token decodificado:',
-            JSON.stringify(decodedToken, null, 2),
-          );
           console.log('Owner ID extraído del token:', ownerId);
         } catch (error) {
           console.error('Error decodificando token:', error);

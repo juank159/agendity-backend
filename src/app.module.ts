@@ -19,6 +19,7 @@ import { DataSourceConfig } from './config/data.postgres.source';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ClassSerializerInterceptor } from '@nestjs/common';
 import { JwtAuthGuard } from './auth/jwt/jwt.auth.guard';
@@ -36,6 +37,9 @@ import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
     }),
 
     EventEmitterModule.forRoot(),
+
+    // Almacén en memoria para @RateLimit (solo rutas de /auth). Ver common/decorators/rate-limit.decorator.ts
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
 
     UsersModule,
 

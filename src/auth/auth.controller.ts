@@ -22,12 +22,17 @@ import { CreateEmployeeWithDetailsDto } from './dto/create-employee-with-details
 import { ToggleEmployeeStatusDto } from './dto/toggle-employee-status.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Public } from '../common/decorators/public.decorator';
+import {
+  AUTH_RATE_LIMITS,
+  RateLimit,
+} from '../common/decorators/rate-limit.decorator';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  @RateLimit(AUTH_RATE_LIMITS.registerOwner)
   @Post('register/owner')
   registerOwner(@Body() createAuthDto: CreateAuthDto) {
     return this.authService.createOwner(createAuthDto);
@@ -89,6 +94,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit(AUTH_RATE_LIMITS.login)
   @Post('login')
   @HttpCode(200)
   login(@Body() loginAuthDto: LoginAuthDto) {
@@ -96,6 +102,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit(AUTH_RATE_LIMITS.google)
   @Post('google')
   @HttpCode(200)
   googleLogin(@Body('token') token: string) {
@@ -108,6 +115,7 @@ export class AuthController {
   // }
 
   @Public()
+  @RateLimit(AUTH_RATE_LIMITS.requestCode)
   @Post('verify/request-code')
   requestVerificationCode(
     @Body('email') email: string,
@@ -117,6 +125,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit(AUTH_RATE_LIMITS.verifyCode)
   @Post('verify/email')
   verifyEmail(@Body('email') email: string, @Body('code') code: string) {
     return this.authService.verifyEmail(email, code);
@@ -128,6 +137,7 @@ export class AuthController {
   // }
 
   @Public()
+  @RateLimit(AUTH_RATE_LIMITS.forgotPassword)
   @Post('forgot-password')
   forgotPassword(@Body('email') email: string) {
     return this.authService.generatePasswordResetCode(email);
@@ -143,6 +153,7 @@ export class AuthController {
   // }
 
   @Public()
+  @RateLimit(AUTH_RATE_LIMITS.verifyCode)
   @Post('reset-password')
   resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
     return this.authService.resetPassword(
@@ -183,6 +194,7 @@ export class AuthController {
 
   // La app la llama con la sesión del Owner (verify_employee_email_controller.dart).
   @hasRoles(JwtRoles.Owner)
+  @RateLimit(AUTH_RATE_LIMITS.verifyCode)
   @Post('verify/employee-email')
   verifyEmployeeEmail(
     @GetUser() owner: JwtPayload,

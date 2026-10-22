@@ -37,7 +37,7 @@ export class EmailService {
 
   async sendVerificationCode(email: string, code: string): Promise<boolean> {
     try {
-      this.logger.log(`Enviando código ${code} a ${email}`);
+      this.logger.log('Enviando código de verificación');
 
       const mailOptions = {
         from: this.configService.get<string>('EMAIL_USER'),
@@ -66,7 +66,7 @@ export class EmailService {
 
   async sendPasswordResetCode(email: string, code: string): Promise<boolean> {
     try {
-      console.log(`Enviando código de recuperación ${code} a ${email}`);
+      this.logger.log('Enviando código de recuperación');
 
       const mailOptions = {
         from: this.configService.get('EMAIL_USER'),
