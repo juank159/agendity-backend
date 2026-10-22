@@ -2,12 +2,11 @@
  * Tarea 1.06: todo error HTTP sale con el formato de ARQUITECTURA.md §3
  * `{ statusCode, code, message: string, details?: string[] }`.
  *
- * Sin modificar datos: el 409 de negocio (borrarse a sí mismo) se corta antes de
- * escribir y además `Repository.remove` está interceptado; el 500 se simula
- * haciendo fallar un método de lectura.
+ * Sin modificar datos: el 409 de negocio (email ya registrado) se corta antes de
+ * crear nada; el 500 se simula haciendo fallar un método de lectura.
  */
 import { INestApplication } from '@nestjs/common';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { CategoriesService } from '../src/categories/categories.service';
 import { User } from '../src/users/entities/user.entity';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
@@ -92,16 +91,19 @@ describe('Formato de errores (e2e)', () => {
     expectContract(res.body, 404, 'NOT_FOUND');
   });
 
-  it('409 de negocio con code: el dueño no puede eliminarse', async () => {
-    const remove = jest
-      .spyOn(Repository.prototype, 'remove')
-      .mockImplementation(async (entity) => entity);
-    const res = await http
-      .delete(`/api/users/${owner.id}`)
-      .set('Authorization', `Bearer ${ownerToken}`);
-    expectContract(res.body, 409, 'OWNER_NOT_DELETABLE');
-    expect(res.body.message).toBe('El dueño del negocio no puede eliminarse');
-    expect(remove).not.toHaveBeenCalled();
+  it('409 de negocio con code: email ya registrado (texto que compara la app)', async () => {
+    // createOwner valida el duplicado antes de crear nada: no escribe.
+    const res = await http.post('/api/auth/register/owner').send({
+      name: 'Duplicado',
+      lastname: 'Prueba',
+      email: owner.email,
+      phone: '3000000000',
+      password: 'Clave@Segura123',
+    });
+    expectContract(res.body, 409, 'DUPLICATE_EMAIL');
+    expect(res.body.message).toBe(
+      `Ya existe un usuario con el email: ${owner.email}`,
+    );
   });
 
   it('500 sin stack ni mensaje interno', async () => {

@@ -13,8 +13,6 @@ import { Repository } from 'typeorm';
 
 import { FindUserQuery } from 'src/auth/interfaces';
 import { UserAccessActor, assertCanManageUser } from './user-access';
-import { BusinessException } from 'src/common/exceptions/business.exception';
-import { ErrorCode } from 'src/common/constants/error-codes';
 
 @Injectable()
 export class UsersService {
@@ -101,23 +99,6 @@ export class UsersService {
     } catch (error) {
       this.handleDBErrors(error);
     }
-  }
-
-  /** Solo empleados propios. El dueño no puede eliminarse (regla de negocio). */
-  async remove(actor: UserAccessActor, id: string): Promise<void> {
-    if (id === actor.id) {
-      throw new BusinessException(
-        ErrorCode.OWNER_NOT_DELETABLE,
-        'El dueño del negocio no puede eliminarse',
-      );
-    }
-    const user = await assertCanManageUser(
-      this.usersRepository,
-      actor,
-      { id },
-      { employeesOnly: true },
-    );
-    await this.usersRepository.remove(user);
   }
 
   private validateQuery(query: FindUserQuery): void {

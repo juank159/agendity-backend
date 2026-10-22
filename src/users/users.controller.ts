@@ -5,7 +5,6 @@ import {
   Body,
   Patch,
   Param,
-  Delete,
   BadRequestException,
   UseInterceptors,
   UploadedFile,
@@ -108,9 +107,6 @@ export class UsersController {
     }
   }
 
-  @hasRoles(JwtRoles.Owner)
-  @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string, @GetUser() actor: JwtPayload) {
-    return this.usersService.remove(actor, id);
-  }
+  // Sin DELETE: el borrado de empleados es soft-delete y vive en
+  // DELETE /auth/employee/:id (tarea 1.21). Borrar físicamente rompía las FK.
 }

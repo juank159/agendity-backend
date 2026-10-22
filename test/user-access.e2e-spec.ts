@@ -6,8 +6,8 @@
  *   y el empleado real contra su Owner. Responden 404/403/400 ANTES de escribir.
  * - Caso permitido: PATCH idempotente (se envía el mismo nombre que ya tiene) y se
  *   comprueba que la fila no cambió (ni `name` ni `updated_at`).
- * - No se borra a nadie: DELETE solo se prueba en casos que se rechazan y, además,
- *   `Repository.remove` está interceptado en ese test (si el control fallara, no borra).
+ * - No se borra a nadie: `DELETE /users/:id` ya no existe (1.21) y, por si acaso,
+ *   `Repository.remove/softDelete` están interceptados en los tests que lo tocan.
  */
 import { INestApplication } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
@@ -60,7 +60,7 @@ describe('Acceso a usuarios por Owner (e2e)', () => {
   const targets = () =>
     [owner, employee].filter((u): u is User => !!u).map((u) => u.id);
 
-  it('un Owner ajeno recibe 404 al leer, editar, cambiar imagen o borrar', async () => {
+  it('un Owner ajeno recibe 404 al leer, editar o cambiar la imagen', async () => {
     // Red de seguridad: si el control fallara, el DELETE no debe borrar datos reales.
     const remove = jest
       .spyOn(Repository.prototype, 'remove')
@@ -88,10 +88,6 @@ describe('Acceso a usuarios por Owner (e2e)', () => {
         [
           `PATCH ${id}/image`,
           () => http.patch(`/api/users/${id}/image`).set(auth(strangerToken)),
-        ],
-        [
-          `DELETE ${id}`,
-          () => http.delete(`/api/users/${id}`).set(auth(strangerToken)),
         ],
       ];
       // Cada petición se crea justo antes de enviarla: supertest hace listen(0)
@@ -136,15 +132,26 @@ describe('Acceso a usuarios por Owner (e2e)', () => {
     }
   });
 
-  it('el Owner no puede borrarse a sí mismo (409)', async () => {
+  it('DELETE /users/:id ya no existe (1.21): 404 de ruta y no borra nada', async () => {
     const remove = jest
       .spyOn(Repository.prototype, 'remove')
       .mockImplementation(async (entity) => entity);
-    const res = await http
-      .delete(`/api/users/${owner.id}`)
-      .set(auth(ownerToken));
-    expect(res.status).toBe(409);
+    const softDelete = jest
+      .spyOn(Repository.prototype, 'softDelete')
+      .mockImplementation(async () => ({
+        raw: [],
+        affected: 0,
+        generatedMaps: [],
+      }));
+    for (const target of [owner, employee].filter((u): u is User => !!u)) {
+      const res = await http
+        .delete(`/api/users/${target.id}`)
+        .set(auth(ownerToken));
+      expect(res.status).toBe(404);
+      expect(res.body.message).toBe('Recurso no encontrado');
+    }
     expect(remove).not.toHaveBeenCalled();
+    expect(softDelete).not.toHaveBeenCalled();
   });
 
   it('PATCH idempotente del propio Owner y de su empleado: 200 sin cambios en la BD', async () => {
