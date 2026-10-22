@@ -13,6 +13,7 @@ export const ErrorCode = {
   NOT_FOUND: 'NOT_FOUND',
   CONFLICT: 'CONFLICT',
   SLOT_UNAVAILABLE: 'SLOT_UNAVAILABLE',
+  PROFESSIONAL_INACTIVE: 'PROFESSIONAL_INACTIVE',
   TRIAL_LIMIT_REACHED: 'TRIAL_LIMIT_REACHED',
   SUBSCRIPTION_INACTIVE: 'SUBSCRIPTION_INACTIVE',
   DUPLICATE_EMAIL: 'DUPLICATE_EMAIL',
@@ -34,6 +35,7 @@ export const ERROR_CODE_STATUS: Record<ErrorCode, HttpStatus> = {
   NOT_FOUND: HttpStatus.NOT_FOUND,
   CONFLICT: HttpStatus.CONFLICT,
   SLOT_UNAVAILABLE: HttpStatus.CONFLICT,
+  PROFESSIONAL_INACTIVE: HttpStatus.CONFLICT,
   TRIAL_LIMIT_REACHED: HttpStatus.PAYMENT_REQUIRED,
   SUBSCRIPTION_INACTIVE: HttpStatus.PAYMENT_REQUIRED,
   DUPLICATE_EMAIL: HttpStatus.CONFLICT,
@@ -53,6 +55,8 @@ export const ERROR_CODE_STATUS: Record<ErrorCode, HttpStatus> = {
 export const LEGACY_STATUS = {
   /** appointments_controller.dart comprueba `statusCode == 400` para el diálogo de suscripción. */
   SLOT_UNAVAILABLE: HttpStatus.BAD_REQUEST,
+  /** Mismo camino de error que el resto de fallos al crear/editar una cita en la app. */
+  PROFESSIONAL_INACTIVE: HttpStatus.BAD_REQUEST,
   TRIAL_LIMIT_REACHED: HttpStatus.BAD_REQUEST,
   SUBSCRIPTION_INACTIVE: HttpStatus.BAD_REQUEST,
   /** employees_remote_datasource.dart comprueba `statusCode == 403` para OwnerDeletionFailure. */

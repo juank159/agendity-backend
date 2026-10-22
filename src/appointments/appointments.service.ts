@@ -5,14 +5,15 @@ import {
   Inject,
   forwardRef,
   HttpException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Repository,
-  Not,
   Between,
   FindOptionsWhere,
   DataSource,
+  EntityManager,
 } from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
@@ -28,9 +29,20 @@ import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
 import { AppointmentScope, toAppointmentScope } from './appointment-scope';
+import {
+  appointmentDurationSql,
+  appointmentEnd,
+  blocksSlot,
+  fitsSchedule,
+  NON_BLOCKING_STATUSES,
+} from './appointment-slot';
+import { Schedule } from 'src/schedules/entities/schedule.entity';
+import { User } from 'src/users/entities/user.entity';
 
 @Injectable()
 export class AppointmentsService {
+  private readonly logger = new Logger(AppointmentsService.name);
+
   constructor(
     @InjectRepository(Appointment)
     private readonly appointmentRepository: Repository<Appointment>,
@@ -71,10 +83,11 @@ export class AppointmentsService {
 
   /**
    * Crea una cita del negocio `tenantId` (Owner o Employee). Cliente, profesional
-   * y servicios deben ser del mismo negocio (si no, 404); se validan antes de
-   * tocar la suscripción. Después, en UNA transacción: se consume el cupo
-   * (trial o plan, con lock por negocio), se comprueba el horario y se guarda.
-   * Si algo falla, el rollback devuelve la cita al cupo.
+   * y servicios deben ser del mismo negocio (si no, 404) y el profesional debe
+   * estar activo; todo se valida antes de tocar la suscripción. Después, en UNA
+   * transacción: se consume el cupo (trial o plan, con lock por negocio), se
+   * comprueba el hueco con lock por profesional (`assertSlotAvailable`) y se
+   * guarda. Si algo falla, el rollback devuelve la cita al cupo.
    */
   async create(
     createAppointmentDto: CreateAppointmentDto,
@@ -97,6 +110,7 @@ export class AppointmentsService {
       if (!client || !professional) {
         throw new NotFoundException('Cliente o profesional no encontrado');
       }
+      this.assertProfessionalSchedulable(professional);
 
       const services = await Promise.all(
         service_ids.map((id) => this.servicesService.findOne(id, tenantId)),
@@ -125,25 +139,19 @@ export class AppointmentsService {
       const savedAppointment = await this.dataSource.transaction(
         async (manager) => {
           // Lanza TRIAL_LIMIT_REACHED / SUBSCRIPTION_INACTIVE (HTTP 400 legado).
+          // Orden de locks: negocio (cupo) → profesional (hueco). `update` solo
+          // toma el del profesional, así que no hay ciclo (sin deadlock).
           await this.subscriptionsService.consumeAppointmentQuota(
             tenantId,
             manager,
           );
 
-          const isAvailable = await this.checkProfessionalAvailability(
-            professional_id,
-            date,
-            services,
+          await this.assertSlotAvailable(manager, {
             tenantId,
-          );
-
-          if (!isAvailable) {
-            throw new BusinessException(
-              ErrorCode.SLOT_UNAVAILABLE,
-              'Horario no disponible',
-              LEGACY_STATUS.SLOT_UNAVAILABLE,
-            );
-          }
+            professionalId: professional_id,
+            start: appointmentToSave.date,
+            services,
+          });
 
           return await manager
             .getRepository(Appointment)
@@ -164,83 +172,113 @@ export class AppointmentsService {
     }
   }
 
-  // Verifica que el profesional no tenga otra cita del negocio que se solape (regla actual; la revisa 2.04).
-  async checkProfessionalAvailability(
-    professionalId: string,
-    appointmentDateTime: string | Date,
-    services: any[],
-    tenantId: string,
-  ): Promise<boolean> {
-    try {
-      const appointmentDate = new Date(appointmentDateTime);
-
-      // 1. Calcular la duración total de los servicios solicitados
-      const totalDurationMinutes = services.reduce(
-        (sum, service) =>
-          sum + (service.duration ? parseInt(service.duration) : 30),
-        0,
-      );
-
-      // 2. Calcular la hora de finalización estimada
-      const appointmentEndTime = new Date(appointmentDate);
-      appointmentEndTime.setMinutes(
-        appointmentEndTime.getMinutes() + totalDurationMinutes,
-      );
-
-      // 3. Buscar todas las citas del profesional para ese día
-      const startOfDay = new Date(appointmentDate);
-      startOfDay.setHours(0, 0, 0, 0);
-
-      const endOfDay = new Date(appointmentDate);
-      endOfDay.setHours(23, 59, 59, 999);
-
-      const appointmentsForDay = await this.appointmentRepository.find({
-        where: {
-          professionalId,
-          ownerId: tenantId,
-          date: Between(startOfDay, endOfDay),
-        },
-        relations: ['services'],
-      });
-
-      // 4. Verificar si hay solapamiento con alguna cita existente
-      for (const existingAppointment of appointmentsForDay) {
-        const existingDuration = existingAppointment.services.reduce(
-          (sum, service) => sum + (service.duration || 30),
-          0,
-        );
-
-        const existingStartTime = new Date(existingAppointment.date);
-        const existingEndTime = new Date(existingStartTime);
-        existingEndTime.setMinutes(
-          existingEndTime.getMinutes() + existingDuration,
-        );
-
-        const hasOverlap =
-          // Caso 1: La nueva cita comienza durante una cita existente
-          (appointmentDate >= existingStartTime &&
-            appointmentDate < existingEndTime) ||
-          // Caso 2: La nueva cita termina durante una cita existente
-          (appointmentEndTime > existingStartTime &&
-            appointmentEndTime <= existingEndTime) ||
-          // Caso 3: La nueva cita contiene completamente una cita existente
-          (appointmentDate <= existingStartTime &&
-            appointmentEndTime >= existingEndTime);
-
-        if (hasOverlap) {
-          return false;
-        }
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Error al verificar disponibilidad:', error?.message);
-      throw new InternalServerErrorException(
-        'Error al verificar disponibilidad',
+  /** Un profesional desactivado (o borrado) no recibe citas nuevas ni movidas. */
+  private assertProfessionalSchedulable(professional: User): void {
+    if (!professional?.isActive || professional.deletedAt) {
+      throw new BusinessException(
+        ErrorCode.PROFESSIONAL_INACTIVE,
+        'El profesional no está activo y no puede recibir citas',
+        LEGACY_STATUS.PROFESSIONAL_INACTIVE,
       );
     }
   }
 
+  /**
+   * Regla única de disponibilidad (crear y mover/editar). Debe llamarse DENTRO
+   * de la transacción que guarda la cita:
+   * 1. Lock por profesional (`pg_advisory_xact_lock`) hasta el commit: dos
+   *    peticiones para el mismo profesional se serializan y la segunda ya ve la
+   *    cita de la primera (READ COMMITTED toma foto nueva por sentencia).
+   * 2. Horario del profesional (`schedules`) de ese día de la semana.
+   * 3. Bloqueos (`time_block`) que se crucen con el hueco.
+   * 4. Otras citas del profesional que se crucen, salvo las `CANCELLED` y la
+   *    propia (`excludeAppointmentId`, al editar).
+   * Intervalos semiabiertos [inicio, fin): una cita puede empezar justo cuando
+   * termina otra. Cualquier fallo → `SLOT_UNAVAILABLE` "Horario no disponible"
+   * (la app muestra su diálogo comparando ese texto; HTTP 400 legado, D-11).
+   */
+  async assertSlotAvailable(
+    manager: EntityManager,
+    slot: {
+      tenantId: string;
+      professionalId: string;
+      start: Date;
+      services: { duration?: number | string | null }[];
+      excludeAppointmentId?: string;
+    },
+  ): Promise<void> {
+    const { tenantId, professionalId, start, services } = slot;
+    const exclude = slot.excludeAppointmentId ?? null;
+    if (!tenantId || !professionalId) {
+      // TypeORM ignora `undefined` en el where: nunca consultar sin ellos.
+      throw new NotFoundException('Profesional no encontrado');
+    }
+    if (!(start instanceof Date) || isNaN(start.getTime())) {
+      throw new BusinessException(
+        ErrorCode.BAD_REQUEST,
+        'Fecha de cita inválida',
+      );
+    }
+    const end = appointmentEnd(start, services);
+
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`appointment-slot:${professionalId}`],
+    );
+
+    const schedules = await manager.getRepository(Schedule).find({
+      where: { user: { id: professionalId } },
+    });
+    if (!fitsSchedule(start, end, schedules)) {
+      this.slotUnavailable('fuera del horario del profesional');
+    }
+
+    // Fechas como `Date`: node-postgres las manda en hora local y Postgres,
+    // al compararlas con un `timestamp` sin zona, usa esa hora local (2.05).
+    const blocks = await manager.query(
+      `SELECT 1 FROM time_block tb
+        WHERE tb."userId" = $1
+          AND tb.start_datetime < $2
+          AND tb.end_datetime > $3
+          AND ($4::uuid IS NULL OR tb."appointmentId" IS DISTINCT FROM $4::uuid)
+        LIMIT 1`,
+      [professionalId, end, start, exclude],
+    );
+    if (blocks.length) this.slotUnavailable('bloqueo de tiempo');
+
+    const overlapping = await manager.query(
+      `SELECT a.id
+         FROM appointments a
+         LEFT JOIN appointment_services aps ON aps.appointment_id = a.id
+         LEFT JOIN services s ON s.id = aps.service_id
+        WHERE a.professional_id = $1
+          AND a.owner_id = $2
+          AND NOT (a.status = ANY($3::appointments_status_enum[]))
+          AND a.date < $4
+          AND ($6::uuid IS NULL OR a.id <> $6::uuid)
+        GROUP BY a.id
+       HAVING a.date + make_interval(mins => (${appointmentDurationSql('s')})::int) > $5
+        LIMIT 1`,
+      [professionalId, tenantId, NON_BLOCKING_STATUSES, end, start, exclude],
+    );
+    if (overlapping.length) this.slotUnavailable('cruce con otra cita');
+  }
+
+  private slotUnavailable(reason: string): never {
+    this.logger.debug(`Horario no disponible: ${reason}`);
+    throw new BusinessException(
+      ErrorCode.SLOT_UNAVAILABLE,
+      'Horario no disponible',
+      LEGACY_STATUS.SLOT_UNAVAILABLE,
+    );
+  }
+
+  /**
+   * Edita una cita del negocio. Si cambia el hueco (fecha, profesional o
+   * servicios) o se reactiva una cita cancelada, se aplica la misma regla y el
+   * mismo lock que al crear (`assertSlotAvailable`), excluyendo la propia cita,
+   * en la misma transacción que guarda.
+   */
   async update(
     id: string,
     updateAppointmentDto: UpdateAppointmentDto,
@@ -308,32 +346,26 @@ export class AppointmentsService {
         );
       }
 
-      // Verificar disponibilidad (si es necesario)
-      if (
+      const nextStatus: AppointmentStatus =
+        updateData.status ?? appointment.status;
+      const slotChanged = !!(
         updateAppointmentDto.professional_id ||
         updateAppointmentDto.date ||
         updateAppointmentDto.service_ids
-      ) {
-        const professionalId =
-          updateAppointmentDto.professional_id || appointment.professionalId;
-        const date = updateAppointmentDto.date || appointment.date;
-        const services = updateData.services || appointment.services;
+      );
+      const reactivated =
+        !blocksSlot(appointment.status) && blocksSlot(nextStatus);
+      const mustCheckSlot =
+        blocksSlot(nextStatus) && (slotChanged || reactivated);
 
-        const isAvailable = await this.checkProfessionalAvailabilityForUpdate(
-          professionalId,
-          date,
-          services,
-          tenantId,
-          id, // ID de la cita actual para excluirla
-        );
-
-        if (!isAvailable) {
-          throw new BusinessException(
-            ErrorCode.SLOT_UNAVAILABLE,
-            'Horario no disponible',
-            LEGACY_STATUS.SLOT_UNAVAILABLE,
-          );
-        }
+      const professionalId =
+        updateAppointmentDto.professional_id || appointment.professionalId;
+      if (mustCheckSlot) {
+        // Recarga el profesional: si se borró (soft-delete) → 404; inactivo → error.
+        const professional =
+          updateData.professional ??
+          (await this.usersService.findTenantMember(professionalId, tenantId));
+        this.assertProfessionalSchedulable(professional);
       }
 
       // Primero va el objeto original, luego los datos de actualización
@@ -342,7 +374,18 @@ export class AppointmentsService {
         ...updateData,
       };
 
-      await this.appointmentRepository.save(appointmentToUpdate);
+      await this.dataSource.transaction(async (manager) => {
+        if (mustCheckSlot) {
+          await this.assertSlotAvailable(manager, {
+            tenantId,
+            professionalId,
+            start: new Date(updateData.date ?? appointment.date),
+            services: updateData.services ?? appointment.services,
+            excludeAppointmentId: id,
+          });
+        }
+        await manager.getRepository(Appointment).save(appointmentToUpdate);
+      });
 
       // Para asegurar que obtenemos todos los datos relacionados
       return this.findOne(id, tenantId);
@@ -351,81 +394,6 @@ export class AppointmentsService {
         entity: 'la cita',
         operation: 'actualizar',
       });
-    }
-  }
-
-  // Versión de checkProfessionalAvailability que excluye una cita específica (para updates)
-  async checkProfessionalAvailabilityForUpdate(
-    professionalId: string,
-    appointmentDateTime: string | Date,
-    services: any[],
-    tenantId: string,
-    excludeAppointmentId: string,
-  ): Promise<boolean> {
-    try {
-      const appointmentDate = new Date(appointmentDateTime);
-
-      const totalDurationMinutes = services.reduce(
-        (sum, service) =>
-          sum + (service.duration ? parseInt(service.duration) : 30),
-        0,
-      );
-
-      const appointmentEndTime = new Date(appointmentDate);
-      appointmentEndTime.setMinutes(
-        appointmentEndTime.getMinutes() + totalDurationMinutes,
-      );
-
-      const startOfDay = new Date(appointmentDate);
-      startOfDay.setHours(0, 0, 0, 0);
-
-      const endOfDay = new Date(appointmentDate);
-      endOfDay.setHours(23, 59, 59, 999);
-
-      const appointmentsForDay = await this.appointmentRepository.find({
-        where: {
-          professionalId,
-          ownerId: tenantId,
-          date: Between(startOfDay, endOfDay),
-          id: Not(excludeAppointmentId), // Excluir la cita actual
-        },
-        relations: ['services'],
-      });
-
-      for (const existingAppointment of appointmentsForDay) {
-        const existingDuration = existingAppointment.services.reduce(
-          (sum, service) => sum + (service.duration || 30),
-          0,
-        );
-
-        const existingStartTime = new Date(existingAppointment.date);
-        const existingEndTime = new Date(existingStartTime);
-        existingEndTime.setMinutes(
-          existingEndTime.getMinutes() + existingDuration,
-        );
-
-        const hasOverlap =
-          (appointmentDate >= existingStartTime &&
-            appointmentDate < existingEndTime) ||
-          (appointmentEndTime > existingStartTime &&
-            appointmentEndTime <= existingEndTime) ||
-          (appointmentDate <= existingStartTime &&
-            appointmentEndTime >= existingEndTime);
-
-        if (hasOverlap) {
-          return false;
-        }
-      }
-
-      return true;
-    } catch (error) {
-      console.error(
-        'Error al verificar disponibilidad para actualización:',
-        error?.message,
-      );
-      throw new InternalServerErrorException(
-        'Error al verificar disponibilidad',
-      );
     }
   }
 
