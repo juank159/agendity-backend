@@ -257,8 +257,8 @@ export class SubscriptionsService {
       } catch (wompiError) {
         this.logger.error(`Error al crear link de pago: ${wompiError.message}`);
 
-        // Si estamos en desarrollo, crear un link de prueba
-        if (!isProduction) {
+        // Solo con NODE_ENV=development: enlace de demostración.
+        if (this.wompiService.devShortcutsEnabled) {
           this.logger.log('Generando enlace de demostración para pruebas...');
 
           // Usar un esquema que funcione en dispositivos móviles
@@ -301,10 +301,8 @@ export class SubscriptionsService {
     } catch (error) {
       this.logger.error(`Error creating paid subscription: ${error.message}`);
 
-      // En modo desarrollo, siempre proporcionar un enlace de pago de respaldo
-      const isProduction =
-        this.configService.get<string>('NODE_ENV') === 'production';
-      if (!isProduction) {
+      // Solo con NODE_ENV=development: enlace de pago de respaldo.
+      if (this.wompiService.devShortcutsEnabled) {
         // Generar un ID aleatorio si no tenemos uno
         const fallbackId = Math.random().toString(36).substring(2, 15);
         const reference = `sub_fallback_${fallbackId}`;

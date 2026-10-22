@@ -13,12 +13,16 @@ export class WompiService {
   private readonly privateKey: string;
   private readonly eventIntegritySecret: string;
   private readonly isProduction: boolean;
+  /** `NODE_ENV=development` explícito. Cualquier otro valor (incluido vacío) = comportamiento real. */
+  private readonly isDevelopment: boolean;
   private readonly stubMode: boolean;
 
   constructor(private configService: ConfigService) {
-    this.isProduction =
-      this.configService.get<string>('NODE_ENV') === 'production';
-    this.stubMode = this.configService.get<string>('WOMPI_MODE') === 'stub';
+    const nodeEnv = this.configService.get<string>('NODE_ENV');
+    this.isProduction = nodeEnv === 'production';
+    this.isDevelopment = nodeEnv === 'development';
+    const wantsStub = this.configService.get<string>('WOMPI_MODE') === 'stub';
+    this.stubMode = this.isDevelopment && wantsStub;
 
     this.apiBaseUrl = this.isProduction
       ? 'https://production.wompi.co/v1'
@@ -30,9 +34,31 @@ export class WompiService {
       'WOMPI_EVENT_INTEGRITY_SECRET',
     );
 
+    // En producción la app no arranca sin las credenciales de Wompi.
+    if (this.isProduction) {
+      const missing = [
+        ['WOMPI_PUBLIC_KEY', this.publicKey],
+        ['WOMPI_PRIVATE_KEY', this.privateKey],
+        ['WOMPI_EVENT_INTEGRITY_SECRET', this.eventIntegritySecret],
+      ]
+        .filter(([, value]) => !value)
+        .map(([key]) => key);
+      if (missing.length > 0) {
+        throw new Error(
+          `Configuración de Wompi incompleta en producción. Faltan: ${missing.join(', ')}`,
+        );
+      }
+    }
+
+    if (wantsStub && !this.stubMode) {
+      this.logger.warn(
+        `WOMPI_MODE=stub ignorado: solo se permite con NODE_ENV=development (actual: ${nodeEnv ?? 'vacío'})`,
+      );
+    }
+
     // Log configuración
     this.logger.log(
-      `Iniciando Wompi Service en modo: ${this.isProduction ? 'PRODUCCIÓN' : 'DESARROLLO'}`,
+      `Iniciando Wompi Service (NODE_ENV=${nodeEnv ?? 'vacío'}, atajos de desarrollo: ${this.isDevelopment ? 'sí' : 'no'}, stub: ${this.stubMode ? 'sí' : 'no'})`,
     );
     this.logger.log(`API Base URL: ${this.apiBaseUrl}`);
 
@@ -55,6 +81,15 @@ export class WompiService {
         'MODO STUB ACTIVADO: Se utilizarán respuestas simuladas para Wompi',
       );
     }
+  }
+
+  /**
+   * Atajos inseguros de desarrollo (enlaces `myapp://payment-demo`, tokens y
+   * transacciones simuladas, aprobar pagos sin Wompi). Solo con `NODE_ENV=development`.
+   * También lo usan `SubscriptionsService` y `SubscriptionsController`.
+   */
+  get devShortcutsEnabled(): boolean {
+    return this.isDevelopment;
   }
 
   private getAuthHeaders() {
@@ -92,7 +127,7 @@ export class WompiService {
       }
 
       // En modo desarrollo, generar un token de prueba
-      if (!this.isProduction) {
+      if (this.isDevelopment) {
         this.logger.log('Generando token de prueba para desarrollo');
         return 'test-acceptance-token-12345';
       }
@@ -166,7 +201,7 @@ export class WompiService {
       // En modo desarrollo, si no hay credenciales de Wompi configuradas o API_KEY inválida,
       // generar un enlace de demostración sin intentar llamar a Wompi
       if (
-        !this.isProduction &&
+        this.isDevelopment &&
         (!this.privateKey || this.privateKey === 'your_private_key')
       ) {
         this.logger.log(
@@ -212,7 +247,7 @@ export class WompiService {
         }
 
         // En desarrollo, generar un enlace de demostración en caso de error
-        if (!this.isProduction) {
+        if (this.isDevelopment) {
           this.logger.log('Generando enlace de demostración alternativo...');
           return `myapp://payment-demo?reference=${reference}&redirect=${encodeURIComponent(redirectUrl)}`;
         }
@@ -251,7 +286,7 @@ export class WompiService {
       }
 
       // En desarrollo, siempre devolver un enlace de demostración en caso de cualquier error
-      if (!this.isProduction) {
+      if (this.isDevelopment) {
         this.logger.log(
           'Generando enlace de demostración como fallback final...',
         );
@@ -305,7 +340,7 @@ export class WompiService {
       }
 
       // En desarrollo, generar un token de prueba
-      if (!this.isProduction) {
+      if (this.isDevelopment) {
         this.logger.log('Generando token de tarjeta de prueba para desarrollo');
         return `test-card-token-${Math.random().toString(36).substring(2, 10)}`;
       }
@@ -351,7 +386,7 @@ export class WompiService {
       }
 
       // En desarrollo, generar un ID de prueba
-      if (!this.isProduction) {
+      if (this.isDevelopment) {
         const testId = Math.floor(Math.random() * 1000000);
         this.logger.log(`Generando ID de fuente de pago de prueba: ${testId}`);
         return testId;
@@ -437,7 +472,7 @@ export class WompiService {
       }
 
       // En desarrollo, generar una respuesta de prueba
-      if (!this.isProduction) {
+      if (this.isDevelopment) {
         this.logger.log(
           'Generando respuesta de transacción de prueba para desarrollo',
         );
@@ -560,9 +595,8 @@ export class WompiService {
       const isValid = calculatedSignature === signature;
 
       if (!isValid) {
-        this.logger.warn(
-          `Firma inválida. Esperada: ${calculatedSignature}, Recibida: ${signature}`,
-        );
+        // Nunca registrar la firma esperada: permitiría falsificar el evento.
+        this.logger.warn('Firma de webhook inválida');
       } else {
         this.logger.log('Firma de webhook válida');
       }
@@ -572,7 +606,7 @@ export class WompiService {
       this.logger.error(`Error verificando webhook: ${error.message}`);
 
       // En desarrollo, aceptar webhooks incluso si hay errores en la verificación
-      if (!this.isProduction) {
+      if (this.isDevelopment) {
         this.logger.warn(
           'En desarrollo: Aceptando webhook a pesar del error de verificación',
         );
@@ -680,7 +714,7 @@ export class WompiService {
       this.logger.error(`Error verificando transacción: ${error.message}`);
 
       // En desarrollo, simular que es exitosa para pruebas
-      if (!this.isProduction) {
+      if (this.isDevelopment) {
         return 'APPROVED';
       }
 

@@ -9,7 +9,6 @@ import {
   HttpCode,
   Logger,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
 import { CreateSubscriptionPlanDto } from '../dto/create-subscription-plan.dto';
 import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
@@ -28,7 +27,6 @@ export class SubscriptionsController {
   constructor(
     private readonly subscriptionsService: SubscriptionsService,
     private readonly wompiService: WompiService,
-    private readonly configService: ConfigService,
   ) {}
 
   // Endpoints para planes de suscripción - solo accesibles para Admin
@@ -103,7 +101,7 @@ export class SubscriptionsController {
         );
 
         // En desarrollo, activar la suscripción aunque no haya tenant_id
-        if (this.configService.get<string>('NODE_ENV') !== 'production') {
+        if (this.wompiService.devShortcutsEnabled) {
           this.logger.log(
             'Ambiente de desarrollo detectado: buscando suscripción pendiente',
           );
@@ -235,7 +233,7 @@ export class SubscriptionsController {
         }
 
         // En desarrollo, activar la suscripción automáticamente después de un tiempo
-        if (this.configService.get<string>('NODE_ENV') !== 'production') {
+        if (this.wompiService.devShortcutsEnabled) {
           this.logger.log(
             `Ambiente de desarrollo: Activando suscripción pendiente automáticamente`,
           );
