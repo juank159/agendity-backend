@@ -27,7 +27,7 @@ import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from './interfaces';
 import { Role } from 'src/roles/entities/role.entity';
 import { v4 as uuid } from 'uuid';
-import { OAuth2Client } from 'google-auth-library';
+import { OAuth2Client, TokenPayload } from 'google-auth-library';
 import { ConfigService } from '@nestjs/config';
 import { EmailService } from 'src/email/email.service';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
@@ -46,7 +46,9 @@ import {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  private googleClient: OAuth2Client;
+  private readonly googleClient: OAuth2Client;
+  /** Client IDs de la app (web, iOS, Android) aceptados como audiencia del ID token. */
+  private readonly googleClientIds: string[];
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
     @InjectRepository(Role) private readonly roleRepository: Repository<Role>,
@@ -62,10 +64,16 @@ export class AuthService {
     private readonly schedulesService: SchedulesService,
     private readonly verificationAttempts: VerificationAttemptsService,
   ) {
-    // Inicializar cliente de Google con tu Client ID
-    this.googleClient = new OAuth2Client(
+    // Solo se usa para verificar ID tokens: la audiencia va en cada llamada.
+    this.googleClient = new OAuth2Client();
+    this.googleClientIds = parseGoogleClientIds(
       this.configService.get('GOOGLE_CLIENT_ID'),
     );
+    if (this.googleClientIds.length === 0) {
+      this.logger.warn(
+        'GOOGLE_CLIENT_ID vacío: el login con Google queda desactivado.',
+      );
+    }
   }
 
   /**
@@ -748,21 +756,42 @@ export class AuthService {
     }
   }
 
-  async googleLogin(token: string) {
+  /**
+   * Verifica el ID token de Google: firma, expiración y que la audiencia sea uno
+   * de nuestros client IDs. Sin client IDs configurados no se verifica nunca
+   * (sin audiencia valdría un token emitido para cualquier app de Google).
+   */
+  private async verifyGoogleToken(token: string): Promise<TokenPayload> {
+    if (this.googleClientIds.length === 0) {
+      throw new BusinessException(
+        ErrorCode.UNAUTHORIZED,
+        'El inicio de sesión con Google no está disponible',
+      );
+    }
+    let payload: TokenPayload | undefined;
     try {
-      // Verificar el token con Google
       const ticket = await this.googleClient.verifyIdToken({
         idToken: token,
-        audience: this.configService.get('GOOGLE_CLIENT_ID'),
+        audience: this.googleClientIds,
       });
+      payload = ticket.getPayload();
+    } catch (error) {
+      this.logger.warn(`Token de Google rechazado: ${error.message}`);
+    }
+    // Sin email verificado por Google no se puede asociar a una cuenta por email.
+    if (!payload?.email || payload.email_verified !== true) {
+      throw new BusinessException(
+        ErrorCode.UNAUTHORIZED,
+        'Token de Google inválido',
+      );
+    }
+    return payload;
+  }
 
-      const payload = ticket.getPayload();
-
-      if (!payload) {
-        throw new UnauthorizedException('Token inválido');
-      }
-
-      const { email, name, picture } = payload;
+  async googleLogin(token: string) {
+    const payload = await this.verifyGoogleToken(token);
+    try {
+      const { email, name } = payload;
 
       // Buscar si el usuario ya existe
       let user = await this.userRepository.findOne({
@@ -775,7 +804,7 @@ export class AuthService {
         const ownerRole = await this.getRole('Owner');
 
         // Extraer nombre y apellido del nombre completo
-        const [firstName, ...lastNameParts] = name.split(' ');
+        const [firstName, ...lastNameParts] = (name ?? '').split(' ');
         const lastName = lastNameParts.join(' ');
 
         user = this.userRepository.create({
@@ -799,6 +828,8 @@ export class AuthService {
         token: this.generateToken(user),
       };
     } catch (error) {
+      if (error instanceof HttpException) throw error;
+      // TODO(2.10): `phone: ''` único hace fallar el alta desde el 2.º usuario nuevo.
       throw new UnauthorizedException(
         'Error en autenticación con Google: ' + error.message,
       );
@@ -1238,4 +1269,15 @@ export class AuthService {
       throw error;
     }
   }
+}
+
+/**
+ * `GOOGLE_CLIENT_ID` admite varios client IDs separados por comas (web, iOS,
+ * Android). Recorta espacios y descarta los vacíos.
+ */
+export function parseGoogleClientIds(raw: string | undefined | null): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
 }
