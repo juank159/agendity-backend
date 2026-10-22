@@ -11,6 +11,9 @@ import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { JwtService } from '@nestjs/jwt';
 import { IS_PUBLIC_KEY } from '../src/common/decorators/public.decorator';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import { signToken } from './utils/dev-fixtures';
+import { AppointmentReminderService } from '../src/appointments/appointment-reminder.service';
+import { PaymentsService } from '../src/payments/payments.service';
 
 /** Rutas públicas aprobadas (método + ruta Swagger). Cualquier cambio se revisa. */
 const PUBLIC_ROUTES = new Set<string>([
@@ -140,6 +143,76 @@ describe('Guard JWT global (e2e)', () => {
       expect(res.text).toContain('demo_reference');
     },
   );
+
+  it('ninguna ruta estática queda detrás de una :param del mismo método que la capture', () => {
+    // Orden real de registro en Express: la primera ruta que encaja gana.
+    const layers = app
+      .getHttpAdapter()
+      .getInstance()
+      ._router.stack.filter(
+        (l) => l.route && String(l.route.path).startsWith('/api/'),
+      )
+      .map((l) => ({
+        path: l.route.path as string,
+        methods: Object.keys(l.route.methods),
+        regexp: l.regexp as RegExp,
+      }));
+    const shadowed: string[] = [];
+    layers.forEach((later, j) => {
+      const sample = later.path.replace(/:[^/]+/g, 'x1');
+      for (const earlier of layers.slice(0, j)) {
+        if (earlier.path === later.path) continue;
+        const sameMethod = earlier.methods.some((m) =>
+          later.methods.includes(m),
+        );
+        if (sameMethod && earlier.regexp.test(sample)) {
+          shadowed.push(`${later.path} queda detrás de ${earlier.path}`);
+        }
+      }
+    });
+    expect(layers.length).toBeGreaterThan(100);
+    expect(shadowed).toEqual([]);
+  });
+
+  it('GET /appointments/check-reminders llega a su handler (no a :id)', async () => {
+    // Mockeado: el real programa envíos de recordatorios.
+    const check = jest
+      .spyOn(app.get(AppointmentReminderService), 'checkAndScheduleReminders')
+      .mockResolvedValue(undefined);
+    const token = signToken(
+      { id: FAKE_UUID, name: 'e2e', email: 'e2e@test.local', tenant_id: null },
+      ['Owner'],
+    );
+    const res = await http
+      .get('/api/appointments/check-reminders')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(check).toHaveBeenCalledTimes(1);
+    check.mockRestore();
+  });
+
+  it('GET /payments/diagnose-timezone llega a su handler y es solo Admin', async () => {
+    // Mockeado: el real crea y borra una tabla temporal.
+    const diagnose = jest
+      .spyOn(app.get(PaymentsService), 'diagnoseTimezoneProblem')
+      .mockResolvedValue({ ok: true } as never);
+    const user = {
+      id: FAKE_UUID,
+      name: 'e2e',
+      email: 'e2e@test.local',
+      tenant_id: null,
+    };
+    const asOwner = await http
+      .get('/api/payments/diagnose-timezone')
+      .set('Authorization', `Bearer ${signToken(user, ['Owner'])}`);
+    expect(asOwner.status).toBe(403);
+    const asAdmin = await http
+      .get('/api/payments/diagnose-timezone')
+      .set('Authorization', `Bearer ${signToken(user, ['Admin'])}`);
+    expect(asAdmin.status).toBe(200);
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    diagnose.mockRestore();
+  });
 
   it('toda ruta no pública responde 401 sin token', async () => {
     const failures: string[] = [];

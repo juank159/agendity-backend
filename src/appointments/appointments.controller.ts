@@ -72,16 +72,16 @@ export class AppointmentsController {
       this.logger.log(
         `Marcando recordatorio como enviado para cita ${id} por usuario ${user.id}`,
       );
-      
+
       const result = await this.appointmentsService.markReminderAsSent(
         id,
         user.id,
       );
-      
+
       this.logger.log(
         `Recordatorio marcado como enviado exitosamente para cita ${id}`,
       );
-      
+
       return {
         success: true,
         message: 'Recordatorio marcado como enviado',
@@ -229,17 +229,18 @@ export class AppointmentsController {
     }
   }
 
-  @Get(':id')
-  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
-    return this.appointmentsService.findOne(id, user.id);
-  }
-
+  // Las rutas estáticas van ANTES de ':id' (si no, ':id' + ParseUUIDPipe las captura con 400).
   @Get('check-reminders')
   async checkReminders(@GetUser() user: User) {
     this.logger.log(`Manual reminder check requested by user ${user.id}`);
     await this.appointmentReminderService.checkAndScheduleReminders();
     return { message: 'Reminder check completed' };
+  }
+
+  @Get(':id')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
+    return this.appointmentsService.findOne(id, user.id);
   }
 
   @Patch(':id')

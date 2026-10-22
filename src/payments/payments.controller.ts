@@ -155,6 +155,14 @@ export class PaymentsController {
     return this.paymentsService.findByAppointment(id, user.id);
   }
 
+  // Las rutas estáticas van ANTES de ':id' (si no, ':id' + ParseUUIDPipe las captura con 400).
+  // Solo Admin: el diagnóstico crea y borra una tabla temporal en la BD.
+  @Get('diagnose-timezone')
+  @hasRoles(JwtRoles.Admin)
+  async diagnoseTimezone() {
+    return this.paymentsService.diagnoseTimezoneProblem();
+  }
+
   @Get(':id')
   @hasRoles(JwtRoles.Owner)
   findOne(@Param('id', ParseUUIDPipe) id: string, @GetUser() user: User) {
@@ -247,10 +255,5 @@ export class PaymentsController {
       user.id,
       limit,
     );
-  }
-
-  @Get('diagnose-timezone')
-  async diagnoseTimezone(@GetUser('id') userId: string) {
-    return this.paymentsService.diagnoseTimezoneProblem();
   }
 }
