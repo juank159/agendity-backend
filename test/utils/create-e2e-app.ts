@@ -1,8 +1,9 @@
 /**
  * Arranca la app real (AppModule + setupApp de main.ts) para los tests e2e.
  *
- * Usa el Postgres de desarrollo, pero con `synchronize` y `migrationsRun`
- * desactivados para no tocar el esquema. Los tests solo deben hacer lecturas
+ * Usa el Postgres de desarrollo sin tocar el esquema: `synchronize` y
+ * `migrationsRun` se fuerzan a false (aunque el `.env` traiga
+ * `DB_MIGRATIONS_RUN=true`) y no se cargan migraciones. Los tests solo deben hacer lecturas
  * o peticiones que los guards corten antes del handler.
  *
  * HTTP (tarea 1.23): la app escucha UNA vez en 127.0.0.1 y todas las peticiones
@@ -22,6 +23,7 @@ import { DataSourceConfig } from '../../src/config/data.postgres.source';
 Object.assign(DataSourceConfig, {
   synchronize: false,
   migrationsRun: false,
+  migrations: [],
   entities: [],
   logging: false,
 });
