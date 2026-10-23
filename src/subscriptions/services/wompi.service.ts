@@ -4,6 +4,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import * as crypto from 'crypto';
+import {
+  WompiEvent,
+  WompiTransaction,
+  hasValidWompiChecksum,
+  parseWompiTransaction,
+} from '../wompi-event';
 
 @Injectable()
 export class WompiService {
@@ -558,63 +564,30 @@ export class WompiService {
     }
   }
 
-  async verifyWebhookEvent(payload: any, signature: string): Promise<boolean> {
-    try {
-      this.logger.log('Verificando firma de webhook de Wompi');
-
-      // Modo stub para desarrollo
-      if (this.stubMode) {
-        this.logger.log(
-          'Modo stub: Verificación de webhook simulada (siempre válida)',
-        );
-        return true;
-      }
-
-      // Si la firma no está presente, rechazar inmediatamente
-      if (!signature) {
-        this.logger.warn('Firma de webhook no proporcionada');
-        return false;
-      }
-
-      // Implementar verificación según documentación de Wompi
-      const stringToVerify = JSON.stringify(payload);
-
-      // Verificar que el secreto está configurado
-      if (!this.eventIntegritySecret) {
-        this.logger.warn('Event integrity secret no configurado');
-        return false;
-      }
-
-      // Calcular la firma esperada
-      const calculatedSignature = crypto
-        .createHmac('sha256', this.eventIntegritySecret)
-        .update(stringToVerify)
-        .digest('hex');
-
-      // Comparar la firma calculada con la proporcionada
-      const isValid = calculatedSignature === signature;
-
-      if (!isValid) {
-        // Nunca registrar la firma esperada: permitiría falsificar el evento.
-        this.logger.warn('Firma de webhook inválida');
-      } else {
-        this.logger.log('Firma de webhook válida');
-      }
-
-      return isValid;
-    } catch (error) {
-      this.logger.error(`Error verificando webhook: ${error.message}`);
-
-      // En desarrollo, aceptar webhooks incluso si hay errores en la verificación
-      if (this.isDevelopment) {
-        this.logger.warn(
-          'En desarrollo: Aceptando webhook a pesar del error de verificación',
-        );
-        return true;
-      }
-
+  /**
+   * ¿El evento lo envió Wompi? Algoritmo oficial (2.07): `signature.properties`
+   * (rutas dentro de `data`, en el orden del cuerpo) + `timestamp` + secreto de
+   * eventos → SHA256 hex, comparado en tiempo constante con
+   * `signature.checksum` (y con la cabecera `X-Event-Checksum` si llega).
+   * Ver `subscriptions/wompi-event.ts`. Nunca registra la firma esperada.
+   * Modo stub (solo `NODE_ENV=development`, 1.05): acepta todo.
+   */
+  verifyWebhookEvent(event: WompiEvent, headerChecksum?: string): boolean {
+    if (this.stubMode) {
+      this.logger.log(
+        'Modo stub: Verificación de webhook simulada (siempre válida)',
+      );
+      return true;
+    }
+    if (!this.eventIntegritySecret) {
+      this.logger.warn('WOMPI_EVENT_INTEGRITY_SECRET no configurado');
       return false;
     }
+    return hasValidWompiChecksum(
+      event,
+      this.eventIntegritySecret,
+      headerChecksum,
+    );
   }
 
   // Método para pruebas - permite verificar si las credenciales son válidas
@@ -666,58 +639,43 @@ export class WompiService {
     }
   }
 
-  // Agregar a src/subscriptions/services/wompi.service.ts
-
-  async checkLatestTransactionByReference(reference: string): Promise<string> {
+  /**
+   * Transacción más reciente de Wompi con esa referencia (`GET /transactions`,
+   * con la llave privada), o `null` si no hay. La usa `refresh-status` para
+   * aplicar el resultado con la misma regla que el webhook.
+   * Stub o error en `NODE_ENV=development` → `null` (el atajo de desarrollo de
+   * `refresh-status` decide); fuera de development el error se propaga.
+   */
+  async findLatestTransactionByReference(
+    reference: string,
+  ): Promise<WompiTransaction | null> {
+    if (this.stubMode) {
+      this.logger.log('Modo stub: sin consulta de transacciones a Wompi');
+      return null;
+    }
     try {
-      this.logger.log(`Verificando transacción con referencia: ${reference}`);
-
-      // En modo stub, simular una transacción exitosa para pruebas
-      if (this.stubMode) {
-        this.logger.log('Modo stub: Simulando transacción APROBADA');
-        return 'APPROVED';
-      }
-
-      // Utilizar la API de Wompi para consultar transacciones por referencia
-      const response = await axios.get(
-        `${this.apiBaseUrl}/transactions?reference=${reference}`,
-        { headers: this.getAuthHeaders() },
-      );
-
-      this.logger.log(
-        `Respuesta de búsqueda de transacciones: ${JSON.stringify(response.data)}`,
-      );
-
-      // Verificar si hay datos en la respuesta
-      if (
-        response.data &&
-        response.data.data &&
-        response.data.data.length > 0
-      ) {
-        // Obtener la transacción más reciente
-        const latestTransaction = response.data.data.sort((a, b) => {
-          return (
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          );
-        })[0];
-
-        this.logger.log(
-          `Transacción más reciente: ${JSON.stringify(latestTransaction)}`,
-        );
-
-        return latestTransaction.status;
-      }
-
-      // Si no hay transacciones, retornar PENDING
-      return 'PENDING';
+      const response = await axios.get(`${this.apiBaseUrl}/transactions`, {
+        params: { reference },
+        headers: this.getAuthHeaders(),
+      });
+      const transactions: unknown[] = Array.isArray(response.data?.data)
+        ? response.data.data
+        : [];
+      const latest = transactions
+        .filter(
+          (t): t is { created_at?: string; reference?: unknown } =>
+            typeof t === 'object' && t !== null,
+        )
+        .filter((t) => t.reference === reference)
+        .sort(
+          (a, b) =>
+            new Date(b.created_at ?? 0).getTime() -
+            new Date(a.created_at ?? 0).getTime(),
+        )[0];
+      return latest ? parseWompiTransaction(latest) : null;
     } catch (error) {
-      this.logger.error(`Error verificando transacción: ${error.message}`);
-
-      // En desarrollo, simular que es exitosa para pruebas
-      if (this.isDevelopment) {
-        return 'APPROVED';
-      }
-
+      this.logger.error(`Error consultando transacciones: ${error.message}`);
+      if (this.isDevelopment) return null;
       throw new Error(`Error verificando transacción: ${error.message}`);
     }
   }

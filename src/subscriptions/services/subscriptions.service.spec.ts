@@ -3,6 +3,13 @@ import { SubscriptionsService } from './subscriptions.service';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
+const PENDING_ATTEMPT = {
+  id: 'att-1',
+  status: 'pending',
+  amount: '149900.00',
+  currency: 'COP',
+  metadata: { plan_id: 'plan', reference: 'sub_sub-1' },
+};
 const NOW = new Date('2026-10-22T12:00:00');
 
 /** Repositorio simulado: cualquier escritura queda registrada en `writes`. */
@@ -33,6 +40,7 @@ function build(found: any = null) {
   const payments = fakeRepo();
   const wompi = {
     createPaymentLink: jest.fn().mockResolvedValue('https://checkout/x'),
+    findLatestTransactionByReference: jest.fn().mockResolvedValue(null),
     devShortcutsEnabled: false,
   };
   const service = new SubscriptionsService(
@@ -364,86 +372,24 @@ describe('SubscriptionsService: escrituras por tenant y duración del plan', () 
     });
   });
 
-  it('pago rechazado (webhook FAILED): marca el intento failed y NO saca del trial', async () => {
-    const { service, subscriptions, payments } = build(trial(3));
-    payments.find.mockResolvedValue([{ id: 'att-1', status: 'pending' }]);
-    await service.handleSubscriptionUpdated('sub-1', 'FAILED');
-    expect(subscriptions.save).not.toHaveBeenCalled();
+  it('subscribe con un enlace real de Wompi guarda su id en el intento (para encontrarlo por payment_link_id)', async () => {
+    const { service, plans, payments, wompi } = build(trial(3));
+    plans.findOne.mockResolvedValue({ id: 'plan', price: 1, currency: 'COP' });
+    wompi.createPaymentLink.mockResolvedValue(
+      'https://checkout.wompi.co/l/test_Ab12',
+    );
+    payments.save.mockImplementation(async (x) => ({ id: 'att-1', ...x }));
+    await service.createPaidSubscription(TENANT, { plan_id: 'plan' } as any);
     expect(payments.update).toHaveBeenCalledWith(
       { id: 'att-1' },
-      expect.objectContaining({ status: 'failed' }),
+      {
+        metadata: {
+          plan_id: 'plan',
+          reference: 'sub_sub-1',
+          payment_link_id: 'test_Ab12',
+        },
+      },
     );
-  });
-
-  it('aprobado: activa con el plan del intento pagado (metadata.plan_id)', async () => {
-    const { service, subscriptions, payments, plans } = build(trial(20));
-    payments.find.mockResolvedValue([
-      { id: 'att-1', status: 'successful', metadata: { plan_id: 'anual' } },
-    ]);
-    plans.findOne.mockResolvedValue({ id: 'anual', duration_months: 12 });
-    await service.handleSubscriptionUpdated('sub-1', 'ACTIVE');
-    const saved = subscriptions.save.mock.calls[0][0];
-    expect(saved.status).toBe('active');
-    expect(saved.plan).toEqual({ id: 'anual', duration_months: 12 });
-    expect(saved.subscription_end_date.getFullYear()).toBe(
-      saved.subscription_start_date.getFullYear() + 1,
-    );
-  });
-
-  it('recordPayment completa el intento pending (mismo importe) sin cambiar la suscripción; idempotente por transacción', async () => {
-    const { service, subscriptions, payments } = build(trial(3));
-    payments.find.mockResolvedValue([
-      { id: 'otro', amount: '5.00', status: 'pending' },
-      { id: 'att-1', amount: '149900.00', status: 'pending' },
-    ]);
-    await service.recordPayment(
-      TENANT,
-      'sub-1',
-      149900,
-      'COP',
-      'successful',
-      'tx-1',
-      '',
-    );
-    expect(payments.save.mock.calls[0][0]).toMatchObject({
-      id: 'att-1',
-      status: 'successful',
-      wompi_transaction_id: 'tx-1',
-    });
-    expect(subscriptions.save).not.toHaveBeenCalled();
-
-    payments.findOne.mockResolvedValue({ id: 'att-1' });
-    payments.save.mockClear();
-    await service.recordPayment(
-      TENANT,
-      'sub-1',
-      149900,
-      'COP',
-      'successful',
-      'tx-1',
-      '',
-    );
-    expect(payments.save).not.toHaveBeenCalled();
-  });
-
-  it('al activarse (webhook/refresh) el periodo sale de duration_months', async () => {
-    const row = {
-      id: 'sub-1',
-      status: 'pending',
-      plan: { name: 'Plan Semestral', duration_months: 12 },
-    };
-    const { service, subscriptions } = build(row);
-    await service.handleSubscriptionUpdated('sub-1', 'ACTIVE');
-    expect(subscriptions.findOne.mock.calls[0][0].relations).toEqual({
-      plan: true,
-    });
-    const saved = subscriptions.save.mock.calls[0][0];
-    expect(saved.status).toBe('active');
-    const start: Date = saved.subscription_start_date;
-    expect(saved.subscription_end_date.getFullYear()).toBe(
-      start.getFullYear() + 1,
-    );
-    expect(saved.subscription_end_date.getMonth()).toBe(start.getMonth());
   });
 
   it('cron: marca expired solo las activas con la fecha de fin pasada', async () => {
@@ -456,48 +402,89 @@ describe('SubscriptionsService: escrituras por tenant y duración del plan', () 
     expect(values).toEqual({ status: 'expired' });
   });
 
-  it('refresh-status sin intento pending: no hace nada', async () => {
+  it('refresh-status sin intento pending: no consulta a Wompi ni aplica nada', async () => {
     const { service, wompi } = build(trial(3));
-    (wompi as any).checkLatestTransactionByReference = jest.fn();
-    const spy = jest.spyOn(service, 'handleSubscriptionUpdated');
+    const apply = jest.spyOn(service, 'applyWompiTransaction');
     await expect(service.refreshPendingSubscription(TENANT)).resolves.toEqual({
       success: false,
       message: 'No se encontraron cambios en la suscripción',
     });
-    expect(
-      (wompi as any).checkLatestTransactionByReference,
-    ).not.toHaveBeenCalled();
-    expect(spy).not.toHaveBeenCalled();
+    expect(wompi.findLatestTransactionByReference).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
   });
 
-  it('refresh-status con intento pending y Wompi APPROVED: completa el intento y activa', async () => {
+  it('refresh-status aplica la transacción de Wompi con la MISMA función que el webhook', async () => {
     const { service, payments, wompi } = build(trial(3));
-    payments.find.mockResolvedValue([{ id: 'att-1', status: 'pending' }]);
-    (wompi as any).checkLatestTransactionByReference = jest
-      .fn()
-      .mockResolvedValue('APPROVED');
-    const spy = jest
-      .spyOn(service, 'handleSubscriptionUpdated')
-      .mockResolvedValue(undefined);
+    payments.findOne.mockResolvedValue(PENDING_ATTEMPT);
+    const tx = {
+      id: 'tx-1',
+      status: 'APPROVED',
+      amount_in_cents: 14990000,
+      currency: 'COP',
+      reference: 'sub_sub-1',
+    };
+    wompi.findLatestTransactionByReference.mockResolvedValue(tx);
+    const apply = jest
+      .spyOn(service, 'applyWompiTransaction')
+      .mockResolvedValue({ outcome: 'activate' });
+    await expect(service.refreshPendingSubscription(TENANT)).resolves.toEqual({
+      success: true,
+      message: 'Suscripción verificada y activada correctamente',
+    });
+    expect(wompi.findLatestTransactionByReference).toHaveBeenCalledWith(
+      'sub_sub-1',
+    );
+    expect(apply).toHaveBeenCalledWith(tx);
+  });
+
+  it.each(['duplicate', 'pending', 'amount_mismatch', 'fail'] as const)(
+    'refresh-status con resultado %p: success false',
+    async (outcome) => {
+      const { service, payments, wompi } = build(trial(3));
+      payments.findOne.mockResolvedValue(PENDING_ATTEMPT);
+      wompi.findLatestTransactionByReference.mockResolvedValue({
+        id: 'tx-1',
+        status: 'PENDING',
+        amount_in_cents: 1,
+        currency: 'COP',
+        reference: 'sub_sub-1',
+      });
+      jest
+        .spyOn(service, 'applyWompiTransaction')
+        .mockResolvedValue({ outcome });
+      const result = await service.refreshPendingSubscription(TENANT);
+      expect(result.success).toBe(false);
+    },
+  );
+
+  it('refresh-status sin transacción en Wompi y sin atajos: no aplica nada', async () => {
+    const { service, payments, wompi } = build(trial(3));
+    payments.findOne.mockResolvedValue(PENDING_ATTEMPT);
+    wompi.findLatestTransactionByReference.mockResolvedValue(null);
+    const apply = jest.spyOn(service, 'applyWompiTransaction');
+    expect((await service.refreshPendingSubscription(TENANT)).success).toBe(
+      false,
+    );
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('refresh-status con el atajo de desarrollo: aplica una aprobación sintética del importe del intento (idempotente por intento)', async () => {
+    const { service, payments, wompi } = build(trial(3));
+    wompi.devShortcutsEnabled = true;
+    payments.findOne.mockResolvedValue(PENDING_ATTEMPT);
+    wompi.findLatestTransactionByReference.mockResolvedValue(null);
+    const apply = jest
+      .spyOn(service, 'applyWompiTransaction')
+      .mockResolvedValue({ outcome: 'activate' });
     const result = await service.refreshPendingSubscription(TENANT);
     expect(result.success).toBe(true);
-    expect(payments.update).toHaveBeenCalledWith(
-      { id: 'att-1' },
-      expect.objectContaining({ status: 'successful' }),
-    );
-    expect(spy).toHaveBeenCalledWith('sub-1', 'ACTIVE');
-  });
-
-  it('refresh-status con Wompi PENDING: el negocio sigue en trial', async () => {
-    const { service, payments, wompi, subscriptions } = build(trial(3));
-    payments.find.mockResolvedValue([{ id: 'att-1', status: 'pending' }]);
-    (wompi as any).checkLatestTransactionByReference = jest
-      .fn()
-      .mockResolvedValue('PENDING');
-    const result = await service.refreshPendingSubscription(TENANT);
-    expect(result.success).toBe(false);
-    expect(subscriptions.writes).toEqual([]);
-    expect(payments.update).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledWith({
+      id: 'dev_att-1',
+      status: 'APPROVED',
+      amount_in_cents: 14990000,
+      currency: 'COP',
+      reference: 'sub_sub-1',
+    });
   });
 
   it('cancelar un plan pagado: canceled en la fila, vigente (active) hasta la fecha de fin', async () => {
@@ -516,5 +503,210 @@ describe('SubscriptionsService: escrituras por tenant y duración del plan', () 
     });
     expect(result.status).toBe('active');
     expect(result.cancel_at_period_end).toBe(true);
+  });
+});
+
+describe('SubscriptionsService.applyWompiTransaction (2.07)', () => {
+  const APPROVED = {
+    id: 'tx-1',
+    status: 'APPROVED',
+    amount_in_cents: 14990000,
+    currency: 'COP',
+    reference: 'sub_sub-1',
+  };
+  const lockedAttempt = (o: Record<string, any> = {}) => ({
+    id: 'att-1',
+    tenant_id: TENANT,
+    subscription_id: 'sub-1',
+    status: 'pending',
+    amount: '149900.00',
+    currency: 'COP',
+    wompi_transaction_id: null,
+    metadata: { plan_id: 'semestral', reference: 'sub_sub-1' },
+    created_at: new Date('2026-10-22T10:00:00Z'),
+    ...o,
+  });
+
+  /** Manager de la transacción: guarda el orden de lo que se hace en `log`. */
+  function applyHarness(
+    attempts: any[],
+    {
+      affected = 1,
+      tenants = attempts.length ? [{ tenant_id: TENANT }] : [],
+    } = {},
+  ) {
+    const log: string[] = [];
+    const updates: Array<{ set: any; where: any[] }> = [];
+    const plain: Array<[string, any, any]> = [];
+    const updateQb: any = {
+      update: (entity: any) => {
+        updates.push({ set: null, where: [entity.name] });
+        return updateQb;
+      },
+      set: (values: any) => {
+        updates[updates.length - 1].set = values;
+        return updateQb;
+      },
+      where: (sql: string, p: any) => {
+        updates[updates.length - 1].where.push(sql, p);
+        return updateQb;
+      },
+      andWhere: (sql: string, p: any) => {
+        updates[updates.length - 1].where.push(sql, p);
+        return updateQb;
+      },
+      execute: async () => {
+        log.push('update attempt');
+        return { affected };
+      },
+    };
+    const subscriptionQb: any = {
+      leftJoinAndSelect: () => subscriptionQb,
+      where: () => subscriptionQb,
+      setLock: (mode: string) => {
+        log.push(`lock subscription ${mode}`);
+        return subscriptionQb;
+      },
+      getOne: async () => ({ id: 'sub-1', status: 'trial', plan: null }),
+    };
+    const manager: any = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('DISTINCT tenant_id')) return tenants;
+        if (sql.includes('pg_advisory_xact_lock')) {
+          log.push('advisory lock');
+          return [];
+        }
+        if (sql.includes('FOR UPDATE')) {
+          log.push('select attempts for update');
+          return attempts;
+        }
+        throw new Error(`SQL inesperado: ${sql}`);
+      }),
+      createQueryBuilder: () => updateQb,
+      getRepository: () => ({ createQueryBuilder: () => subscriptionQb }),
+      findOne: jest.fn(async () => ({ id: 'semestral', duration_months: 6 })),
+      update: jest.fn(async (entity: any, where: any, values: any) => {
+        log.push(`update ${entity.name}`);
+        plain.push([entity.name, where, values]);
+        return { affected: 1 };
+      }),
+    };
+    const { service, payments } = build();
+    (payments.manager as any).transaction = jest.fn(async (cb: any) =>
+      cb(manager),
+    );
+    return { service, manager, log, updates, plain };
+  }
+
+  it('APPROVED con el importe del intento: lock del negocio → intento FOR UPDATE → UPDATE condicional → activa el plan del intento', async () => {
+    const { service, manager, log, updates, plain } = applyHarness([
+      lockedAttempt(),
+    ]);
+    const result = await service.applyWompiTransaction(APPROVED);
+    expect(result).toEqual({
+      outcome: 'activate',
+      attemptId: 'att-1',
+      subscriptionId: 'sub-1',
+    });
+    expect(log).toEqual([
+      'advisory lock',
+      'select attempts for update',
+      'update attempt',
+      'lock subscription pessimistic_write',
+      'update Subscription',
+    ]);
+    expect(manager.query.mock.calls[1][1]).toEqual([`subscription:${TENANT}`]);
+    expect(updates[0].set).toMatchObject({
+      status: 'successful',
+      wompi_transaction_id: 'tx-1',
+    });
+    expect(updates[0].where).toContain('status IN (:...open)');
+    const [, where, values] = plain[0];
+    expect(where).toEqual({ id: 'sub-1' });
+    expect(values.status).toBe('active');
+    expect(values.plan).toEqual({ id: 'semestral' });
+    const months =
+      (values.subscription_end_date.getFullYear() -
+        values.subscription_start_date.getFullYear()) *
+        12 +
+      values.subscription_end_date.getMonth() -
+      values.subscription_start_date.getMonth();
+    expect(months).toBe(6);
+  });
+
+  it('idempotencia: si el UPDATE condicional no afecta filas (otro evento ya lo aplicó) no vuelve a activar', async () => {
+    const { service, log } = applyHarness([lockedAttempt()], { affected: 0 });
+    const result = await service.applyWompiTransaction(APPROVED);
+    expect(result.outcome).toBe('duplicate');
+    expect(log).not.toContain('update Subscription');
+  });
+
+  it('idempotencia: el mismo evento con el intento ya pagado por esa transacción no escribe nada', async () => {
+    const { service, log } = applyHarness([
+      lockedAttempt({ status: 'successful', wompi_transaction_id: 'tx-1' }),
+    ]);
+    expect((await service.applyWompiTransaction(APPROVED)).outcome).toBe(
+      'duplicate',
+    );
+    expect(log).toEqual(['advisory lock', 'select attempts for update']);
+  });
+
+  it('importe distinto: no activa; lo anota como sospechoso una sola vez', async () => {
+    const { service, log, plain } = applyHarness([lockedAttempt()]);
+    const tampered = { ...APPROVED, amount_in_cents: 100 };
+    expect((await service.applyWompiTransaction(tampered)).outcome).toBe(
+      'amount_mismatch',
+    );
+    expect(log).not.toContain('update attempt');
+    expect(log).not.toContain('update Subscription');
+    expect(plain[0][0]).toBe('PaymentHistory');
+    expect(plain[0][2].metadata).toMatchObject({
+      plan_id: 'semestral',
+      suspicious_events: [
+        {
+          transaction_id: 'tx-1',
+          amount_in_cents: 100,
+          expected_amount_in_cents: 14990000,
+        },
+      ],
+    });
+
+    const again = applyHarness([
+      lockedAttempt({ metadata: plain[0][2].metadata }),
+    ]);
+    await again.service.applyWompiTransaction(tampered);
+    expect(again.plain).toEqual([]);
+  });
+
+  it('DECLINED: intento failed (solo si seguía pending) y la suscripción intacta', async () => {
+    const { service, log, updates } = applyHarness([lockedAttempt()]);
+    const result = await service.applyWompiTransaction({
+      ...APPROVED,
+      status: 'DECLINED',
+    });
+    expect(result.outcome).toBe('fail');
+    expect(updates[0].set).toMatchObject({
+      status: 'failed',
+      wompi_transaction_id: 'tx-1',
+    });
+    expect(updates[0].where).toContain('status = :pending');
+    expect(log).not.toContain('update Subscription');
+  });
+
+  it('PENDING: no escribe', async () => {
+    const { service, log } = applyHarness([lockedAttempt()]);
+    expect(
+      (await service.applyWompiTransaction({ ...APPROVED, status: 'PENDING' }))
+        .outcome,
+    ).toBe('pending');
+    expect(log).toEqual(['advisory lock', 'select attempts for update']);
+  });
+
+  it('referencia sin intento: no toma locks ni escribe', async () => {
+    const { service, log } = applyHarness([]);
+    expect((await service.applyWompiTransaction(APPROVED)).outcome).toBe(
+      'no_attempt',
+    );
+    expect(log).toEqual([]);
   });
 });

@@ -37,12 +37,39 @@ import {
   planPeriodEnd,
 } from '../subscription-state';
 import { businessTimeZone } from '../../common/utils/date.util';
+import { toCents } from 'src/payments/payment-rules';
+import {
+  AttemptOutcome,
+  PaymentAttemptLike,
+  WompiTransaction,
+  WompiTransactionStatus,
+  decideAttemptOutcome,
+  paymentLinkIdFrom,
+} from '../wompi-event';
 
 /** Respuesta de `POST /subscriptions/refresh-status`. */
 type RefreshResult = {
   success: boolean;
   message: string;
-  subscription?: Subscription;
+};
+
+/** Resultado de aplicar una transacción de Wompi (webhook o `refresh-status`). */
+export interface WompiApplyResult {
+  outcome: AttemptOutcome['kind'];
+  attemptId?: string;
+  subscriptionId?: string;
+}
+
+/** Fila de `payment_history` leída con `FOR UPDATE` en `applyWompiTransaction`. */
+type LockedAttempt = PaymentAttemptLike & {
+  tenant_id: string;
+  subscription_id: string;
+  metadata: Record<string, any> | null;
+};
+
+const NO_CHANGES: RefreshResult = {
+  success: false,
+  message: 'No se encontraron cambios en la suscripción',
 };
 
 /**
@@ -222,28 +249,17 @@ export class SubscriptionsService {
     };
   }
 
-  /**
-   * Último intento de pago de plan sin confirmar de la suscripción (o `null`).
-   * Si `amount` viene (webhook), prefiere el intento con ese importe.
-   */
+  /** Último intento de pago de plan sin confirmar de la suscripción (o `null`). */
   private async findPendingAttempt(
     subscriptionId: string,
-    amount?: number,
   ): Promise<PaymentHistory | null> {
-    const attempts = await this.paymentRepository.find({
+    return await this.paymentRepository.findOne({
       where: {
         subscription: { id: subscriptionId },
         status: PaymentAttemptStatus.PENDING,
       },
       order: { created_at: 'DESC' },
     });
-    if (amount !== undefined) {
-      const sameAmount = attempts.find(
-        (a) => Math.round(Number(a.amount) * 100) === Math.round(amount * 100),
-      );
-      if (sameAmount) return sameAmount;
-    }
-    return attempts[0] ?? null;
   }
 
   /** Citas creadas por el negocio desde el inicio del periodo pagado. */
@@ -462,6 +478,20 @@ export class SubscriptionsService {
           throw new Error('No se generó un enlace de pago válido');
         }
 
+        // Wompi puede poner en la transacción su propia referencia: el id del
+        // enlace permite encontrar el intento igualmente (2.07).
+        const paymentLinkId = paymentLinkIdFrom(paymentLink);
+        if (paymentLinkId) {
+          attempt.metadata = {
+            ...attempt.metadata,
+            payment_link_id: paymentLinkId,
+          };
+          await this.paymentRepository.update(
+            { id: attempt.id },
+            { metadata: attempt.metadata },
+          );
+        }
+
         // Agregar el link de pago a la respuesta
         return {
           ...savedSubscription,
@@ -574,243 +604,243 @@ export class SubscriptionsService {
   }
 
   /**
-   * Aplica un estado de Wompi a la suscripción `subscriptionId`.
-   * - Aprobado (`active`): activa con el plan del intento pagado más reciente
-   *   (`metadata.plan_id`; si no hay, el plan que ya tenía) y el periodo de
-   *   `duration_months` desde ahora.
-   * - Pago rechazado/fallido (`past_due`, 2.15): solo marca el intento
-   *   pendiente como `failed`; la suscripción NO cambia (sigue en trial o en
-   *   su plan vigente).
-   * - Otros (`canceled`, `expired`… de eventos de suscripción): se aplican.
+   * Aplica una transacción de Wompi al intento de pago de plan de su
+   * referencia. **Única** regla para el webhook y para `refresh-status` (2.07):
+   * - `APPROVED` con el importe y la moneda del intento → intento `successful`
+   *   y plan del intento (`metadata.plan_id`) activo desde ahora.
+   * - `DECLINED` / `VOIDED` / `ERROR` → intento `failed`; la suscripción no cambia.
+   * - `PENDING` → nada.
+   * - Importe o moneda distintos → nada se activa; se anota como sospechoso
+   *   en `metadata.suspicious_events` del intento y en el log.
+   * Idempotente por `transaction.id`: todo ocurre en una transacción con el
+   * advisory lock del negocio (el mismo de `consumeAppointmentQuota`), las
+   * filas del intento `FOR UPDATE` y UPDATE condicionales; el mismo evento
+   * recibido N veces (también a la vez) produce un solo efecto.
    */
-  async handleSubscriptionUpdated(
-    subscriptionId: string,
-    status: string,
-  ): Promise<void> {
-    try {
-      this.logger.log(
-        `Actualizando estado de suscripción: ${subscriptionId} a ${status}`,
+  async applyWompiTransaction(tx: WompiTransaction): Promise<WompiApplyResult> {
+    return await this.paymentRepository.manager.transaction(async (manager) => {
+      const match = `(metadata->>'reference' = $1
+                         OR wompi_transaction_id = $2
+                         OR metadata->>'payment_link_id' = $3)`;
+      const params = [tx.reference, tx.id, tx.payment_link_id ?? null];
+      const tenants: Array<{ tenant_id: string }> = await manager.query(
+        `SELECT DISTINCT tenant_id FROM payment_history WHERE ${match}`,
+        params,
       );
-
-      // Buscar la suscripción por ID (con el plan: de él sale la duración)
-      const subscription = await this.subscriptionRepository.findOne({
-        where: { id: subscriptionId },
-        relations: { plan: true },
-      });
-
-      if (!subscription) {
-        this.logger.warn(
-          `No se encontró suscripción con ID: ${subscriptionId}`,
-        );
-        return;
-      }
-
-      const mapped = this.mapWompiStatus(status);
-
-      if (mapped === SubscriptionStatus.PAST_DUE) {
-        const attempt = await this.findPendingAttempt(subscription.id);
-        if (attempt) {
-          await this.paymentRepository.update(
-            { id: attempt.id },
-            { status: PaymentAttemptStatus.FAILED, payment_date: new Date() },
+      if (tenants.length !== 1) {
+        if (tenants.length > 1) {
+          this.logger.error(
+            `Transacción ${tx.id}: la referencia ${tx.reference} aparece en varios negocios; no se aplica`,
+          );
+        } else {
+          this.logger.warn(
+            `Transacción ${tx.id} (${tx.status}) sin intento de pago para la referencia ${tx.reference}: ignorada`,
           );
         }
-        this.logger.log(
-          `Pago no aprobado para ${subscription.id}: la suscripción sigue en ${subscription.status}`,
-        );
-        return;
+        return { outcome: 'no_attempt' };
       }
+      const tenantId = tenants[0].tenant_id;
 
-      subscription.status = mapped;
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`subscription:${tenantId}`],
+      );
+      const attempts: LockedAttempt[] = await manager.query(
+        `SELECT id, tenant_id, subscription_id, status, amount, currency,
+                  wompi_transaction_id, metadata, created_at
+             FROM payment_history
+            WHERE tenant_id = $4 AND ${match}
+            FOR UPDATE`,
+        [...params, tenantId],
+      );
 
-      if (mapped === SubscriptionStatus.ACTIVE) {
-        const plan =
-          (await this.paidAttemptPlan(subscription.id)) ?? subscription.plan;
-        if (plan) subscription.plan = plan;
-        const now = new Date();
-        subscription.subscription_start_date = now;
-        // Fin del periodo según `plan.duration_months`
-        if (subscription.plan) {
-          subscription.subscription_end_date = planPeriodEnd(
-            now,
-            subscription.plan,
+      const decision = decideAttemptOutcome(attempts, tx);
+      const attempt =
+        'attempt' in decision ? (decision.attempt as LockedAttempt) : null;
+      const result: WompiApplyResult = {
+        outcome: decision.kind,
+        attemptId: attempt?.id,
+        subscriptionId: attempt?.subscription_id,
+      };
+      const where = `transacción ${tx.id} (${tx.status}, ${tx.amount_in_cents} ${tx.currency}, ref ${tx.reference})`;
+
+      switch (decision.kind) {
+        case 'activate': {
+          const updated = await manager
+            .createQueryBuilder()
+            .update(PaymentHistory)
+            .set({
+              status: PaymentAttemptStatus.SUCCESSFUL,
+              wompi_transaction_id: tx.id,
+              wompi_transaction_url: tx.receipt_url ?? '',
+              payment_date: new Date(),
+            })
+            .where('id = :id', { id: attempt.id })
+            .andWhere('status IN (:...open)', {
+              open: [PaymentAttemptStatus.PENDING, PaymentAttemptStatus.FAILED],
+            })
+            .execute();
+          if (!updated.affected) return { ...result, outcome: 'duplicate' };
+          await this.activatePlan(
+            manager,
+            attempt.subscription_id,
+            attempt.metadata?.plan_id,
           );
+          this.logger.log(`Pago aprobado: ${where}; plan activado`);
+          return result;
         }
+        case 'fail': {
+          const updated = await manager
+            .createQueryBuilder()
+            .update(PaymentHistory)
+            .set({
+              status: PaymentAttemptStatus.FAILED,
+              wompi_transaction_id: tx.id,
+              payment_date: new Date(),
+            })
+            .where('id = :id', { id: attempt.id })
+            .andWhere('status = :pending', {
+              pending: PaymentAttemptStatus.PENDING,
+            })
+            .execute();
+          if (!updated.affected) return { ...result, outcome: 'duplicate' };
+          this.logger.log(
+            `Pago no aprobado: ${where}; la suscripción sigue igual`,
+          );
+          return result;
+        }
+        case 'amount_mismatch': {
+          const suspicious: any[] = attempt.metadata?.suspicious_events ?? [];
+          if (!suspicious.some((e) => e?.transaction_id === tx.id)) {
+            await manager.update(
+              PaymentHistory,
+              { id: attempt.id },
+              {
+                metadata: {
+                  ...(attempt.metadata ?? {}),
+                  suspicious_events: [
+                    ...suspicious,
+                    {
+                      transaction_id: tx.id,
+                      status: tx.status,
+                      amount_in_cents: tx.amount_in_cents,
+                      currency: tx.currency,
+                      expected_amount_in_cents: toCents(attempt.amount),
+                      expected_currency: attempt.currency,
+                      received_at: new Date().toISOString(),
+                    },
+                  ],
+                },
+              },
+            );
+          }
+          this.logger.warn(
+            `SOSPECHOSO: ${where} no coincide con el intento ${attempt.id} (${toCents(attempt.amount)} ${attempt.currency}); no se activa nada`,
+          );
+          return result;
+        }
+        case 'already_paid':
+          this.logger.warn(
+            `Revisar: ${where} aprueba el intento ${attempt.id}, ya pagado con otra transacción (posible doble cobro)`,
+          );
+          return result;
+        case 'paid_then_failed':
+          this.logger.warn(
+            `Revisar: ${where} llega después de aprobar el intento ${attempt.id}; la suscripción no cambia`,
+          );
+          return result;
+        default:
+          this.logger.log(`Sin cambios (${decision.kind}): ${where}`);
+          return result;
       }
-
-      await this.subscriptionRepository.save(subscription);
-
-      this.logger.log(
-        `Suscripción ${subscription.id} actualizada a estado: ${subscription.status}`,
-      );
-    } catch (error) {
-      this.logger.error(
-        `Error actualizando estado de suscripción: ${error.message}`,
-      );
-      throw error;
-    }
-  }
-
-  /** Plan del intento pagado más reciente (`metadata.plan_id`), o `null`. */
-  private async paidAttemptPlan(
-    subscriptionId: string,
-  ): Promise<SubscriptionPlan | null> {
-    const [paid] = await this.paymentRepository.find({
-      where: {
-        subscription: { id: subscriptionId },
-        status: PaymentAttemptStatus.SUCCESSFUL,
-      },
-      order: { payment_date: 'DESC' },
-      take: 1,
     });
-    const planId = paid?.metadata?.plan_id;
-    if (!planId) return null;
-    return await this.planRepository.findOne({ where: { id: planId } });
-  }
-
-  // Si no existe ya, también necesitas el método mapWompiStatus
-  private mapWompiStatus(wompiStatus: string): string {
-    // Mapear estados de Wompi a nuestros estados
-    const statusMap = {
-      ACTIVE: 'active',
-      APPROVED: 'active',
-      PENDING: 'past_due',
-      CANCELED: 'canceled',
-      REJECTED: 'past_due',
-      FAILED: 'past_due',
-      EXPIRED: 'expired',
-      TRIAL: 'trial',
-    };
-
-    return statusMap[wompiStatus] || 'past_due';
   }
 
   /**
-   * Registra el resultado de un pago de plan. Si hay un intento `pending` de la
-   * suscripción (con el mismo importe, si lo hay), lo completa; si no, crea la
-   * fila. Idempotente por `transactionId`. NO cambia el estado de la
-   * suscripción: eso lo hace `handleSubscriptionUpdated` (2.15).
+   * Activa el plan pagado: `active`, plan del intento (si no lo tiene, el que
+   * ya tenía la suscripción) y periodo de `duration_months` desde ahora. Dentro
+   * de la transacción de `applyWompiTransaction` y con la fila bloqueada.
    */
-  async recordPayment(
-    tenantId: string,
+  private async activatePlan(
+    manager: EntityManager,
     subscriptionId: string,
-    amount: number,
-    currency: string,
-    status: string,
-    transactionId: string,
-    transactionUrl: string,
-  ): Promise<PaymentHistory> {
-    const subscription = await this.subscriptionRepository.findOne({
-      where: { id: subscriptionId },
-    });
-
+    planId: string | undefined,
+    now: Date = new Date(),
+  ): Promise<void> {
+    const subscription = await manager
+      .getRepository(Subscription)
+      .createQueryBuilder('subscription')
+      .leftJoinAndSelect('subscription.plan', 'plan')
+      .where('subscription.id = :subscriptionId', { subscriptionId })
+      .setLock('pessimistic_write', undefined, ['subscription'])
+      .getOne();
     if (!subscription) {
-      throw new NotFoundException(`Subscription ${subscriptionId} not found`);
+      throw new Error(`Suscripción ${subscriptionId} del intento no existe`);
     }
-
-    if (transactionId) {
-      const already = await this.paymentRepository.findOne({
-        where: {
-          subscription: { id: subscriptionId },
-          wompi_transaction_id: transactionId,
-        },
-      });
-      if (already) return already;
+    const plan =
+      (planId
+        ? await manager.findOne(SubscriptionPlan, { where: { id: planId } })
+        : null) ?? subscription.plan;
+    if (!plan) {
+      // Pago real sin plan que activar: rollback y error → Wompi reintenta.
+      throw new Error(
+        `Intento pagado sin plan (suscripción ${subscriptionId})`,
+      );
     }
-
-    const normalized =
-      status === 'APPROVED' ? PaymentAttemptStatus.SUCCESSFUL : status;
-    const attempt = await this.findPendingAttempt(subscriptionId, amount);
-    if (attempt) {
-      Object.assign(attempt, {
-        amount,
-        currency,
-        status: normalized,
-        wompi_transaction_id: transactionId,
-        wompi_transaction_url: transactionUrl,
-        payment_date: new Date(),
-      });
-      return await this.paymentRepository.save(attempt);
-    }
-
-    const payment = this.paymentRepository.create({
-      tenant_id: tenantId,
-      subscription,
-      amount,
-      currency,
-      status: normalized,
-      wompi_transaction_id: transactionId,
-      wompi_transaction_url: transactionUrl,
-      payment_date: new Date(),
-    });
-
-    return await this.paymentRepository.save(payment);
+    await manager.update(
+      Subscription,
+      { id: subscription.id },
+      {
+        status: SubscriptionStatus.ACTIVE,
+        plan: { id: plan.id },
+        subscription_start_date: now,
+        subscription_end_date: planPeriodEnd(now, plan),
+      },
+    );
   }
 
   /**
    * `POST /subscriptions/refresh-status`: si el negocio tiene un intento de
-   * pago de plan `pending`, pregunta a Wompi por la referencia y, si está
-   * aprobada, completa el intento y activa el plan. Sin intento pendiente no
-   * hace nada (2.15: la suscripción ya no se pone en `pending`).
+   * pago de plan `pending`, consulta a Wompi la última transacción de su
+   * referencia y la aplica con `applyWompiTransaction` (misma regla que el
+   * webhook). Sin intento pendiente no hace nada.
    */
   async refreshPendingSubscription(tenantId: string): Promise<RefreshResult> {
     const subscription = await this.findTenantSubscription(tenantId);
     const attempt = subscription
       ? await this.findPendingAttempt(subscription.id)
       : null;
+    if (!subscription || !attempt) return NO_CHANGES;
 
-    if (subscription && attempt) {
-      this.logger.log('Intento de pago pendiente: verificando con Wompi');
-      const latestTransactionStatus =
-        await this.wompiService.checkLatestTransactionByReference(
-          `sub_${subscription.id}`,
-        );
+    const reference = attempt.metadata?.reference ?? `sub_${subscription.id}`;
+    this.logger.log('Intento de pago pendiente: verificando con Wompi');
+    let tx =
+      await this.wompiService.findLatestTransactionByReference(reference);
+    let devShortcut = false;
 
-      if (latestTransactionStatus === 'APPROVED') {
-        this.logger.log(
-          'Transacción verificada con Wompi como APPROVED, activando suscripción',
-        );
-        await this.paymentRepository.update(
-          { id: attempt.id },
-          {
-            status: PaymentAttemptStatus.SUCCESSFUL,
-            payment_date: new Date(),
-          },
-        );
-        await this.handleSubscriptionUpdated(subscription.id, 'ACTIVE');
-        return {
-          success: true,
-          message: 'Suscripción verificada y activada correctamente',
-        };
-      }
-
-      // Solo con NODE_ENV=development: activar sin pago real.
-      if (this.wompiService.devShortcutsEnabled) {
-        this.logger.log(
-          'Ambiente de desarrollo: Activando suscripción pendiente automáticamente',
-        );
-        await this.recordPayment(
-          tenantId,
-          subscription.id,
-          Number(attempt.amount),
-          attempt.currency || 'COP',
-          PaymentAttemptStatus.SUCCESSFUL,
-          `dev_${Date.now()}`,
-          '',
-        );
-        await this.handleSubscriptionUpdated(subscription.id, 'ACTIVE');
-        return {
-          success: true,
-          message:
-            'Suscripción activada en modo desarrollo (después de verificación con Wompi)',
-          subscription,
-        };
-      }
+    // Solo con NODE_ENV=development: activar sin pago real.
+    if (
+      tx?.status !== WompiTransactionStatus.APPROVED &&
+      this.wompiService.devShortcutsEnabled
+    ) {
+      devShortcut = true;
+      tx = {
+        id: `dev_${attempt.id}`,
+        status: WompiTransactionStatus.APPROVED,
+        amount_in_cents: toCents(attempt.amount),
+        currency: attempt.currency || 'COP',
+        reference,
+      };
     }
+    if (!tx) return NO_CHANGES;
 
+    const { outcome } = await this.applyWompiTransaction(tx);
+    if (outcome !== 'activate') return NO_CHANGES;
     return {
-      success: false,
-      message: 'No se encontraron cambios en la suscripción',
+      success: true,
+      message: devShortcut
+        ? 'Suscripción activada en modo desarrollo (después de verificación con Wompi)'
+        : 'Suscripción verificada y activada correctamente',
     };
   }
 

@@ -13,6 +13,7 @@ import { PaymentHistory } from '../src/subscriptions/entities/payment-history.en
 import { SubscriptionPlan } from '../src/subscriptions/entities/subscription-plan.entity';
 import { SubscriptionsService } from '../src/subscriptions/services/subscriptions.service';
 import { WompiService } from '../src/subscriptions/services/wompi.service';
+import { toCents } from '../src/payments/payment-rules';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
@@ -53,8 +54,8 @@ describeWritable(
         .spyOn(WompiService.prototype, 'createPaymentLink')
         .mockResolvedValue('https://checkout.test/link');
       jest
-        .spyOn(WompiService.prototype, 'checkLatestTransactionByReference')
-        .mockResolvedValue('PENDING');
+        .spyOn(WompiService.prototype, 'findLatestTransactionByReference')
+        .mockResolvedValue(null);
       ({ owner, employee } = await findDevOwnerAndEmployee(ds));
       ownerToken = signToken(owner, ['Owner']);
       plan = await ds
@@ -110,7 +111,14 @@ describeWritable(
     it('(b) pago rechazado: el intento queda failed y el negocio sigue en trial', async () => {
       const service = app.get(SubscriptionsService);
       const sub = await subscriptionRow();
-      await service.handleSubscriptionUpdated(sub.id, 'FAILED');
+      const result = await service.applyWompiTransaction({
+        id: 'tx-e2e-declined',
+        status: 'DECLINED',
+        amount_in_cents: toCents(plan.price),
+        currency: plan.currency,
+        reference: `sub_${sub.id}`,
+      });
+      expect(result.outcome).toBe('fail');
       expect((await subscriptionRow()).status).toBe('trial');
       const attempts = await ds
         .getRepository(PaymentHistory)
@@ -125,16 +133,14 @@ describeWritable(
         .set(auth(ownerToken))
         .send({ plan_id: plan.id });
       const sub = await subscriptionRow();
-      await service.recordPayment(
-        owner.id,
-        sub.id,
-        Number(plan.price),
-        'COP',
-        'successful',
-        'tx-e2e-1',
-        '',
-      );
-      await service.handleSubscriptionUpdated(sub.id, 'ACTIVE');
+      const result = await service.applyWompiTransaction({
+        id: 'tx-e2e-1',
+        status: 'APPROVED',
+        amount_in_cents: toCents(plan.price),
+        currency: plan.currency,
+        reference: `sub_${sub.id}`,
+      });
+      expect(result.outcome).toBe('activate');
       const active = await subscriptionRow();
       expect(active.status).toBe('active');
       expect(active.plan.id).toBe(plan.id);

@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { createHash } from 'crypto';
 import { WompiService } from './wompi.service';
 
 jest.mock('axios');
@@ -48,9 +49,9 @@ describe('WompiService: atajos solo con NODE_ENV=development', () => {
 
     it(`WOMPI_MODE=stub ${shortcuts ? 'acepta' : 'NO acepta'} un webhook sin firma`, async () => {
       const service = build(env({ WOMPI_MODE: 'stub' }));
-      await expect(
-        service.verifyWebhookEvent({ event: 'x' }, ''),
-      ).resolves.toBe(shortcuts);
+      expect(service.verifyWebhookEvent({ event: 'x', data: {} }, '')).toBe(
+        shortcuts,
+      );
     });
 
     it(`si Wompi falla, ${shortcuts ? 'da un enlace myapp://payment-demo' : 'propaga el error'}`, async () => {
@@ -68,14 +69,99 @@ describe('WompiService: atajos solo con NODE_ENV=development', () => {
       }
     });
 
-    it(`si la consulta de la transacción falla, ${shortcuts ? 'la da por APPROVED' : 'propaga el error'}`, async () => {
+    it(`si la consulta de la transacción falla, ${shortcuts ? 'devuelve null (decide el atajo de refresh-status)' : 'propaga el error'}`, async () => {
       const service = build(env());
-      const result = service.checkLatestTransactionByReference('sub_1');
+      const result = service.findLatestTransactionByReference('sub_1');
       if (shortcuts) {
-        await expect(result).resolves.toBe('APPROVED');
+        await expect(result).resolves.toBeNull();
       } else {
         await expect(result).rejects.toThrow();
       }
+    });
+  });
+
+  describe('verifyWebhookEvent con el secreto de eventos', () => {
+    const secret = SECRETS.WOMPI_EVENT_INTEGRITY_SECRET;
+    const signed = (checksumOf: string) => ({
+      event: 'transaction.updated',
+      data: { transaction: { id: 'tx-9', status: 'APPROVED' } },
+      timestamp: 1700000000,
+      signature: {
+        properties: ['transaction.id', 'transaction.status'],
+        checksum: createHash('sha256').update(checksumOf).digest('hex'),
+      },
+    });
+
+    it.each(['production', 'test', 'development'])(
+      'NODE_ENV=%p: valida con el algoritmo de Wompi (SHA256, no HMAC)',
+      (nodeEnv) => {
+        const service = build({ NODE_ENV: nodeEnv, ...SECRETS });
+        expect(
+          service.verifyWebhookEvent(signed(`tx-9APPROVED1700000000${secret}`)),
+        ).toBe(true);
+        expect(
+          service.verifyWebhookEvent(signed(`tx-9APPROVED1700000001${secret}`)),
+        ).toBe(false);
+      },
+    );
+
+    it('sin secreto configurado rechaza (fuera del stub)', () => {
+      const service = build({ NODE_ENV: 'test' });
+      expect(service.verifyWebhookEvent(signed(`tx-9APPROVED1700000000`))).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('findLatestTransactionByReference', () => {
+    it('devuelve la transacción más reciente de esa referencia, con la llave privada', async () => {
+      mockedAxios.get.mockResolvedValue({
+        data: {
+          data: [
+            {
+              id: 'a',
+              status: 'DECLINED',
+              amount_in_cents: 1,
+              currency: 'COP',
+              reference: 'sub_1',
+              created_at: '2026-10-22T10:00:00Z',
+            },
+            {
+              id: 'b',
+              status: 'APPROVED',
+              amount_in_cents: 1,
+              currency: 'COP',
+              reference: 'sub_1',
+              created_at: '2026-10-22T11:00:00Z',
+            },
+            {
+              id: 'c',
+              status: 'APPROVED',
+              amount_in_cents: 1,
+              currency: 'COP',
+              reference: 'otra',
+              created_at: '2026-10-22T12:00:00Z',
+            },
+          ],
+        },
+      });
+      const service = build({ NODE_ENV: 'test', ...SECRETS });
+      await expect(
+        service.findLatestTransactionByReference('sub_1'),
+      ).resolves.toMatchObject({ id: 'b', status: 'APPROVED' });
+      const [, options] = mockedAxios.get.mock.calls[0];
+      expect(options).toMatchObject({
+        params: { reference: 'sub_1' },
+        headers: { Authorization: `Bearer ${SECRETS.WOMPI_PRIVATE_KEY}` },
+      });
+    });
+
+    it('sin transacciones → null', async () => {
+      mockedAxios.get.mockResolvedValue({ data: { data: [] } });
+      const service = build({ NODE_ENV: 'test', ...SECRETS });
+      await expect(
+        service.findLatestTransactionByReference('sub_1'),
+      ).resolves.toBeNull();
     });
   });
 
