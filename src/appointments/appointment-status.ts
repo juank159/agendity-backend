@@ -7,8 +7,9 @@ import { ErrorCode } from 'src/common/constants/error-codes';
  * `status` son válidos; la usan el PATCH genérico, cancelar, completar y pagos.
  *
  *   PENDING ──► CONFIRMED ──► COMPLETED
- *      │            │
- *      └────────────┴──► CANCELLED
+ *      │  │         │              ▲
+ *      │  └─────────┼──────────────┘   (completar sin pagar, 2.15: se paga después)
+ *      └────────────┴──► CANCELLED     (si no tiene un pago COMPLETED, 2.15)
  *
  * COMPLETED y CANCELLED son finales. Pedir el mismo estado en el que ya está
  * la cita no es una transición: no cambia nada y no es error (reintentos).
@@ -18,6 +19,7 @@ export const APPOINTMENT_TRANSITIONS: Readonly<
 > = {
   [AppointmentStatus.PENDING]: [
     AppointmentStatus.CONFIRMED,
+    AppointmentStatus.COMPLETED,
     AppointmentStatus.CANCELLED,
   ],
   [AppointmentStatus.CONFIRMED]: [
@@ -90,4 +92,17 @@ export function statusAfterPayment(
   return current === AppointmentStatus.PENDING
     ? AppointmentStatus.CONFIRMED
     : current;
+}
+
+/**
+ * Regla del usuario (2.15): una cita con un pago COMPLETED (no reembolsado del
+ * todo; el reembolso total lo pasa a REFUNDED) no se cancela hasta reembolsarlo.
+ */
+export function assertCancellable(hasCompletedPayment: boolean): void {
+  if (hasCompletedPayment) {
+    throw new BusinessException(
+      ErrorCode.APPOINTMENT_PAID,
+      'La cita tiene un pago registrado: reembólsalo por completo antes de cancelarla',
+    );
+  }
 }

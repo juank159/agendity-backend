@@ -17,8 +17,6 @@ export const UNLIMITED_APPOINTMENTS = -1;
 
 export const SubscriptionStatus = {
   TRIAL: 'trial',
-  /** Se pidió un enlace de pago y aún no se confirmó. */
-  PENDING: 'pending',
   ACTIVE: 'active',
   PAST_DUE: 'past_due',
   CANCELED: 'canceled',
@@ -59,15 +57,49 @@ type SubscriptionLike = Pick<
 > & { plan?: Pick<SubscriptionPlan, 'appointment_limit'> | null };
 
 /**
+ * Estados de un intento de pago de plan (`payment_history.status`). Desde 2.15
+ * pedir un enlace de pago crea un intento `pending` y NO toca la suscripción:
+ * el negocio sigue en su estado (p. ej. trial) hasta que Wompi confirma.
+ */
+export const PaymentAttemptStatus = {
+  PENDING: 'pending',
+  SUCCESSFUL: 'successful',
+  FAILED: 'failed',
+  REFUNDED: 'refunded',
+} as const;
+
+/**
+ * Regla del usuario (2.15): cancelar un plan pagado lo deja vigente hasta
+ * `subscription_end_date` y no se renueva. La fila queda `canceled` (el hecho)
+ * con la fecha de fin; mientras no llegue, el estado efectivo es `active`
+ * (la app solo deja agendar con `active`) y la vista lo marca con
+ * `cancel_at_period_end`. Después de la fecha: `canceled`.
+ */
+export function isCanceledButCurrent(
+  subscription: SubscriptionLike | null,
+  now: Date = new Date(),
+): boolean {
+  return (
+    subscription?.status === SubscriptionStatus.CANCELED &&
+    !!subscription.plan &&
+    !!subscription.subscription_end_date &&
+    new Date(subscription.subscription_end_date).getTime() > now.getTime()
+  );
+}
+
+/**
  * Estado efectivo en `now`. No escribe: una suscripción `active` cuya fecha de
  * fin ya pasó se informa como `expired` aunque la fila diga `active` (la fila
  * la actualiza el cron `expireOverdueSubscriptions`). Sin fila = trial sin usar.
+ * Cancelada pero vigente (`isCanceledButCurrent`) = `active` hasta la fecha de
+ * fin; para distinguirla usa `cancelAtPeriodEnd` / `isCanceledButCurrent`.
  */
 export function effectiveStatus(
   subscription: SubscriptionLike | null,
   now: Date = new Date(),
 ): string {
   if (!subscription) return SubscriptionStatus.TRIAL;
+  if (isCanceledButCurrent(subscription, now)) return SubscriptionStatus.ACTIVE;
   if (
     subscription.status === SubscriptionStatus.ACTIVE &&
     subscription.subscription_end_date &&
@@ -156,7 +188,7 @@ export function appointmentAllowance(
     };
   }
 
-  // pending, past_due, canceled, expired sin plan o active sin plan.
+  // past_due, canceled (ya sin periodo), expired sin plan o active sin plan.
   return {
     canCreateAppointment: false,
     code: ErrorCode.SUBSCRIPTION_INACTIVE,

@@ -2,6 +2,7 @@ import { AppointmentStatus as S } from 'src/common/enums/status.enum';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import {
   APPOINTMENT_TRANSITIONS,
+  assertCancellable,
   assertTransition,
   canTransition,
   isFinalStatus,
@@ -11,6 +12,7 @@ import {
 const ALL = Object.values(S);
 const ALLOWED: [S, S][] = [
   [S.PENDING, S.CONFIRMED],
+  [S.PENDING, S.COMPLETED], // completar sin pagar (2.15)
   [S.PENDING, S.CANCELLED],
   [S.CONFIRMED, S.COMPLETED],
   [S.CONFIRMED, S.CANCELLED],
@@ -25,7 +27,7 @@ describe('Máquina de estados de la cita (2.06)', () => {
     );
   });
 
-  // Las 16 combinaciones: 4 válidas, 4 "mismo estado" (no-op) y 8 inválidas.
+  // Las 16 combinaciones: 5 válidas, 4 "mismo estado" (no-op) y 7 inválidas.
   for (const from of ALL) {
     for (const to of ALL) {
       const kind =
@@ -64,5 +66,21 @@ describe('Máquina de estados de la cita (2.06)', () => {
     expect(() => statusAfterPayment(S.CANCELLED)).toThrow(
       'No se puede registrar un pago en una cita cancelada',
     );
+  });
+});
+
+describe('Cita pagada (2.15)', () => {
+  it('con un pago COMPLETED no se cancela: 409 APPOINTMENT_PAID', () => {
+    let error: any;
+    try {
+      assertCancellable(true);
+    } catch (e) {
+      error = e;
+    }
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.APPOINTMENT_PAID,
+    });
+    expect(() => assertCancellable(false)).not.toThrow();
   });
 });

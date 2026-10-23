@@ -766,6 +766,25 @@ describe('Aislamiento por tenant (e2e)', () => {
           403,
         ],
         [
+          'POST review (solo Owner, 2.15)',
+          () => http.post('/api/reviews').set(t).send({}),
+          403,
+        ],
+        [
+          'POST appointment para otro profesional (2.15)',
+          () =>
+            http
+              .post('/api/appointments')
+              .set(t)
+              .send({
+                client_id: client.id,
+                professional_id: owner.id,
+                service_ids: [service.id],
+                date: '2030-01-07T10:00:00-05:00',
+              }),
+          403,
+        ],
+        [
           'POST whatsapp config',
           () => http.post('/api/whatsapp/config').set(t).send({}),
           403,

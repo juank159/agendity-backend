@@ -39,6 +39,8 @@ function build() {
     save: jest.fn(async (a) => ({ id: 'nueva', ...a })),
     findOne: jest.fn((options) => repo.findOne(options)),
     update: jest.fn(async () => ({ affected: 1 })),
+    // ¿Tiene la cita un pago COMPLETED? (cancelar, 2.15)
+    exist: jest.fn(async () => false),
   };
   // Lo que "hay" en la BD para el hueco: horarios, bloqueos y citas que se cruzan.
   const db = {
@@ -546,10 +548,9 @@ describe('AppointmentsService (estados: cancelar y completar, 2.06)', () => {
     expect(txRepo.update).not.toHaveBeenCalled();
   });
 
-  it('cancelar una COMPLETED o completar una PENDING/CANCELLED: 409 INVALID_STATE_TRANSITION', async () => {
+  it('cancelar una COMPLETED o completar una CANCELLED: 409 INVALID_STATE_TRANSITION', async () => {
     const cases: [AppointmentStatus, 'cancel' | 'complete'][] = [
       [AppointmentStatus.COMPLETED, 'cancel'],
-      [AppointmentStatus.PENDING, 'complete'],
       [AppointmentStatus.CANCELLED, 'complete'],
     ];
     for (const [from, action] of cases) {
@@ -566,14 +567,70 @@ describe('AppointmentsService (estados: cancelar y completar, 2.06)', () => {
     }
   });
 
-  it('completar una CONFIRMED', async () => {
-    const { service, repo, txRepo } = build();
-    repo.findOne.mockResolvedValue(at(AppointmentStatus.CONFIRMED));
-    await service.complete('cita-1', ownerScope);
-    expect(txRepo.update).toHaveBeenCalledWith(
-      { id: 'cita-1' },
-      { status: AppointmentStatus.COMPLETED },
-    );
+  it('completar una CONFIRMED o una PENDING sin pagar (2.15)', async () => {
+    for (const from of [
+      AppointmentStatus.CONFIRMED,
+      AppointmentStatus.PENDING,
+    ]) {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue(at(from));
+      await service.complete('cita-1', ownerScope);
+      expect(txRepo.update).toHaveBeenCalledWith(
+        { id: 'cita-1' },
+        { status: AppointmentStatus.COMPLETED },
+      );
+    }
+  });
+
+  it('cancelar una cita con pago COMPLETED: 409 APPOINTMENT_PAID, consultado bajo el lock (2.15)', async () => {
+    for (const via of ['cancel', 'patch'] as const) {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue(at(AppointmentStatus.CONFIRMED));
+      txRepo.exist.mockResolvedValue(true);
+      const error = await (
+        via === 'cancel'
+          ? service.cancel('cita-1', ownerScope)
+          : service.update(
+              'cita-1',
+              { status: AppointmentStatus.CANCELLED } as any,
+              TENANT,
+            )
+      ).catch((e) => e);
+      expect(error.getStatus()).toBe(409);
+      expect(error.getResponse()).toMatchObject({
+        code: ErrorCode.APPOINTMENT_PAID,
+      });
+      expect(txRepo.exist).toHaveBeenCalledWith({
+        where: { appointment: { id: 'cita-1' }, status: 'COMPLETED' },
+      });
+      expect(txRepo.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+        txRepo.exist.mock.invocationCallOrder[0],
+      );
+      expect(txRepo.update).not.toHaveBeenCalled();
+      expect(txRepo.save).not.toHaveBeenCalled();
+    }
+  });
+
+  it('Employee: crear una cita para otro profesional → 403 sin tocar el cupo; para sí mismo, sí (2.15)', async () => {
+    const OTHER = 'c0000000-0000-4000-8000-000000000099';
+    const dto = {
+      client_id: CLIENT,
+      professional_id: OTHER,
+      service_ids: [SERVICE],
+      date: '2030-01-01T10:00:00',
+    } as any;
+    const { service, subscriptions, users, txRepo } = build();
+    const error = await service.create(dto, employeeScope).catch((e) => e);
+    expect(error.getStatus()).toBe(403);
+    expect(error.getResponse()).toMatchObject({ code: ErrorCode.FORBIDDEN });
+    expect(users.findTenantMember).not.toHaveBeenCalled();
+    expect(subscriptions.consumeAppointmentQuota).not.toHaveBeenCalled();
+
+    await service.create({ ...dto, professional_id: EMPLOYEE }, employeeScope);
+    expect(txRepo.save).toHaveBeenCalledTimes(1);
+    // El Owner agenda para cualquiera del negocio.
+    await service.create(dto, ownerScope);
+    expect(txRepo.save).toHaveBeenCalledTimes(2);
   });
 
   it('Employee: el lock filtra por su profesional (cita ajena = 404, sin escribir)', async () => {

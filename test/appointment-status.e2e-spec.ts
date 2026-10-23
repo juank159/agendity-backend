@@ -17,15 +17,18 @@ import { Service } from '../src/services/entities/service.entity';
 import { Payment } from '../src/payments/entities/payment.entity';
 import { Appointment } from '../src/appointments/entities/appointment.entity';
 import { PaymentsService } from '../src/payments/payments.service';
+import { AppointmentsService } from '../src/appointments/appointments.service';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
+import {
+  WRITABLE_DB,
+  assertWritableDatabase,
+  describeWritable,
+  resetTrialQuota,
+} from './utils/writable-db';
+
 const MISSING_ID = '33333333-3333-4333-8333-333333333333';
-const WRITABLE_DB = process.env.E2E_WRITABLE_DB;
-const RUN_WRITES =
-  !!WRITABLE_DB &&
-  WRITABLE_DB !== 'ecommerce' &&
-  process.env.DB_NAME === WRITABLE_DB;
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -140,7 +143,7 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
   });
 });
 
-(RUN_WRITES ? describe : describe.skip)(
+describeWritable(
   `Estados de cita y pagos contra la copia ${WRITABLE_DB} (e2e, escribe)`,
   () => {
     let app: INestApplication;
@@ -158,10 +161,7 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
     beforeAll(async () => {
       ({ app, http, close } = await createE2EApp());
       ds = app.get(DataSource);
-      const [{ db }] = await ds.query('SELECT current_database() AS db');
-      if (db !== WRITABLE_DB || db === 'ecommerce') {
-        throw new Error(`Base inesperada: ${db}`);
-      }
+      await assertWritableDatabase(ds);
       // Nada de recordatorios reales (el evento programa envíos).
       jest.spyOn(app.get(EventEmitter2), 'emit').mockImplementation(() => true);
       ({ owner, employee } = await findDevOwnerAndEmployee(ds));
@@ -176,6 +176,14 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
       service = await ds.getRepository(Service).findOneOrFail({
         where: { ownerId: owner.id },
       });
+      // Precondiciones propias (no dependen de otros specs ni del orden):
+      // cupo de trial de sobra y fechas después de todas las citas ya creadas
+      // en la copia (cada corrida crea las suyas, sin cruzarse con las previas).
+      await resetTrialQuota(ds, owner.id, { limit: 1000 });
+      const [{ n }] = await ds.query(
+        'SELECT count(*)::int AS n FROM appointments',
+      );
+      day = n;
     });
 
     afterAll(async () => close?.());
@@ -186,8 +194,8 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
       professionalId = owner.id,
     ): Promise<{ id: string; total: number }> {
       day += 1;
-      // Lunes 2020-01-06 + 7 días por cita: dentro del horario L-V 9-18.
-      const date = new Date(Date.UTC(2020, 0, 6 + 7 * day, 15, 0, 0));
+      // Lunes 2000-01-03 + 1 semana por cita (10:00 Bogotá): horario L-V 9-18 y en el pasado.
+      const date = new Date(Date.UTC(2000, 0, 3 + 7 * day, 15, 0, 0));
       const res = await http
         .post('/api/appointments')
         .set(auth(token))
@@ -218,12 +226,6 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
       const { id, total } = await newAppointment();
       expect(await statusOf(id)).toEqual(['PENDING', 'PENDING']);
 
-      const early = await http
-        .patch(`/api/appointments/${id}/complete`)
-        .set(auth(ownerToken));
-      expect(early.status).toBe(409);
-      expect(early.body.code).toBe('INVALID_STATE_TRANSITION');
-
       expect((await pay(id, total + 1)).status).toBe(400); // supera el total
       expect((await pay(id, total)).status).toBe(201);
       expect(await statusOf(id)).toEqual(['CONFIRMED', 'COMPLETED']);
@@ -247,6 +249,7 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
         .set(auth(ownerToken))
         .send({});
       expect(cancel.status).toBe(409);
+      expect(cancel.body.code).toBe('INVALID_STATE_TRANSITION');
       const back = await http
         .patch(`/api/appointments/${id}`)
         .set(auth(ownerToken))
@@ -345,6 +348,109 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
         .send({ cancellation_reason: 'empleado' });
       expect(ok.status).toBe(200);
       expect(ok.body.status).toBe('CANCELLED');
+    });
+
+    it('completar sin pagar (PENDING → COMPLETED) y pagar después: el estado no cambia (2.15)', async () => {
+      const { id, total } = await newAppointment();
+      const done = await http
+        .patch(`/api/appointments/${id}/complete`)
+        .set(auth(ownerToken));
+      expect(done.status).toBe(200);
+      expect(await statusOf(id)).toEqual(['COMPLETED', 'PENDING']);
+      expect((await pay(id, total)).status).toBe(201);
+      expect(await statusOf(id)).toEqual(['COMPLETED', 'COMPLETED']);
+    });
+
+    it('cita pagada no se cancela hasta reembolsar todo: APPOINTMENT_PAID (2.15)', async () => {
+      const { id, total } = await newAppointment();
+      const paid = await pay(id, total);
+      for (const attempt of [
+        () =>
+          http
+            .patch(`/api/appointments/${id}/cancel`)
+            .set(auth(ownerToken))
+            .send({}),
+        () =>
+          http
+            .patch(`/api/appointments/${id}`)
+            .set(auth(ownerToken))
+            .send({ status: 'CANCELLED' }),
+      ]) {
+        const res = await attempt();
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('APPOINTMENT_PAID');
+      }
+      const half = Math.round(total * 50) / 100;
+      await http
+        .post(`/api/payments/${paid.body.id}/refund`)
+        .set(auth(ownerToken))
+        .send({ refund_amount: half, refund_reason: 'mitad' });
+      const stillPaid = await http
+        .patch(`/api/appointments/${id}/cancel`)
+        .set(auth(ownerToken))
+        .send({});
+      expect(stillPaid.body.code).toBe('APPOINTMENT_PAID'); // parcial: sigue pagada
+      await http
+        .post(`/api/payments/${paid.body.id}/refund`)
+        .set(auth(ownerToken))
+        .send({
+          refund_amount: Math.round((total - half) * 100) / 100,
+          refund_reason: 'resto',
+        });
+      const ok = await http
+        .patch(`/api/appointments/${id}/cancel`)
+        .set(auth(ownerToken))
+        .send({});
+      expect(ok.status).toBe(200);
+      expect(await statusOf(id)).toEqual(['CANCELLED', 'REFUNDED']);
+    });
+
+    it('carrera: pago y cancelación simultáneos → nunca una cita CANCELLED con pago COMPLETED', async () => {
+      const payments = app.get(PaymentsService);
+      const appointments = app.get(AppointmentsService);
+      for (let i = 0; i < 5; i++) {
+        const { id, total } = await newAppointment();
+        await Promise.allSettled([
+          payments.create(
+            {
+              appointment_id: id,
+              amount: total,
+              payment_method: 'CASH',
+            } as any,
+            owner.id,
+          ),
+          appointments.cancel(id, { tenantId: owner.id }),
+        ]);
+        const [status] = await statusOf(id);
+        const completed = await ds.getRepository(Payment).count({
+          where: { appointment: { id }, status: 'COMPLETED' as any },
+        });
+        expect(status === 'CANCELLED' && completed > 0).toBe(false);
+        expect([
+          ['CANCELLED', 0],
+          ['CONFIRMED', 1],
+        ]).toContainEqual([status, completed]);
+      }
+    });
+
+    it('Employee: no agenda para otro profesional (403) ni reseña (403) (2.15)', async () => {
+      if (!employeeToken) return;
+      const res = await http
+        .post('/api/appointments')
+        .set(auth(employeeToken))
+        .send({
+          client_id: client.id,
+          professional_id: owner.id,
+          service_ids: [service.id],
+          date: '2020-01-06T10:00:00-05:00',
+        });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('FORBIDDEN');
+      const review = await http
+        .post('/api/reviews')
+        .set(auth(employeeToken))
+        .send({});
+      expect(review.status).toBe(403);
     });
 
     it('carrera: 6 pagos simultáneos a la misma cita → solo 1 COMPLETED', async () => {

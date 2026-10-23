@@ -36,13 +36,17 @@ export class AppointmentsController {
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async create(
     @Body() createAppointmentDto: CreateAppointmentDto,
-    @Tenant() tenantId: string,
+    @CurrentUser() user: AuthUser,
   ) {
     // ISO 8601 con offset, o sin offset = hora del negocio (date.util)
     if (!isValidDate(parseBusinessDate(createAppointmentDto.date))) {
       throw new BadRequestException('Invalid date format');
     }
-    return this.appointmentsService.create(createAppointmentDto, tenantId);
+    // Employee: solo para sí mismo (alcance con professionalId = su id, 2.15).
+    return this.appointmentsService.create(
+      createAppointmentDto,
+      appointmentScopeOf(user),
+    );
   }
 
   @Post(':id/send-reminder')

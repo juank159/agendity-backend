@@ -115,11 +115,16 @@ describe('Estado efectivo de la suscripción (2.03)', () => {
     );
   });
 
-  it.each(['canceled', 'pending', 'past_due'])(
+  // `canceled` con fecha futura sigue vigente (2.15): aquí, ya vencida.
+  it.each([
+    ['canceled', PAST],
+    ['pending', FUTURE],
+    ['past_due', FUTURE],
+  ])(
     '%s: SUBSCRIPTION_INACTIVE con el texto que compara la app',
-    (status) => {
+    (status, end) => {
       const result = appointmentAllowance(
-        sub({ status, plan: unlimitedPlan, subscription_end_date: FUTURE }),
+        sub({ status, plan: unlimitedPlan, subscription_end_date: end }),
         NOW,
       );
       expect(result).toEqual({
@@ -202,5 +207,44 @@ describe('Duración del plan (duration_months)', () => {
         duration_months: 1,
       } as any),
     ).toEqual(bogota('2026-02-28T21:00:00'));
+  });
+});
+
+describe('Cancelada pero vigente (2.15)', () => {
+  const {
+    appointmentAllowance: allowance,
+    effectiveStatus: effective,
+    isCanceledButCurrent,
+  } = jest.requireActual('./subscription-state');
+  const now = new Date('2026-10-22T12:00:00-05:00');
+  const canceled = (end: string) => ({
+    status: 'canceled',
+    plan: { appointment_limit: -1 },
+    subscription_end_date: new Date(end),
+    trial_appointments_used: 20,
+    trial_appointments_limit: 20,
+  });
+
+  it('antes del fin: estado efectivo active, marcada y deja agendar', () => {
+    const sub = canceled('2026-11-01T00:00:00-05:00');
+    expect(isCanceledButCurrent(sub, now)).toBe(true);
+    expect(effective(sub, now)).toBe('active');
+    expect(allowance(sub, now).canCreateAppointment).toBe(true);
+  });
+
+  it('después del fin: canceled y no deja agendar', () => {
+    const sub = canceled('2026-10-01T00:00:00-05:00');
+    expect(isCanceledButCurrent(sub, now)).toBe(false);
+    expect(effective(sub, now)).toBe('canceled');
+    expect(allowance(sub, now)).toMatchObject({
+      canCreateAppointment: false,
+      code: 'SUBSCRIPTION_INACTIVE',
+    });
+  });
+
+  it('cancelada sin plan (trial cancelado): no está vigente', () => {
+    const sub = { ...canceled('2026-11-01T00:00:00-05:00'), plan: null };
+    expect(isCanceledButCurrent(sub, now)).toBe(false);
+    expect(effective(sub, now)).toBe('canceled');
   });
 });

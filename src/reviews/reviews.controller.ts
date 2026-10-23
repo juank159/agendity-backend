@@ -30,7 +30,7 @@ export class ReviewsController {
   constructor(private readonly reviewsService: ReviewsService) {}
 
   @Post()
-  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  @hasRoles(JwtRoles.Owner)
   @ApiOperation({ summary: 'Crear una nueva reseña' })
   @ApiResponse({
     status: 201,

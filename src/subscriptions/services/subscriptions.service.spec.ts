@@ -319,14 +319,13 @@ describe('SubscriptionsService.consumeAppointmentQuota (2.03)', () => {
 });
 
 describe('SubscriptionsService: escrituras por tenant y duración del plan', () => {
-  it('subscribe usa el tenant de la sesión (no el del DTO) y la duración del plan', async () => {
-    const { service, subscriptions, plans } = build(trial(3));
+  it('subscribe usa el tenant de la sesión (no el del DTO), crea un intento pending y NO toca la suscripción (2.15)', async () => {
+    const { service, subscriptions, plans, payments } = build(trial(3));
     plans.findOne.mockResolvedValue({
       id: 'plan',
-      name: 'Plan Profesional Mensual', // el nombre ya no decide
+      name: 'Plan Profesional Mensual',
       price: 149900,
       currency: 'COP',
-      billing_interval: 'month',
       duration_months: 6,
     });
     const result = await service.createPaidSubscription(TENANT, {
@@ -337,16 +336,94 @@ describe('SubscriptionsService: escrituras por tenant y duración del plan', () 
     expect(subscriptions.findOne.mock.calls[0][0].where).toEqual({
       tenant_id: TENANT,
     });
-    const saved = subscriptions.save.mock.calls[0][0];
-    expect(saved.tenant_id).toBe(TENANT);
-    expect(saved.status).toBe('pending');
-    const start: Date = saved.subscription_start_date;
-    const months =
-      (saved.subscription_end_date.getFullYear() - start.getFullYear()) * 12 +
-      saved.subscription_end_date.getMonth() -
-      start.getMonth();
-    expect(months).toBe(6);
+    expect(subscriptions.writes).toEqual([]); // la suscripción, intacta
+    const attempt = payments.save.mock.calls[0][0];
+    expect(attempt).toMatchObject({
+      tenant_id: TENANT,
+      subscription: { id: 'sub-1' },
+      amount: 149900,
+      status: 'pending',
+      metadata: { plan_id: 'plan', reference: 'sub_sub-1' },
+    });
+    expect(result.status).toBe('trial');
     expect(result.payment_link).toBe('https://checkout/x');
+  });
+
+  it('si Wompi no da el enlace, el intento queda failed y la suscripción intacta', async () => {
+    const { service, subscriptions, plans, payments, wompi } = build(trial(3));
+    plans.findOne.mockResolvedValue({ id: 'plan', price: 1, currency: 'COP' });
+    wompi.createPaymentLink.mockRejectedValue(new Error('caído'));
+    payments.save.mockImplementation(async (x) => ({ id: 'att-1', ...x }));
+    await expect(
+      service.createPaidSubscription(TENANT, { plan_id: 'plan' } as any),
+    ).rejects.toThrow('caído');
+    expect(subscriptions.writes).toEqual([]);
+    expect(payments.save.mock.calls[1][0]).toMatchObject({
+      id: 'att-1',
+      status: 'failed',
+    });
+  });
+
+  it('pago rechazado (webhook FAILED): marca el intento failed y NO saca del trial', async () => {
+    const { service, subscriptions, payments } = build(trial(3));
+    payments.find.mockResolvedValue([{ id: 'att-1', status: 'pending' }]);
+    await service.handleSubscriptionUpdated('sub-1', 'FAILED');
+    expect(subscriptions.save).not.toHaveBeenCalled();
+    expect(payments.update).toHaveBeenCalledWith(
+      { id: 'att-1' },
+      expect.objectContaining({ status: 'failed' }),
+    );
+  });
+
+  it('aprobado: activa con el plan del intento pagado (metadata.plan_id)', async () => {
+    const { service, subscriptions, payments, plans } = build(trial(20));
+    payments.find.mockResolvedValue([
+      { id: 'att-1', status: 'successful', metadata: { plan_id: 'anual' } },
+    ]);
+    plans.findOne.mockResolvedValue({ id: 'anual', duration_months: 12 });
+    await service.handleSubscriptionUpdated('sub-1', 'ACTIVE');
+    const saved = subscriptions.save.mock.calls[0][0];
+    expect(saved.status).toBe('active');
+    expect(saved.plan).toEqual({ id: 'anual', duration_months: 12 });
+    expect(saved.subscription_end_date.getFullYear()).toBe(
+      saved.subscription_start_date.getFullYear() + 1,
+    );
+  });
+
+  it('recordPayment completa el intento pending (mismo importe) sin cambiar la suscripción; idempotente por transacción', async () => {
+    const { service, subscriptions, payments } = build(trial(3));
+    payments.find.mockResolvedValue([
+      { id: 'otro', amount: '5.00', status: 'pending' },
+      { id: 'att-1', amount: '149900.00', status: 'pending' },
+    ]);
+    await service.recordPayment(
+      TENANT,
+      'sub-1',
+      149900,
+      'COP',
+      'successful',
+      'tx-1',
+      '',
+    );
+    expect(payments.save.mock.calls[0][0]).toMatchObject({
+      id: 'att-1',
+      status: 'successful',
+      wompi_transaction_id: 'tx-1',
+    });
+    expect(subscriptions.save).not.toHaveBeenCalled();
+
+    payments.findOne.mockResolvedValue({ id: 'att-1' });
+    payments.save.mockClear();
+    await service.recordPayment(
+      TENANT,
+      'sub-1',
+      149900,
+      'COP',
+      'successful',
+      'tx-1',
+      '',
+    );
+    expect(payments.save).not.toHaveBeenCalled();
   });
 
   it('al activarse (webhook/refresh) el periodo sale de duration_months', async () => {
@@ -379,30 +456,65 @@ describe('SubscriptionsService: escrituras por tenant y duración del plan', () 
     expect(values).toEqual({ status: 'expired' });
   });
 
-  it('refresh-status no activa con un pago exitoso de un intento anterior', async () => {
-    const start = new Date('2026-10-20T10:00:00');
-    const { service, payments, wompi } = build({
-      id: 'sub-1',
-      tenant_id: TENANT,
-      status: 'pending',
-      subscription_start_date: start,
-    });
-    payments.find.mockResolvedValue([
-      { status: 'successful', payment_date: new Date('2026-05-01') },
-    ]);
-    (wompi as any).checkLatestTransactionByReference = jest
-      .fn()
-      .mockResolvedValue('PENDING');
+  it('refresh-status sin intento pending: no hace nada', async () => {
+    const { service, wompi } = build(trial(3));
+    (wompi as any).checkLatestTransactionByReference = jest.fn();
     const spy = jest.spyOn(service, 'handleSubscriptionUpdated');
     await expect(service.refreshPendingSubscription(TENANT)).resolves.toEqual({
       success: false,
       message: 'No se encontraron cambios en la suscripción',
     });
-    expect(payments.find.mock.calls[0][0].where).toEqual({
-      tenant_id: TENANT,
-      subscription: { id: 'sub-1' },
-      status: 'successful',
-    });
+    expect(
+      (wompi as any).checkLatestTransactionByReference,
+    ).not.toHaveBeenCalled();
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('refresh-status con intento pending y Wompi APPROVED: completa el intento y activa', async () => {
+    const { service, payments, wompi } = build(trial(3));
+    payments.find.mockResolvedValue([{ id: 'att-1', status: 'pending' }]);
+    (wompi as any).checkLatestTransactionByReference = jest
+      .fn()
+      .mockResolvedValue('APPROVED');
+    const spy = jest
+      .spyOn(service, 'handleSubscriptionUpdated')
+      .mockResolvedValue(undefined);
+    const result = await service.refreshPendingSubscription(TENANT);
+    expect(result.success).toBe(true);
+    expect(payments.update).toHaveBeenCalledWith(
+      { id: 'att-1' },
+      expect.objectContaining({ status: 'successful' }),
+    );
+    expect(spy).toHaveBeenCalledWith('sub-1', 'ACTIVE');
+  });
+
+  it('refresh-status con Wompi PENDING: el negocio sigue en trial', async () => {
+    const { service, payments, wompi, subscriptions } = build(trial(3));
+    payments.find.mockResolvedValue([{ id: 'att-1', status: 'pending' }]);
+    (wompi as any).checkLatestTransactionByReference = jest
+      .fn()
+      .mockResolvedValue('PENDING');
+    const result = await service.refreshPendingSubscription(TENANT);
+    expect(result.success).toBe(false);
+    expect(subscriptions.writes).toEqual([]);
+    expect(payments.update).not.toHaveBeenCalled();
+  });
+
+  it('cancelar un plan pagado: canceled en la fila, vigente (active) hasta la fecha de fin', async () => {
+    const end = new Date(Date.now() + 10 * 24 * 3600 * 1000);
+    const { service, subscriptions } = build({
+      id: 'sub-1',
+      tenant_id: TENANT,
+      status: 'active',
+      plan: { appointment_limit: -1 },
+      subscription_end_date: end,
+    });
+    const result: any = await service.cancelSubscription(TENANT);
+    expect(subscriptions.save.mock.calls[0][0]).toMatchObject({
+      status: 'canceled',
+      subscription_end_date: end,
+    });
+    expect(result.status).toBe('active');
+    expect(result.cancel_at_period_end).toBe(true);
   });
 });

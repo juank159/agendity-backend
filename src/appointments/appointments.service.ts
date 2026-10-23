@@ -36,7 +36,12 @@ import {
   fitsSchedule,
   NON_BLOCKING_STATUSES,
 } from './appointment-slot';
-import { assertTransition, statusAfterPayment } from './appointment-status';
+import {
+  assertCancellable,
+  assertTransition,
+  statusAfterPayment,
+} from './appointment-status';
+import { Payment } from 'src/payments/entities/payment.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { User } from 'src/users/entities/user.entity';
 import { parseBusinessDate } from 'src/common/utils/date.util';
@@ -84,7 +89,8 @@ export class AppointmentsService {
   }
 
   /**
-   * Crea una cita del negocio `tenantId` (Owner o Employee). Cliente, profesional
+   * Crea una cita del negocio (Owner: para cualquier profesional del negocio;
+   * Employee: solo para sí mismo, si no 403 FORBIDDEN, 2.15). Cliente, profesional
    * y servicios deben ser del mismo negocio (si no, 404) y el profesional debe
    * estar activo; todo se valida antes de tocar la suscripción. Después, en UNA
    * transacción: se consume el cupo (trial o plan, con lock por negocio), se
@@ -93,9 +99,11 @@ export class AppointmentsService {
    */
   async create(
     createAppointmentDto: CreateAppointmentDto,
-    tenantId: string,
+    scope: AppointmentScope | string,
   ): Promise<Appointment> {
     try {
+      const { tenantId, professionalId: ownProfessionalId } =
+        toAppointmentScope(scope);
       const {
         client_id,
         professional_id,
@@ -103,6 +111,14 @@ export class AppointmentsService {
         date,
         ...appointmentData
       } = createAppointmentDto;
+
+      // Regla del usuario (2.15): un Employee agenda solo para sí mismo.
+      if (ownProfessionalId && professional_id !== ownProfessionalId) {
+        throw new BusinessException(
+          ErrorCode.FORBIDDEN,
+          'Solo puedes agendar citas para ti',
+        );
+      }
 
       const [client, professional] = await Promise.all([
         this.clientsService.findOne(client_id, tenantId),
@@ -361,6 +377,7 @@ export class AppointmentsService {
             nextStatus = updateAppointmentDto.status;
             updateData.status = nextStatus;
             if (nextStatus === AppointmentStatus.CANCELLED) {
+              await this.assertCancellable(manager, id);
               updateData.cancellation_reason =
                 updateAppointmentDto.cancellation_reason ?? null;
             }
@@ -421,7 +438,8 @@ export class AppointmentsService {
   }
 
   /**
-   * Cancela una cita (PENDING o CONFIRMED → CANCELLED) con motivo opcional.
+   * Cancela una cita (PENDING o CONFIRMED → CANCELLED) con motivo opcional,
+   * salvo que tenga un pago COMPLETED (`APPOINTMENT_PAID`, 2.15).
    * Owner: cualquier cita del negocio; Employee: solo las suyas (alcance).
    * El hueco queda libre (`blocksSlot`). El cupo del trial NO se devuelve.
    */
@@ -435,7 +453,7 @@ export class AppointmentsService {
     });
   }
 
-  /** Completa una cita CONFIRMED (→ COMPLETED). Mismo alcance que `cancel`. */
+  /** Completa una cita PENDING o CONFIRMED (→ COMPLETED; sin pagar se paga después, 2.15). */
   complete(id: string, scope: AppointmentScope): Promise<Appointment> {
     return this.changeStatus(id, scope, AppointmentStatus.COMPLETED);
   }
@@ -449,11 +467,32 @@ export class AppointmentsService {
     await this.dataSource.transaction(async (manager) => {
       const current = await this.lockAppointment(manager, id, scope);
       if (!assertTransition(current.status, to)) return; // ya estaba: no-op
+      if (to === AppointmentStatus.CANCELLED) {
+        await this.assertCancellable(manager, current.id);
+      }
       await manager
         .getRepository(Appointment)
         .update({ id: current.id }, { status: to, ...extra });
     });
     return this.findOne(id, scope);
+  }
+
+  /**
+   * Una cita con un pago COMPLETED no se cancela (2.15). Se consulta con la
+   * cita ya bloqueada: crear un pago bloquea la misma fila, así que un pago y
+   * una cancelación simultáneos no pueden pasar los dos.
+   */
+  private async assertCancellable(
+    manager: EntityManager,
+    appointmentId: string,
+  ): Promise<void> {
+    const paid = await manager.getRepository(Payment).exist({
+      where: {
+        appointment: { id: appointmentId },
+        status: PaymentStatus.COMPLETED,
+      },
+    });
+    assertCancellable(paid);
   }
 
   /**

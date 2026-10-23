@@ -719,18 +719,21 @@ export class AuthService {
       // Restaurar empleado
       await this.userRepository.restore(employeeId);
 
-      // Reactivar empleado
+      // Reactivar solo si verificó su email (2.15). Si no, se restaura
+      // inactivo: el Owner lo activa al verificar (`verify/employee-email`).
+      const isActive = canActivateEmployee(employee);
       await this.userRepository.update(employeeId, {
-        isActive: true,
+        isActive,
         deletionReason: null,
         deletedBy: null,
       });
 
-      console.log(`✅ Empleado ${employeeId} restaurado exitosamente`);
-
       return {
-        message: 'Empleado restaurado correctamente',
+        message: isActive
+          ? 'Empleado restaurado correctamente'
+          : 'Empleado restaurado. Debe verificar su email para activarse',
         id: employeeId,
+        isActive,
         restoredAt: new Date(),
       };
     } catch (error) {
@@ -1177,45 +1180,33 @@ export class AuthService {
     };
   }
 
+  /**
+   * Activa o desactiva un empleado del Owner (404 si es de otro negocio).
+   * Regla del usuario (2.15): activar exige el email verificado
+   * (`EMAIL_NOT_VERIFIED`, 409). `verify/employee-email` ya activa al verificar.
+   */
   async toggleEmployeeStatus(
     ownerId: string,
     employeeId: string,
     statusData: ToggleEmployeeStatusDto,
-    isEmailVerification: boolean = false,
   ) {
     try {
-      // Si es verificación de email, buscamos el empleado directamente por ID
-      let employee;
-
-      if (isEmailVerification) {
-        employee = await this.userRepository.findOne({
-          where: { id: employeeId },
-          relations: ['roles', 'owner'],
-        });
-      } else {
-        // Buscar el empleado verificando que pertenezca al owner
-        employee = await this.userRepository.findOne({
-          where: {
-            id: employeeId,
-            owner: { id: ownerId },
-          },
-          relations: ['roles', 'owner'],
-        });
-      }
+      const employee = await this.userRepository.findOne({
+        where: {
+          id: employeeId,
+          owner: { id: ownerId },
+        },
+        relations: ['roles', 'owner'],
+      });
 
       if (!employee) {
         throw new NotFoundException('Empleado no encontrado');
       }
 
-      // Actualizar el estado
-      employee.isActive = statusData.isActive;
-
-      // Si es verificación de email, también marcar como verificado
-      if (isEmailVerification) {
-        employee.is_email_verified = true;
+      if (statusData.isActive) {
+        assertCanActivateEmployee(employee);
       }
-
-      // Guardar el cambio
+      employee.isActive = statusData.isActive;
       await this.userRepository.save(employee);
 
       // Retornar el empleado actualizado
@@ -1230,9 +1221,11 @@ export class AuthService {
       if (error instanceof HttpException) {
         throw error;
       }
-      console.error('Error al cambiar el estado del empleado:', error);
+      this.logger.error(
+        `Error al cambiar el estado del empleado: ${error?.message}`,
+      );
       throw new InternalServerErrorException(
-        `Error al actualizar el estado del empleado: ${error.message}`,
+        'Error al actualizar el estado del empleado',
       );
     }
   }
@@ -1287,4 +1280,22 @@ export function parseGoogleClientIds(raw: string | undefined | null): string[] {
     .split(',')
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
+}
+
+/** Regla del usuario (2.15): solo se activa un empleado con el email verificado. */
+export function canActivateEmployee(employee: {
+  is_email_verified?: boolean;
+}): boolean {
+  return employee?.is_email_verified === true;
+}
+
+export function assertCanActivateEmployee(employee: {
+  is_email_verified?: boolean;
+}): void {
+  if (!canActivateEmployee(employee)) {
+    throw new BusinessException(
+      ErrorCode.EMAIL_NOT_VERIFIED,
+      'El profesional debe verificar su email antes de activarse',
+    );
+  }
 }
