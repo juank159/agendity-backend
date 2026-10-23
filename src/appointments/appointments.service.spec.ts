@@ -34,7 +34,12 @@ function build() {
       .mockResolvedValue({ canCreateAppointment: true }),
   };
   // Transacción simulada: la cita se guarda con el repositorio del manager.
-  const txRepo = { save: jest.fn(async (a) => ({ id: 'nueva', ...a })) };
+  // `findOne` con lock (`lockAppointment`) devuelve lo mismo que el repositorio.
+  const txRepo = {
+    save: jest.fn(async (a) => ({ id: 'nueva', ...a })),
+    findOne: jest.fn((options) => repo.findOne(options)),
+    update: jest.fn(async () => ({ affected: 1 })),
+  };
   // Lo que "hay" en la BD para el hueco: horarios, bloqueos y citas que se cruzan.
   const db = {
     schedules: [] as any[],
@@ -415,17 +420,213 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
       expect(txRepo.save).toHaveBeenCalledTimes(2);
     });
 
-    it('reactivar una cita CANCELLED vuelve a comprobar el hueco', async () => {
-      const { service, repo, db } = build();
+    it('reactivar una cita CANCELLED: INVALID_STATE_TRANSITION (409) sin comprobar el hueco ni guardar', async () => {
+      const { service, repo, manager, txRepo } = build();
       repo.findOne.mockResolvedValue({
         ...existing(),
         status: AppointmentStatus.CANCELLED,
       });
-      db.overlaps = [{ id: 'otra' }];
       const error = await service
         .update('cita-1', { status: AppointmentStatus.PENDING } as any, TENANT)
         .catch((e) => e);
-      expectSlotUnavailable(error);
+      expect(error).toBeInstanceOf(BusinessException);
+      expect(error.getStatus()).toBe(409);
+      expect(error.getResponse()).toMatchObject({
+        code: ErrorCode.INVALID_STATE_TRANSITION,
+      });
+      expect(manager.query).not.toHaveBeenCalled();
+      expect(txRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('el estado se valida contra la fila bloqueada (FOR UPDATE), no contra la lectura previa', async () => {
+      const { service, repo, txRepo } = build();
+      // Lectura previa: PENDING. Dentro de la transacción (con lock): ya CANCELLED.
+      repo.findOne.mockResolvedValue(existing());
+      txRepo.findOne.mockResolvedValueOnce({
+        ...existing(),
+        status: AppointmentStatus.CANCELLED,
+      });
+      const error = await service
+        .update(
+          'cita-1',
+          { status: AppointmentStatus.CONFIRMED } as any,
+          TENANT,
+        )
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: ErrorCode.INVALID_STATE_TRANSITION,
+      });
+      expect(txRepo.findOne.mock.calls[0][0]).toMatchObject({
+        where: { id: 'cita-1', ownerId: TENANT },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(txRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('guarda solo los campos que cambian (no la foto vieja: estado, pago y recordatorio intactos)', async () => {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue({
+        ...existing(),
+        payment_status: 'PENDING',
+        reminderSent: false,
+      });
+      await service.update('cita-1', { notes: 'nota' } as any, TENANT);
+      expect(txRepo.save).toHaveBeenCalledWith({ id: 'cita-1', notes: 'nota' });
+    });
+
+    it('cancelar por el PATCH guarda el motivo; el mismo estado es un no-op', async () => {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue(existing());
+      await service.update(
+        'cita-1',
+        {
+          status: AppointmentStatus.CANCELLED,
+          cancellation_reason: 'lluvia',
+        } as any,
+        TENANT,
+      );
+      expect(txRepo.save).toHaveBeenLastCalledWith({
+        id: 'cita-1',
+        status: AppointmentStatus.CANCELLED,
+        cancellation_reason: 'lluvia',
+      });
+      await service.update(
+        'cita-1',
+        { status: AppointmentStatus.PENDING } as any,
+        TENANT,
+      );
+      expect(txRepo.save).toHaveBeenLastCalledWith({ id: 'cita-1' });
+    });
+  });
+});
+
+describe('AppointmentsService (estados: cancelar y completar, 2.06)', () => {
+  const at = (status: AppointmentStatus) => ({
+    id: 'cita-1',
+    ownerId: TENANT,
+    professionalId: EMPLOYEE,
+    status,
+  });
+  const ownerScope = { tenantId: TENANT };
+  const employeeScope = { tenantId: TENANT, professionalId: EMPLOYEE };
+
+  it('cancelar PENDING o CONFIRMED: transacción + lock de fila + motivo', async () => {
+    for (const from of [
+      AppointmentStatus.PENDING,
+      AppointmentStatus.CONFIRMED,
+    ]) {
+      const { service, repo, txRepo, dataSource } = build();
+      repo.findOne.mockResolvedValue(at(from));
+      await service.cancel('cita-1', ownerScope, '  no viene  ');
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(txRepo.findOne.mock.calls[0][0]).toMatchObject({
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(txRepo.update).toHaveBeenCalledWith(
+        { id: 'cita-1' },
+        {
+          status: AppointmentStatus.CANCELLED,
+          cancellation_reason: 'no viene',
+        },
+      );
+    }
+  });
+
+  it('cancelar sin motivo guarda null; cancelar una cancelada es un no-op', async () => {
+    const { service, repo, txRepo } = build();
+    repo.findOne.mockResolvedValue(at(AppointmentStatus.PENDING));
+    await service.cancel('cita-1', ownerScope);
+    expect(txRepo.update).toHaveBeenCalledWith(
+      { id: 'cita-1' },
+      { status: AppointmentStatus.CANCELLED, cancellation_reason: null },
+    );
+    txRepo.update.mockClear();
+    repo.findOne.mockResolvedValue(at(AppointmentStatus.CANCELLED));
+    await service.cancel('cita-1', ownerScope, 'otra');
+    expect(txRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('cancelar una COMPLETED o completar una PENDING/CANCELLED: 409 INVALID_STATE_TRANSITION', async () => {
+    const cases: [AppointmentStatus, 'cancel' | 'complete'][] = [
+      [AppointmentStatus.COMPLETED, 'cancel'],
+      [AppointmentStatus.PENDING, 'complete'],
+      [AppointmentStatus.CANCELLED, 'complete'],
+    ];
+    for (const [from, action] of cases) {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue(at(from));
+      const error = await (service as any)
+        [action]('cita-1', ownerScope)
+        .catch((e) => e);
+      expect(error.getStatus()).toBe(409);
+      expect(error.getResponse()).toMatchObject({
+        code: ErrorCode.INVALID_STATE_TRANSITION,
+      });
+      expect(txRepo.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('completar una CONFIRMED', async () => {
+    const { service, repo, txRepo } = build();
+    repo.findOne.mockResolvedValue(at(AppointmentStatus.CONFIRMED));
+    await service.complete('cita-1', ownerScope);
+    expect(txRepo.update).toHaveBeenCalledWith(
+      { id: 'cita-1' },
+      { status: AppointmentStatus.COMPLETED },
+    );
+  });
+
+  it('Employee: el lock filtra por su profesional (cita ajena = 404, sin escribir)', async () => {
+    const { service, repo, txRepo } = build();
+    repo.findOne.mockResolvedValue(null);
+    const error = await service.cancel('cita-1', employeeScope).catch((e) => e);
+    expect(error).toBeInstanceOf(NotFoundException);
+    expect(txRepo.findOne.mock.calls[0][0].where).toEqual({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+    });
+    expect(txRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('applyPaymentStatus: PENDING → CONFIRMED; COMPLETED se queda; CANCELLED → 409', async () => {
+    const { service, manager, txRepo } = build();
+    await service.applyPaymentStatus(
+      manager as any,
+      at(AppointmentStatus.PENDING) as any,
+      'COMPLETED' as any,
+    );
+    expect(txRepo.update).toHaveBeenLastCalledWith(
+      { id: 'cita-1' },
+      { payment_status: 'COMPLETED', status: AppointmentStatus.CONFIRMED },
+    );
+    await service.applyPaymentStatus(
+      manager as any,
+      at(AppointmentStatus.COMPLETED) as any,
+      'COMPLETED' as any,
+    );
+    expect(txRepo.update).toHaveBeenLastCalledWith(
+      { id: 'cita-1' },
+      { payment_status: 'COMPLETED', status: AppointmentStatus.COMPLETED },
+    );
+    await service.applyPaymentStatus(
+      manager as any,
+      at(AppointmentStatus.CONFIRMED) as any,
+      'REFUNDED' as any,
+    );
+    expect(txRepo.update).toHaveBeenLastCalledWith(
+      { id: 'cita-1' },
+      { payment_status: 'REFUNDED' },
+    );
+    const error = await service
+      .applyPaymentStatus(
+        manager as any,
+        at(AppointmentStatus.CANCELLED) as any,
+        'COMPLETED' as any,
+      )
+      .catch((e) => e);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.INVALID_STATE_TRANSITION,
     });
   });
 });

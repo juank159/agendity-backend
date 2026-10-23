@@ -1,17 +1,27 @@
 import {
   Injectable,
   NotFoundException,
-  BadRequestException,
   InternalServerErrorException,
+  HttpException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Payment } from './entities/payment.entity';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { AppointmentStatus, PaymentStatus } from '../common/enums/status.enum';
+import { PaymentStatus } from '../common/enums/status.enum';
+import { BusinessException } from '../common/exceptions/business.exception';
+import { ErrorCode } from '../common/constants/error-codes';
+import {
+  applyRefund,
+  assertPaymentAmount,
+  fromCents,
+  netAmountSql,
+} from './payment-rules';
+import { statusAfterPayment } from '../appointments/appointment-status';
 import {
   NotificationType,
   ReceiverType,
@@ -34,44 +44,51 @@ import {
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepository: Repository<Payment>,
     private readonly appointmentsService: AppointmentsService,
     private readonly notificationsService: NotificationsService,
     private readonly customPaymentMethodsService: CustomPaymentMethodsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
-    console.error(`Error al ${options.operation} ${options.entity}:`, error);
-
-    if (
-      error instanceof BadRequestException ||
-      error instanceof NotFoundException
-    ) {
+    // Toda HttpException (incluidas BusinessException 409) sale tal cual.
+    if (error instanceof HttpException) {
       throw error;
     }
+    this.logger.error(
+      `Error al ${options.operation} ${options.entity}: ${error?.message}`,
+    );
 
     throw new InternalServerErrorException(
       `Error al ${options.operation} ${options.entity}. Por favor, intenta nuevamente.`,
     );
   }
 
-  private async validateExistingPayment(appointmentId: string): Promise<void> {
-    // Modifiquemos este método para depurar
-    console.log(`Validando si existe pago para cita: ${appointmentId}`);
-
-    const existingPayment = await this.paymentRepository.findOne({
+  /**
+   * Regla: un único pago COMPLETED por cita. Se llama DENTRO de la transacción
+   * del pago y con la cita bloqueada (`lockAppointment`): dos pagos simultáneos
+   * a la misma cita se serializan y el segundo ya ve el primero.
+   */
+  private async assertNoCompletedPayment(
+    manager: EntityManager,
+    appointmentId: string,
+  ): Promise<void> {
+    const existingPayment = await manager.getRepository(Payment).findOne({
       where: {
         appointment: { id: appointmentId },
         status: PaymentStatus.COMPLETED,
       },
     });
 
-    console.log(`Resultado de búsqueda de pago existente:`, existingPayment);
-
     if (existingPayment) {
-      throw new BadRequestException(
+      // Texto y HTTP 400 de siempre (D-11).
+      throw new BusinessException(
+        ErrorCode.BAD_REQUEST,
         'Ya existe un pago completado para esta cita',
       );
     }
@@ -96,19 +113,26 @@ export class PaymentsService {
     });
   }
 
+  /**
+   * Registra un pago COMPLETED (2.06), en UNA transacción:
+   * 1. Cita del negocio con lock de fila (ajena = 404).
+   * 2. La cita no puede estar CANCELLED (`INVALID_STATE_TRANSITION`).
+   * 3. Un único pago COMPLETED por cita.
+   * 4. Monto > 0 y sin superar el total de la cita.
+   * 5. Inserta el pago y aplica la máquina de estados (PENDING → CONFIRMED,
+   *    `payment_status` = COMPLETED).
+   * La notificación al cliente va después del commit.
+   */
   async create(
     createPaymentDto: CreatePaymentDto,
     tenantId: string,
   ): Promise<Payment> {
     try {
+      // Referencias del negocio validadas antes de abrir la transacción (404).
       const appointment = await this.appointmentsService.findOne(
         createPaymentDto.appointment_id,
         tenantId,
       );
-
-      await this.validateExistingPayment(appointment.id);
-
-      // El método de pago personalizado también debe ser del negocio (si no, 404)
       if (createPaymentDto.custom_payment_method_id) {
         await this.customPaymentMethodsService.findOne(
           createPaymentDto.custom_payment_method_id,
@@ -116,58 +140,72 @@ export class PaymentsService {
         );
       }
 
-      // PASO 1: Crear objeto pago (created_at/updated_at = now() de la BD, timestamptz)
-      const payment = this.paymentRepository.create({
-        amount: createPaymentDto.amount,
-        payment_method: createPaymentDto.payment_method,
-        custom_payment_method_id: createPaymentDto.custom_payment_method_id,
-        transaction_id: createPaymentDto.transaction_id,
-        payment_details: createPaymentDto.payment_details,
-        appointment,
-        status: PaymentStatus.COMPLETED,
-        ownerId: tenantId,
-      });
+      const savedPayment = await this.dataSource.transaction(
+        async (manager) => {
+          const locked = await this.appointmentsService.lockAppointment(
+            manager,
+            appointment.id,
+            tenantId,
+          );
+          statusAfterPayment(locked.status); // CANCELLED → 409, antes de escribir
+          await this.assertNoCompletedPayment(manager, locked.id);
+          assertPaymentAmount(createPaymentDto.amount, locked.total_price);
 
-      // PASO 2: Guardar
-      const savedPayment = await this.paymentRepository.save(payment);
-
-      // PASO 3: Actualizar el estado de la cita
-      await this.appointmentsService.update(
-        appointment.id,
-        {
-          status: AppointmentStatus.CONFIRMED,
-          payment_status: PaymentStatus.COMPLETED,
+          const repo = manager.getRepository(Payment);
+          const payment = await repo.save(
+            repo.create({
+              amount: createPaymentDto.amount,
+              payment_method: createPaymentDto.payment_method,
+              custom_payment_method_id:
+                createPaymentDto.custom_payment_method_id,
+              transaction_id: createPaymentDto.transaction_id,
+              payment_details: createPaymentDto.payment_details,
+              appointment: { id: locked.id } as any,
+              status: PaymentStatus.COMPLETED,
+              ownerId: tenantId,
+            }),
+          );
+          // PENDING → CONFIRMED (máquina de estados) y payment_status COMPLETED.
+          await this.appointmentsService.applyPaymentStatus(
+            manager,
+            locked,
+            PaymentStatus.COMPLETED,
+          );
+          return payment;
         },
-        tenantId,
       );
 
-      // PASO 4: Enviar notificación
-      await this.sendPaymentNotification({
-        receiver_id: appointment.client.id,
-        payment_amount: payment.amount,
+      await this.notifySafely({
+        receiver_id: appointment.client?.id,
+        payment_amount: createPaymentDto.amount,
         appointment_id: appointment.id,
         payment_id: savedPayment.id,
       });
 
-      // PASO 5: Recuperar el pago (sin usar relaciones complejas)
-      // Esta es la línea que está causando el error, la simplificamos
-      try {
-        const completePayment = await this.paymentRepository.findOne({
-          where: { id: savedPayment.id },
-          relations: ['appointment'], // Simplificamos las relaciones
-        });
-        return completePayment;
-      } catch (error) {
-        console.error('Error al recuperar el pago completo:', error);
-        // Si falla, devolver el pago original guardado
-        return savedPayment;
-      }
+      return await this.paymentRepository.findOne({
+        where: { id: savedPayment.id, ownerId: tenantId },
+        relations: RELATIONS.MINIMAL,
+      });
     } catch (error) {
-      console.error('Error al crear el pago:', error);
       this.handleError(error, {
         entity: 'el pago',
         operation: 'crear',
       });
+    }
+  }
+
+  /** La notificación no deshace un pago ya guardado: si falla, solo se registra. */
+  private async notifySafely(
+    notification: PaymentNotification,
+    isRefund = false,
+  ): Promise<void> {
+    if (!notification.receiver_id) return;
+    try {
+      await this.sendPaymentNotification(notification, isRefund);
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo notificar el ${isRefund ? 'reembolso' : 'pago'} ${notification.payment_id}: ${error?.message}`,
+      );
     }
   }
 
@@ -223,6 +261,13 @@ export class PaymentsService {
     return payment;
   }
 
+  /**
+   * Reembolso parcial o total (2.06), en UNA transacción con locks en orden
+   * cita → pago (el mismo que crear un pago). Los reembolsos se acumulan en
+   * `refund_amount`: mientras quede saldo el pago sigue COMPLETED (y la cita
+   * con `payment_status` COMPLETED); al devolver todo, ambos pasan a REFUNDED.
+   * El estado de la cita (`status`) no cambia.
+   */
   async refund(
     id: string,
     refundDto: RefundPaymentDto,
@@ -230,37 +275,53 @@ export class PaymentsService {
   ): Promise<Payment> {
     try {
       const payment = await this.findOne(id, tenantId);
-
-      if (payment.status !== PaymentStatus.COMPLETED) {
-        throw new BadRequestException(
-          'Solo se pueden reembolsar pagos completados',
-        );
+      if (!payment.appointment) {
+        throw new NotFoundException(`Pago con ID ${id} no encontrado`);
       }
 
-      if (refundDto.refund_amount > payment.amount) {
-        throw new BadRequestException(
-          'El monto del reembolso no puede ser mayor al pago original',
+      const refunded = await this.dataSource.transaction(async (manager) => {
+        const locked = await this.appointmentsService.lockAppointment(
+          manager,
+          payment.appointment.id,
+          tenantId,
         );
-      }
+        const repo = manager.getRepository(Payment);
+        const current = await repo.findOne({
+          where: { id, ownerId: tenantId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!current) {
+          throw new NotFoundException(`Pago con ID ${id} no encontrado`);
+        }
 
-      payment.status = PaymentStatus.REFUNDED;
-      payment.refund_amount = refundDto.refund_amount;
-      payment.refund_reason = refundDto.refund_reason;
+        const { refundedCents, status } = applyRefund(
+          current,
+          refundDto.refund_amount,
+        );
+        await repo.update(
+          { id: current.id },
+          {
+            status,
+            refund_amount: fromCents(refundedCents),
+            refund_reason: refundDto.refund_reason,
+          },
+        );
+        if (status === PaymentStatus.REFUNDED) {
+          await this.appointmentsService.applyPaymentStatus(
+            manager,
+            locked,
+            PaymentStatus.REFUNDED,
+          );
+        }
+        return repo.findOne({
+          where: { id: current.id },
+          relations: RELATIONS.MINIMAL,
+        });
+      });
 
-      const refundedPayment = await this.paymentRepository.save(payment);
-
-      // Actualizar el estado de la cita cuando se hace un reembolso
-      await this.appointmentsService.update(
-        payment.appointment.id,
+      await this.notifySafely(
         {
-          payment_status: PaymentStatus.REFUNDED,
-        },
-        tenantId,
-      );
-
-      await this.sendPaymentNotification(
-        {
-          receiver_id: payment.appointment.client.id,
+          receiver_id: payment.appointment.client?.id,
           payment_amount: refundDto.refund_amount,
           appointment_id: payment.appointment.id,
           payment_id: payment.id,
@@ -268,7 +329,7 @@ export class PaymentsService {
         true,
       );
 
-      return refundedPayment;
+      return refunded;
     } catch (error) {
       this.handleError(error, {
         entity: 'el pago',
@@ -328,9 +389,9 @@ export class PaymentsService {
             adjustedEndDate,
           },
         )
-        .select('SUM(payment.amount)', 'total_amount')
+        .select(`SUM(${netAmountSql('payment')})`, 'total_amount')
         .addSelect('COUNT(*)', 'payment_count')
-        .addSelect('AVG(payment.amount)', 'average_amount')
+        .addSelect(`AVG(${netAmountSql('payment')})`, 'average_amount')
         .getRawOne();
 
       return {
@@ -439,7 +500,7 @@ export class PaymentsService {
       // Consultar totales para este profesional usando el query builder
       const result = await this.paymentRepository
         .createQueryBuilder('payment')
-        .select('SUM(payment.amount)', 'total_amount')
+        .select(`SUM(${netAmountSql('payment')})`, 'total_amount')
         .addSelect('COUNT(DISTINCT payment.id)', 'payment_count')
         .addSelect('COUNT(DISTINCT appointment.id)', 'appointment_count')
         .innerJoin('payment.appointment', 'appointment')
@@ -463,7 +524,7 @@ export class PaymentsService {
       const nativeQueryResult = await this.paymentRepository.manager.query(
         `
       SELECT 
-        SUM(p.amount) as total_amount,
+        SUM(${netAmountSql('p')}) as total_amount,
         COUNT(DISTINCT p.id) as payment_count,
         COUNT(DISTINCT a.id) as appointment_count
       FROM payments p
@@ -524,7 +585,7 @@ export class PaymentsService {
           `
         SELECT 
           to_char(p.created_at AT TIME ZONE $5::text, 'YYYY-MM-DD') as date,
-          SUM(p.amount) as daily_total,
+          SUM(${netAmountSql('p')}) as daily_total,
           COUNT(DISTINCT p.id) as daily_count
         FROM payments p
         JOIN appointments a ON p."appointmentId" = a.id
@@ -630,7 +691,7 @@ export class PaymentsService {
         .select('payment.payment_method', 'method')
         .addSelect("'STANDARD'", 'method_type')
         .addSelect('COUNT(*)', 'count')
-        .addSelect('SUM(payment.amount)', 'total')
+        .addSelect(`SUM(${netAmountSql('payment')})`, 'total')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
         .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere(
@@ -919,7 +980,7 @@ export class PaymentsService {
         )
         .addSelect('COUNT(DISTINCT appointment.id)', 'appointment_count')
         .addSelect('COUNT(DISTINCT payment.id)', 'payment_count')
-        .addSelect('SUM(payment.amount)', 'total_amount')
+        .addSelect(`SUM(${netAmountSql('payment')})`, 'total_amount')
         .innerJoin('payment.appointment', 'appointment')
         .innerJoin('appointment.professional', 'professional')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
@@ -992,7 +1053,7 @@ export class PaymentsService {
         .addSelect('MAX(appointment.date)', 'last_visit_date') // Ajustado a appointment.date
         .addSelect('COUNT(DISTINCT appointment.id)', 'visit_count')
         .addSelect('COUNT(DISTINCT payment.id)', 'payment_count')
-        .addSelect('SUM(payment.amount)', 'total_spent')
+        .addSelect(`SUM(${netAmountSql('payment')})`, 'total_spent')
         .innerJoin('payment.appointment', 'appointment')
         .innerJoin('appointment.client', 'client')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
@@ -1072,7 +1133,7 @@ export class PaymentsService {
           c.id as client_id,
           CONCAT(c.name, ' ', COALESCE(c.lastname, '')) as client_name,
           COUNT(DISTINCT a.id) as visit_count,
-          SUM(p.amount) as total_spent
+          SUM(${netAmountSql('p')}) as total_spent
         FROM payments p
         JOIN appointments a ON p."appointmentId" = a.id
         JOIN clients c ON a."clientId" = c.id

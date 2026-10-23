@@ -36,6 +36,7 @@ import {
   fitsSchedule,
   NON_BLOCKING_STATUSES,
 } from './appointment-slot';
+import { assertTransition, statusAfterPayment } from './appointment-status';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { User } from 'src/users/entities/user.entity';
 import { parseBusinessDate } from 'src/common/utils/date.util';
@@ -274,10 +275,13 @@ export class AppointmentsService {
   }
 
   /**
-   * Edita una cita del negocio. Si cambia el hueco (fecha, profesional o
-   * servicios) o se reactiva una cita cancelada, se aplica la misma regla y el
-   * mismo lock que al crear (`assertSlotAvailable`), excluyendo la propia cita,
-   * en la misma transacción que guarda.
+   * Edita una cita del negocio (PATCH genérico, solo Owner). Si cambia el hueco
+   * (fecha, profesional o servicios) se aplica la misma regla y el mismo lock
+   * que al crear (`assertSlotAvailable`), excluyendo la propia cita. Un cambio
+   * de `status` pasa por la máquina de estados (`appointment-status.ts`) contra
+   * el estado leído CON lock de fila dentro de la transacción (2.06): una
+   * cancelación y un pago simultáneos no se pisan. Solo se escriben los campos
+   * que cambian (nunca la foto vieja de la cita entera).
    */
   async update(
     id: string,
@@ -287,19 +291,13 @@ export class AppointmentsService {
     try {
       const appointment = await this.findOne(id, tenantId);
 
-      // Crear objeto para actualización
-      const updateData: any = {};
+      // Solo los campos que cambian (save parcial por id).
+      const updateData: Partial<Appointment> & { id: string } = { id };
 
-      // Copiar campos simples
       if (updateAppointmentDto.date)
         updateData.date = parseBusinessDate(updateAppointmentDto.date);
       if (updateAppointmentDto.notes !== undefined)
         updateData.notes = updateAppointmentDto.notes;
-      if (updateAppointmentDto.status)
-        updateData.status = updateAppointmentDto.status;
-
-      if (updateAppointmentDto.payment_status)
-        updateData.payment_status = updateAppointmentDto.payment_status;
 
       // El nuevo profesional debe ser del mismo negocio (si no, 404)
       if (updateAppointmentDto.professional_id) {
@@ -346,36 +344,40 @@ export class AppointmentsService {
         );
       }
 
-      const nextStatus: AppointmentStatus =
-        updateData.status ?? appointment.status;
       const slotChanged = !!(
         updateAppointmentDto.professional_id ||
         updateAppointmentDto.date ||
         updateAppointmentDto.service_ids
       );
-      const reactivated =
-        !blocksSlot(appointment.status) && blocksSlot(nextStatus);
-      const mustCheckSlot =
-        blocksSlot(nextStatus) && (slotChanged || reactivated);
-
       const professionalId =
         updateAppointmentDto.professional_id || appointment.professionalId;
-      if (mustCheckSlot) {
-        // Recarga el profesional: si se borró (soft-delete) → 404; inactivo → error.
-        const professional =
-          updateData.professional ??
-          (await this.usersService.findTenantMember(professionalId, tenantId));
-        this.assertProfessionalSchedulable(professional);
-      }
-
-      // Primero va el objeto original, luego los datos de actualización
-      const appointmentToUpdate = {
-        ...appointment,
-        ...updateData,
-      };
 
       await this.dataSource.transaction(async (manager) => {
-        if (mustCheckSlot) {
+        const current = await this.lockAppointment(manager, id, tenantId);
+
+        let nextStatus = current.status;
+        if (updateAppointmentDto.status) {
+          if (assertTransition(current.status, updateAppointmentDto.status)) {
+            nextStatus = updateAppointmentDto.status;
+            updateData.status = nextStatus;
+            if (nextStatus === AppointmentStatus.CANCELLED) {
+              updateData.cancellation_reason =
+                updateAppointmentDto.cancellation_reason ?? null;
+            }
+          }
+        }
+
+        // Una cita CANCELLED no ocupa hueco: moverla no se comprueba. Como
+        // CANCELLED es final, ya no hay "reactivar" (2.06).
+        if (blocksSlot(nextStatus) && slotChanged) {
+          // Recarga el profesional: si se borró (soft-delete) → 404; inactivo → error.
+          const professional =
+            updateData.professional ??
+            (await this.usersService.findTenantMember(
+              professionalId,
+              tenantId,
+            ));
+          this.assertProfessionalSchedulable(professional);
           await this.assertSlotAvailable(manager, {
             tenantId,
             professionalId,
@@ -384,7 +386,7 @@ export class AppointmentsService {
             excludeAppointmentId: id,
           });
         }
-        await manager.getRepository(Appointment).save(appointmentToUpdate);
+        await manager.getRepository(Appointment).save(updateData);
       });
 
       // Para asegurar que obtenemos todos los datos relacionados
@@ -395,6 +397,80 @@ export class AppointmentsService {
         operation: 'actualizar',
       });
     }
+  }
+
+  /**
+   * Lee la cita (sin relaciones) con `SELECT … FOR UPDATE` dentro de la
+   * transacción `manager`: serializa los cambios de estado, los pagos y los
+   * reembolsos de la misma cita hasta el commit. Ajena o inexistente = 404.
+   * Orden de locks: fila de la cita → (pago) / (profesional, al mover).
+   */
+  async lockAppointment(
+    manager: EntityManager,
+    id: string,
+    scope: AppointmentScope | string,
+  ): Promise<Appointment> {
+    const appointment = await manager.getRepository(Appointment).findOne({
+      where: { id, ...this.scopeWhere(toAppointmentScope(scope)) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!appointment) {
+      throw new NotFoundException(`Cita con ID ${id} no encontrada`);
+    }
+    return appointment;
+  }
+
+  /**
+   * Cancela una cita (PENDING o CONFIRMED → CANCELLED) con motivo opcional.
+   * Owner: cualquier cita del negocio; Employee: solo las suyas (alcance).
+   * El hueco queda libre (`blocksSlot`). El cupo del trial NO se devuelve.
+   */
+  cancel(
+    id: string,
+    scope: AppointmentScope,
+    cancellationReason?: string,
+  ): Promise<Appointment> {
+    return this.changeStatus(id, scope, AppointmentStatus.CANCELLED, {
+      cancellation_reason: cancellationReason?.trim() || null,
+    });
+  }
+
+  /** Completa una cita CONFIRMED (→ COMPLETED). Mismo alcance que `cancel`. */
+  complete(id: string, scope: AppointmentScope): Promise<Appointment> {
+    return this.changeStatus(id, scope, AppointmentStatus.COMPLETED);
+  }
+
+  private async changeStatus(
+    id: string,
+    scope: AppointmentScope,
+    to: AppointmentStatus,
+    extra: Partial<Appointment> = {},
+  ): Promise<Appointment> {
+    await this.dataSource.transaction(async (manager) => {
+      const current = await this.lockAppointment(manager, id, scope);
+      if (!assertTransition(current.status, to)) return; // ya estaba: no-op
+      await manager
+        .getRepository(Appointment)
+        .update({ id: current.id }, { status: to, ...extra });
+    });
+    return this.findOne(id, scope);
+  }
+
+  /**
+   * Efecto de un pago sobre la cita, dentro de la transacción del pago y con
+   * la cita ya bloqueada (`lockAppointment`): PENDING → CONFIRMED (máquina de
+   * estados) y `payment_status` según el pago.
+   */
+  async applyPaymentStatus(
+    manager: EntityManager,
+    locked: Appointment,
+    paymentStatus: PaymentStatus,
+  ): Promise<void> {
+    const changes: Partial<Appointment> = { payment_status: paymentStatus };
+    if (paymentStatus === PaymentStatus.COMPLETED) {
+      changes.status = statusAfterPayment(locked.status);
+    }
+    await manager.getRepository(Appointment).update({ id: locked.id }, changes);
   }
 
   /**

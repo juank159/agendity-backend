@@ -13,6 +13,7 @@ import {
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
+import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
@@ -102,6 +103,34 @@ export class AppointmentsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.appointmentsService.findOne(id, appointmentScopeOf(user));
+  }
+
+  /**
+   * Cancela la cita (PENDING o CONFIRMED). Owner: cualquier cita del negocio;
+   * Employee: solo las suyas (las ajenas dan 404). Final: no se reactiva.
+   */
+  @Patch(':id/cancel')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  cancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelAppointmentDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.appointmentsService.cancel(
+      id,
+      appointmentScopeOf(user),
+      dto.cancellation_reason,
+    );
+  }
+
+  /** Completa la cita (solo desde CONFIRMED). Mismo alcance que cancelar. */
+  @Patch(':id/complete')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  complete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.appointmentsService.complete(id, appointmentScopeOf(user));
   }
 
   @Patch(':id')

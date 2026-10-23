@@ -439,6 +439,20 @@ describe('Aislamiento por tenant (e2e)', () => {
             404,
           ],
           [
+            'PATCH cancel (2.06)',
+            () =>
+              http
+                .patch(`/api/appointments/${MISSING_ID}/cancel`)
+                .set(t)
+                .send({ cancellation_reason: 'prueba e2e' }),
+            404,
+          ],
+          [
+            'PATCH complete (2.06)',
+            () => http.patch(`/api/appointments/${MISSING_ID}/complete`).set(t),
+            404,
+          ],
+          [
             'POST refund',
             () =>
               http
