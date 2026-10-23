@@ -5,6 +5,7 @@ import {
   AuthService,
   assertCanActivateEmployee,
   canActivateEmployee,
+  initialEmployeeState,
 } from './auth.service';
 
 const OWNER = '3275ba14-af85-42a6-b02f-199c1b4058d4';
@@ -110,5 +111,111 @@ describe('Activar empleados exige el email verificado (2.15)', () => {
       expect.objectContaining({ isActive: true }),
     );
     expect(r2).toMatchObject({ isActive: true });
+  });
+});
+
+describe('Los empleados nacen inactivos hasta verificar el email (2.16)', () => {
+  const owner = {
+    id: OWNER,
+    name: 'Owner',
+    email: 'owner@test.co',
+    roles: ['Owner'],
+    tenantId: OWNER,
+    ownerId: null,
+  } as any;
+
+  function buildCreate() {
+    const saved: any[] = [];
+    const manager = {
+      create: jest.fn((_entity, data) => ({ ...data })),
+      save: jest.fn(async (x) => {
+        if (!Array.isArray(x) && !x.id) x.id = EMPLOYEE;
+        saved.push(x);
+        return x;
+      }),
+      findOne: jest.fn(async () => ({
+        ...saved[0],
+        roles: [{ name: 'Employee' }],
+      })),
+    };
+    const userRepository = { findOne: jest.fn().mockResolvedValue(null) };
+    const roleRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'r', name: 'Employee' }),
+    };
+    const jwtService = { sign: jest.fn(() => 'jwt') };
+    const dataSource = { transaction: jest.fn((cb) => cb(manager)) };
+    const service = new AuthService(
+      userRepository as any,
+      roleRepository as any,
+      jwtService as any,
+      { get: jest.fn() } as unknown as ConfigService,
+      {} as any,
+      {} as any,
+      dataSource as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { service, manager, saved };
+  }
+
+  const dto = {
+    name: 'Ana',
+    lastname: 'Prueba',
+    email: 'ana@test.co',
+    phone: '3000000000',
+    password: 'Clave123!',
+    schedule: { monday: { start: '09:00', end: '18:00' } },
+    services: [
+      {
+        serviceId: '11111111-1111-4111-8111-111111111111',
+        commissionPercentage: 10,
+      },
+    ],
+  } as any;
+
+  it('regla pura: inactivo y sin verificar', () => {
+    expect(initialEmployeeState()).toEqual({
+      isActive: false,
+      is_email_verified: false,
+    });
+  });
+
+  it('createEmployee guarda el empleado inactivo y sin verificar, con sus horarios y servicios', async () => {
+    const { service, saved } = buildCreate();
+    const result = await service.createEmployee(dto, owner);
+
+    const employee = saved[0];
+    expect(employee).toMatchObject({
+      isActive: false,
+      is_email_verified: false,
+      tenant_id: OWNER,
+      owner: { id: OWNER },
+    });
+    // Horarios y servicios se configuran aunque nazca inactivo.
+    const services = saved.find(
+      (x) => Array.isArray(x) && x[0]?.serviceId !== undefined,
+    );
+    const schedules = saved.find(
+      (x) => Array.isArray(x) && x[0]?.day_of_week !== undefined,
+    );
+    expect(services).toHaveLength(1);
+    expect(schedules).toHaveLength(1);
+    expect(result.user).toMatchObject({
+      isActive: false,
+      is_email_verified: false,
+    });
+  });
+
+  it('el DTO no puede forzar un alta activa o verificada', async () => {
+    const { service, saved } = buildCreate();
+    await service.createEmployee(
+      { ...dto, isActive: true, is_email_verified: true },
+      owner,
+    );
+    expect(saved[0]).toMatchObject({
+      isActive: false,
+      is_email_verified: false,
+    });
   });
 });

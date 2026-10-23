@@ -314,13 +314,13 @@ export class AuthService {
           owner: { id: owner.id } as User,
           // Hereda el tenant del Owner (antes quedaba NULL: el JWT no lo traía).
           tenant_id: owner.tenantId,
+          ...initialEmployeeState(),
         });
 
         await manager.save(newEmployee);
 
         // Asignar servicios con sus porcentajes si existen
         if (services && services.length > 0) {
-          console.log('Creando servicios para el empleado:', services);
           const userServices = services.map((service) =>
             manager.create(UserService, {
               userId: newEmployee.id,
@@ -337,8 +337,6 @@ export class AuthService {
 
         // Asignar horarios si existe el schedule (formato de frontend)
         if (schedule && typeof schedule === 'object') {
-          console.log('Creando horarios desde schedule:', schedule);
-
           // Mapeo de días a números
           const dayMap = {
             monday: 1,
@@ -371,23 +369,16 @@ export class AuthService {
                   is_available: true,
                 }),
               );
-              console.log(
-                `Creando horario para ${day}: ${hours.start}-${hours.end}`,
-              );
             }
           }
 
           if (userSchedules.length > 0) {
             await manager.save(userSchedules);
-            console.log(
-              `Guardados ${userSchedules.length} horarios para el empleado`,
-            );
           }
         }
 
         // Asignar horarios si existen en formato de arreglo (compatible con código existente)
         else if (schedules && schedules.length > 0) {
-          console.log('Creando horarios desde schedules array:', schedules);
           const userSchedules = schedules.map((schedule) => {
             // Verificar si user_id existe antes de desestructurar
             if ('user_id' in schedule) {
@@ -419,7 +410,9 @@ export class AuthService {
         };
       });
     } catch (error) {
-      console.error('Error en createEmployee:', error);
+      if (!(error instanceof HttpException)) {
+        this.logger.error(`Error en createEmployee: ${error?.message}`);
+      }
       throw error;
     }
   }
@@ -1287,6 +1280,25 @@ export function canActivateEmployee(employee: {
   is_email_verified?: boolean;
 }): boolean {
   return employee?.is_email_verified === true;
+}
+
+/**
+ * Regla del usuario (2.16): un empleado nace inactivo y sin verificar; lo
+ * activa `verify/employee-email`. No hay alta con el email ya verificado:
+ * `createEmployee` rechaza cualquier email existente (también el registro
+ * temporal de `verify/request-code`), y el DTO no admite `isActive` ni
+ * `is_email_verified`. Se fija aquí porque el default de la columna
+ * `isActive` es `true` (lo siguen usando el Owner y el login con Google).
+ */
+export function initialEmployeeState(): {
+  isActive: boolean;
+  is_email_verified: boolean;
+} {
+  const is_email_verified = false;
+  return {
+    is_email_verified,
+    isActive: canActivateEmployee({ is_email_verified }),
+  };
 }
 
 export function assertCanActivateEmployee(employee: {

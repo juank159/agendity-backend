@@ -26,9 +26,11 @@ export async function findDevOwnerAndEmployee(
   if (!owner) {
     throw new Error('La BD de desarrollo no tiene ningún Owner');
   }
+  // El más antiguo: los e2e que escriben crean empleados nuevos en la copia.
   const employee = await repo.findOne({
     where: { owner: { id: owner.id } },
     relations: ['owner'],
+    order: { created_at: 'ASC' },
   });
   return { owner, employee };
 }
