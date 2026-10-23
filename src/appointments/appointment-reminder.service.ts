@@ -12,11 +12,46 @@ import {
 import { Appointment } from './entities/appointment.entity';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CronJob } from 'cron';
-import { format, subHours, isAfter, addHours, subMinutes } from 'date-fns';
-import { es } from 'date-fns/locale';
 import { AppointmentStatus } from '../common/enums/status.enum';
 import { OnEvent } from '@nestjs/event-emitter';
 import { AppointmentScope } from './appointment-scope';
+import {
+  businessTimeZone,
+  formatBusinessLongDate,
+  formatBusinessTime,
+} from '../common/utils/date.util';
+
+/**
+ * Minutos de antelación del recordatorio según cuánto falta para la cita:
+ * ≥ 24 h → 60; ≥ 2 h → 30; menos → 15. Todo con instantes (sin zona).
+ */
+export function reminderLeadMinutes(appointmentDate: Date, now: Date): number {
+  const hoursUntil = (appointmentDate.getTime() - now.getTime()) / 3_600_000;
+  if (hoursUntil >= 24) return 60;
+  if (hoursUntil >= 2) return 30;
+  return 15;
+}
+
+/** Instante en que se envía el recordatorio de una cita. */
+export function reminderTimeFor(appointmentDate: Date, now: Date): Date {
+  return new Date(
+    appointmentDate.getTime() -
+      reminderLeadMinutes(appointmentDate, now) * 60_000,
+  );
+}
+
+/** Texto del recordatorio, con día y hora en la zona del negocio. */
+export function reminderMessage(
+  appointment: Pick<Appointment, 'date' | 'services'>,
+): string {
+  const appointmentDate = new Date(appointment.date);
+  const dateStr = formatBusinessLongDate(appointmentDate);
+  const timeStr = formatBusinessTime(appointmentDate);
+  const serviceName = appointment.services?.length
+    ? appointment.services.map((s) => s.name).join(', ')
+    : 'servicio programado';
+  return `👋 Hola , te recordamos tu cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual.`;
+}
 
 @Injectable()
 export class AppointmentReminderService {
@@ -77,8 +112,8 @@ export class AppointmentReminderService {
     }
   }
 
-  // Se ejecuta todos los días a la medianoche
-  @Cron('0 0 * * *') // Ejecutar diariamente a medianoche
+  // Todos los días a medianoche, hora del negocio
+  @Cron('0 0 * * *', { timeZone: businessTimeZone() })
   async scheduleDailyReminders() {
     this.logger.log(
       '🕐 Ejecutando tarea diaria de programación de recordatorios',
@@ -173,13 +208,9 @@ export class AppointmentReminderService {
   private async scheduleUpcomingReminders() {
     try {
       const currentDate = new Date();
-      // ✅ OPTIMIZACIÓN: Extender rango a próximos 7 días para mejor cobertura
-      const nextWeek = new Date(currentDate);
-      nextWeek.setDate(nextWeek.getDate() + 7);
-      nextWeek.setHours(23, 59, 59, 999);
 
       this.logger.log(
-        `🔍 Buscando citas futuras entre ${currentDate.toISOString()} y ${nextWeek.toISOString()}`,
+        `🔍 Buscando citas futuras desde ${currentDate.toISOString()}`,
       );
 
       // ✅ FILTRO MEJORADO: Solo citas futuras que no han enviado recordatorio
@@ -267,11 +298,8 @@ export class AppointmentReminderService {
         return;
       }
 
-      // ✅ LÓGICA MEJORADA: Calcular tiempo de recordatorio inteligente
       const appointmentDate = new Date(appointment.date);
       const now = new Date();
-      const timeUntilAppointment = appointmentDate.getTime() - now.getTime();
-      const hoursUntilAppointment = timeUntilAppointment / (1000 * 60 * 60);
 
       // ✅ VALIDACIÓN PREVIA: Verificar que la cita sea futura
       if (appointmentDate <= now) {
@@ -281,17 +309,8 @@ export class AppointmentReminderService {
         return;
       }
 
-      // ✅ TIEMPO DE RECORDATORIO INTELIGENTE basado en cuándo es la cita
-      let reminderMinutesBefore: number;
-      if (hoursUntilAppointment >= 24) {
-        reminderMinutesBefore = 60; // 1 hora antes para citas de mañana o más tarde
-      } else if (hoursUntilAppointment >= 2) {
-        reminderMinutesBefore = 30; // 30 minutos antes para citas del mismo día
-      } else {
-        reminderMinutesBefore = 15; // 15 minutos antes para citas muy próximas
-      }
-
-      const reminderTime = subMinutes(appointmentDate, reminderMinutesBefore);
+      const reminderMinutesBefore = reminderLeadMinutes(appointmentDate, now);
+      const reminderTime = reminderTimeFor(appointmentDate, now);
 
       this.logger.log(
         `📅 Cita ${appointment.id} programada para: ${appointmentDate.toISOString()}`,
@@ -329,17 +348,10 @@ export class AppointmentReminderService {
         );
       }
 
-      // Crear una expresión cron usando la fecha específica
-      // Formato: segundo minuto hora día mes día-semana
-      const cronExpression = `${reminderTime.getSeconds()} ${reminderTime.getMinutes()} ${reminderTime.getHours()} ${reminderTime.getDate()} ${reminderTime.getMonth() + 1} *`;
-
-      this.logger.log(
-        `Expresión cron generada para cita ${appointment.id}: ${cronExpression}`,
-      );
-
       try {
-        // Crear un nuevo trabajo cron usando la expresión
-        const job = new CronJob(cronExpression, async () => {
+        // Un `Date` como cronTime = una sola ejecución en ese instante (sin
+        // depender de la zona del proceso ni repetirse al año siguiente).
+        const job = new CronJob(reminderTime, async () => {
           this.logger.log(
             `Ejecutando recordatorio programado para cita ${appointment.id}`,
           );
@@ -395,62 +407,6 @@ export class AppointmentReminderService {
     }
   }
 
-  // Envía un recordatorio para una cita
-  private async sendAppointmentReminder(appointment: Appointment) {
-    try {
-      if (!appointment.client?.phone) {
-        this.logger.warn(`Cannot send reminder: Client has no phone number`);
-        return;
-      }
-
-      // Formatear fecha y hora para el mensaje
-      const appointmentDate = new Date(appointment.date);
-      const dateStr = format(appointmentDate, "EEEE d 'de' MMMM", {
-        locale: es,
-      });
-      const timeStr = format(appointmentDate, 'h:mm a');
-
-      // Obtener el nombre del servicio
-      let serviceName = 'servicio programado';
-      if (appointment.services && appointment.services.length > 0) {
-        serviceName = appointment.services.map((s) => s.name).join(', ');
-      }
-
-      // Construir el mensaje
-      const message = `👋 Hola, te recordamos tu cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual. Si necesita reagendar, por favor contáctenos.`;
-
-      // Enviar el mensaje usando el servicio de WhatsApp
-      const result = await this.whatsappService.sendWhatsAppMessage(
-        appointment.ownerId,
-        appointment.client.phone,
-        message,
-      );
-
-      if (result.success) {
-        this.logger.log(
-          `Successfully sent reminder for appointment ${appointment.id}`,
-        );
-
-        await this.appointmentsRepository.update(appointment.id, {
-          reminderSent: true,
-          reminderSentAt: new Date(),
-        });
-      } else {
-        this.logger.warn(
-          `Failed to send reminder for appointment ${appointment.id}: ${result.message || result.error}`,
-        );
-      }
-
-      return result;
-    } catch (error) {
-      this.logger.error(
-        `Error sending reminder for appointment ${appointment.id}: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
-  }
-
   public async checkAndScheduleReminders() {
     this.logger.log('Checking and scheduling reminders manually');
     return this.scheduleUpcomingReminders();
@@ -472,22 +428,8 @@ export class AppointmentReminderService {
 
       this.logger.log(`Teléfono del cliente: ${appointment.client.phone}`);
 
-      // Formatear fecha y hora para el mensaje
-      const appointmentDate = new Date(appointment.date);
-      const dateStr = format(appointmentDate, "EEEE d 'de' MMMM", {
-        locale: es,
-      });
-      const timeStr = format(appointmentDate, 'h:mm a');
-
-      // Obtener el nombre del servicio
-      let serviceName = 'servicio programado';
-      if (appointment.services && appointment.services.length > 0) {
-        serviceName = appointment.services.map((s) => s.name).join(', ');
-        this.logger.log(`Servicios para la cita: ${serviceName}`);
-      }
-
-      // Construir el mensaje
-      const message = `👋 Hola , te recordamos tu cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual.`;
+      // Mensaje con día y hora en la zona del negocio
+      const message = reminderMessage(appointment);
 
       this.logger.log(`Mensaje a enviar: ${message}`);
 

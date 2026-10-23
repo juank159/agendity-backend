@@ -1,6 +1,7 @@
 import { ErrorCode } from 'src/common/constants/error-codes';
 import { Subscription } from './entities/subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
+import { addBusinessMonths } from 'src/common/utils/date.util';
 
 /**
  * Reglas puras de la suscripción de un negocio (tarea 2.03). Sin BD ni Nest:
@@ -164,31 +165,17 @@ export function appointmentAllowance(
 }
 
 /**
- * Suma meses sin desbordar: 31 de enero + 1 mes = 28/29 de febrero (no 3 de
- * marzo, como hace `Date#setMonth`).
- */
-export function addMonths(date: Date, months: number): Date {
-  const result = new Date(date.getTime());
-  const day = result.getDate();
-  result.setDate(1);
-  result.setMonth(result.getMonth() + months);
-  const lastDay = new Date(
-    result.getFullYear(),
-    result.getMonth() + 1,
-    0,
-  ).getDate();
-  result.setDate(Math.min(day, lastDay));
-  return result;
-}
-
-/**
- * Fin del periodo pagado: `start + plan.duration_months` (antes se deducía del
- * nombre del plan). Una duración inválida cuenta como 1 mes.
+ * Fin del periodo pagado: `start + plan.duration_months` en el calendario del
+ * negocio (antes se deducía del nombre del plan). Una duración inválida cuenta
+ * como 1 mes.
  */
 export function planPeriodEnd(
   start: Date,
   plan: Pick<SubscriptionPlan, 'duration_months'>,
 ): Date {
   const months = Number(plan.duration_months);
-  return addMonths(start, Number.isInteger(months) && months >= 1 ? months : 1);
+  return addBusinessMonths(
+    start,
+    Number.isInteger(months) && months >= 1 ? months : 1,
+  );
 }

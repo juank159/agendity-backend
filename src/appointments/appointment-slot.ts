@@ -1,4 +1,9 @@
 import { AppointmentStatus } from 'src/common/enums/status.enum';
+import {
+  businessMinutesOfDay,
+  businessTimeZone,
+  zonedParts,
+} from 'src/common/utils/date.util';
 
 /**
  * Reglas puras del hueco de una cita (2.04). ÚNICO sitio donde se calcula la
@@ -6,10 +11,10 @@ import { AppointmentStatus } from 'src/common/enums/status.enum';
  * (`appointmentDurationSql`, para las citas ya guardadas). Si cambias la regla,
  * cambia las dos aquí; `appointment-slot.spec.ts` las compara.
  *
- * Zona horaria: `appointments.date` y `time_block.*` son `timestamp` sin zona
- * ("hora local" del servidor; node-postgres escribe y lee los `Date` en la zona
- * del proceso). Por eso el horario se compara con los getters locales
- * (`getDay`, `getHours`). Lo corrige la 2.05 (`timestamptz`).
+ * Zona horaria (2.05): `appointments.date` y `time_block.*` son `timestamptz`
+ * (instantes). El horario del profesional (`schedules`: día y horas de pared)
+ * se compara en la zona del negocio (`BUSINESS_TIMEZONE`), nunca con los
+ * getters locales del proceso.
  */
 
 /** Minutos que se cuentan por un servicio sin duración (regla vigente). */
@@ -63,10 +68,12 @@ export interface ScheduleWindow {
   is_available: boolean;
 }
 
-/** Día ISO de la semana (1 = lunes … 7 = domingo), como `schedules.day_of_week`. */
-export function isoWeekday(date: Date): number {
-  const day = date.getDay(); // 0 = domingo (hora local)
-  return day === 0 ? 7 : day;
+/** Día ISO de la semana en el negocio (1 = lunes … 7 = domingo), como `schedules.day_of_week`. */
+export function isoWeekday(
+  date: Date,
+  timeZone: string = businessTimeZone(),
+): number {
+  return zonedParts(date, timeZone).weekday;
 }
 
 /** `'09:30'` o `'09:30:00'` → minutos desde las 00:00. */
@@ -75,12 +82,9 @@ export function timeToMinutes(time: string): number {
   return Number(h) * 60 + Number(m) + Number(s) / 60;
 }
 
-function minutesOfDay(date: Date): number {
-  return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
-}
-
 /**
- * ¿La cita [start, end) cabe en el horario del profesional?
+ * ¿La cita [start, end) cabe en el horario del profesional? Día y horas en la
+ * zona del negocio.
  * - Sin ninguna fila de horario = horario no configurado → no restringe
  *   (así se comportaba antes de 2.04; el Owner suele no tener horario).
  * - Con horario: debe caer entera en una franja `is_available` de ese día.
@@ -91,11 +95,12 @@ export function fitsSchedule(
   start: Date,
   end: Date,
   schedules: ScheduleWindow[],
+  timeZone: string = businessTimeZone(),
 ): boolean {
   if (!schedules?.length) return true;
 
-  const day = isoWeekday(start);
-  const from = minutesOfDay(start);
+  const day = isoWeekday(start, timeZone);
+  const from = businessMinutesOfDay(start, timeZone);
   const to = from + (end.getTime() - start.getTime()) / 60_000;
 
   const windows = schedules

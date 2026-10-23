@@ -20,6 +20,7 @@ import { JwtRoles } from '../auth/jwt/jwt.role';
 import { AppointmentReminderService } from './appointment-reminder.service';
 import { AuthUser } from '../auth/interfaces';
 import { appointmentScopeOf } from './appointment-scope';
+import { isValidDate, parseBusinessDate } from '../common/utils/date.util';
 
 @Controller('appointments')
 export class AppointmentsController {
@@ -36,9 +37,8 @@ export class AppointmentsController {
     @Body() createAppointmentDto: CreateAppointmentDto,
     @Tenant() tenantId: string,
   ) {
-    // Validar formato ISO 8601
-    const date = new Date(createAppointmentDto.date);
-    if (isNaN(date.getTime())) {
+    // ISO 8601 con offset, o sin offset = hora del negocio (date.util)
+    if (!isValidDate(parseBusinessDate(createAppointmentDto.date))) {
       throw new BadRequestException('Invalid date format');
     }
     return this.appointmentsService.create(createAppointmentDto, tenantId);

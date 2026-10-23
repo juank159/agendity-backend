@@ -269,7 +269,7 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
         is_available: true,
       },
     ];
-    // 2030-01-01 es martes; 10:00 queda antes de las 14:00.
+    // 2030-01-01 es martes; 10:00 (hora de Bogotá, sin offset en el DTO) queda antes de las 14:00.
     expectSlotUnavailable(await service.create(dto, TENANT).catch((e) => e));
     expect(txRepo.save).not.toHaveBeenCalled();
     expect(queriesWith(manager, 'FROM appointments')).toHaveLength(0);
@@ -308,8 +308,8 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
     await service.create(dto, TENANT);
     const [[, params]] = queriesWith(manager, 'FROM appointments');
     const [start, end] = [params[4], params[3]];
-    expect(start).toEqual(new Date('2030-01-01T10:00:00'));
-    expect(end).toEqual(new Date('2030-01-01T10:30:00'));
+    expect(start).toEqual(new Date('2030-01-01T10:00:00-05:00'));
+    expect(end).toEqual(new Date('2030-01-01T10:30:00-05:00'));
   });
 
   it('profesional inactivo: PROFESSIONAL_INACTIVE sin tocar el cupo', async () => {
@@ -341,7 +341,7 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
       id: 'cita-1',
       ownerId: TENANT,
       professionalId: EMPLOYEE,
-      date: new Date('2030-01-01T10:00:00'),
+      date: new Date('2030-01-01T10:00:00-05:00'),
       status: AppointmentStatus.PENDING,
       services: [{ id: SERVICE, duration: 60 }],
     });
@@ -360,8 +360,8 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
       ]);
       const [[, params]] = queriesWith(manager, 'FROM appointments');
       expect(params[5]).toBe('cita-1');
-      expect(params[4]).toEqual(new Date('2030-01-01T15:00:00'));
-      expect(params[3]).toEqual(new Date('2030-01-01T16:00:00')); // usa los servicios guardados
+      expect(params[4]).toEqual(new Date('2030-01-01T15:00:00-05:00'));
+      expect(params[3]).toEqual(new Date('2030-01-01T16:00:00-05:00')); // usa los servicios guardados
       const [[, blockParams]] = queriesWith(manager, 'FROM time_block');
       expect(blockParams[3]).toBe('cita-1');
       expect(txRepo.save).toHaveBeenCalledTimes(1);

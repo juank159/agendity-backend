@@ -34,6 +34,7 @@ import {
   paidPlanLimit,
   planPeriodEnd,
 } from '../subscription-state';
+import { businessTimeZone } from '../../common/utils/date.util';
 
 /** Respuesta de `POST /subscriptions/refresh-status`. */
 type RefreshResult = {
@@ -301,9 +302,10 @@ export class SubscriptionsService {
   /**
    * Persiste el vencimiento: `active` con la fecha de fin pasada → `expired`.
    * Las lecturas ya lo calculan al vuelo (`effectiveStatus`); esto solo deja la
-   * fila coherente para consultas por `status`. Idempotente.
+   * fila coherente para consultas por `status`. Idempotente. Corre a las
+   * 03:00 del negocio (`BUSINESS_TIMEZONE`).
    */
-  @Cron('0 3 * * *')
+  @Cron('0 3 * * *', { timeZone: businessTimeZone() })
   async expireOverdueSubscriptions(now: Date = new Date()): Promise<number> {
     const result = await this.subscriptionRepository.update(
       {

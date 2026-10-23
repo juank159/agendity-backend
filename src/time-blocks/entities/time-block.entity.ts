@@ -9,10 +9,10 @@ export class TimeBlock {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'timestamp' })
+  @Column({ type: 'timestamptz' })
   start_datetime: Date;
 
-  @Column({ type: 'timestamp' })
+  @Column({ type: 'timestamptz' })
   end_datetime: Date;
 
   @Column({ nullable: true })

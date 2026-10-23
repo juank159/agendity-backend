@@ -38,6 +38,7 @@ import {
 } from './appointment-slot';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { User } from 'src/users/entities/user.entity';
+import { parseBusinessDate } from 'src/common/utils/date.util';
 
 @Injectable()
 export class AppointmentsService {
@@ -123,7 +124,7 @@ export class AppointmentsService {
       const appointmentToSave = {
         ownerId: tenantId,
         professionalId: professional_id,
-        date: new Date(date),
+        date: parseBusinessDate(date),
         total_price: services.reduce(
           (sum, service) => sum + Number(service.price),
           0,
@@ -233,8 +234,7 @@ export class AppointmentsService {
       this.slotUnavailable('fuera del horario del profesional');
     }
 
-    // Fechas como `Date`: node-postgres las manda en hora local y Postgres,
-    // al compararlas con un `timestamp` sin zona, usa esa hora local (2.05).
+    // Fechas como `Date` (instantes) contra columnas `timestamptz` (2.05).
     const blocks = await manager.query(
       `SELECT 1 FROM time_block tb
         WHERE tb."userId" = $1
@@ -292,7 +292,7 @@ export class AppointmentsService {
 
       // Copiar campos simples
       if (updateAppointmentDto.date)
-        updateData.date = new Date(updateAppointmentDto.date);
+        updateData.date = parseBusinessDate(updateAppointmentDto.date);
       if (updateAppointmentDto.notes !== undefined)
         updateData.notes = updateAppointmentDto.notes;
       if (updateAppointmentDto.status)

@@ -8,7 +8,6 @@ import { Payment } from './entities/payment.entity';
 import { CustomPaymentMethod } from './entities/custom-payment-method.entity';
 import { CustomPaymentMethodsController } from './custom-payment-methods.controller';
 import { CustomPaymentMethodsService } from './custom-payment-methods.service';
-import { PaymentRepository } from './repositories/payment.repository';
 
 @Module({
   imports: [
@@ -17,7 +16,7 @@ import { PaymentRepository } from './repositories/payment.repository';
     NotificationsModule,
   ],
   controllers: [PaymentsController, CustomPaymentMethodsController],
-  providers: [PaymentsService, CustomPaymentMethodsService, PaymentRepository],
+  providers: [PaymentsService, CustomPaymentMethodsService],
   exports: [PaymentsService, CustomPaymentMethodsService],
 })
 export class PaymentsModule {}

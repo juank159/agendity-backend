@@ -18,6 +18,11 @@ import {
   ERROR_MESSAGES,
 } from './constants/time-block.constants';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
+import {
+  endOfBusinessDay,
+  parseBusinessDate,
+  startOfBusinessDay,
+} from '../common/utils/date.util';
 
 /**
  * Los bloques no tienen `owner_id`: pertenecen al profesional (`user`), y el
@@ -129,8 +134,8 @@ export class TimeBlocksService {
 
     // Validar rango de fechas
     TimeBlock.validateDateRange(
-      new Date(start_datetime),
-      new Date(end_datetime),
+      parseBusinessDate(start_datetime),
+      parseBusinessDate(end_datetime),
     );
 
     try {
@@ -144,8 +149,8 @@ export class TimeBlocksService {
 
       const isAvailable = await this.checkTimeBlockAvailability(
         user_id,
-        new Date(start_datetime),
-        new Date(end_datetime),
+        parseBusinessDate(start_datetime),
+        parseBusinessDate(end_datetime),
       );
 
       if (!isAvailable) {
@@ -153,8 +158,8 @@ export class TimeBlocksService {
       }
 
       const timeBlock = this.timeBlockRepository.create({
-        start_datetime: new Date(start_datetime),
-        end_datetime: new Date(end_datetime),
+        start_datetime: parseBusinessDate(start_datetime),
+        end_datetime: parseBusinessDate(end_datetime),
         notes,
         user: userFound as User,
         appointment: appointmentFound,
@@ -192,14 +197,14 @@ export class TimeBlocksService {
 
       if (start_datetime && end_datetime) {
         TimeBlock.validateDateRange(
-          new Date(start_datetime),
-          new Date(end_datetime),
+          parseBusinessDate(start_datetime),
+          parseBusinessDate(end_datetime),
         );
 
         const isAvailable = await this.checkTimeBlockAvailability(
           timeBlock.user.id,
-          new Date(start_datetime),
-          new Date(end_datetime),
+          parseBusinessDate(start_datetime),
+          parseBusinessDate(end_datetime),
           id,
         );
 
@@ -209,11 +214,11 @@ export class TimeBlocksService {
       }
 
       if (start_datetime) {
-        timeBlock.start_datetime = new Date(start_datetime);
+        timeBlock.start_datetime = parseBusinessDate(start_datetime);
       }
 
       if (end_datetime) {
-        timeBlock.end_datetime = new Date(end_datetime);
+        timeBlock.end_datetime = parseBusinessDate(end_datetime);
       }
 
       if (notes !== undefined) {
@@ -244,11 +249,9 @@ export class TimeBlocksService {
     duration: number,
     tenantId: string,
   ): Promise<Array<{ start: Date; end: Date }>> {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
+    // Día del negocio (BUSINESS_TIMEZONE), no el del servidor
+    const startOfDay = startOfBusinessDay(date);
+    const endOfDay = endOfBusinessDay(date);
 
     // findByUser valida que el profesional sea del negocio (404 si no)
     const timeBlocks = await this.findByUser(

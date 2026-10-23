@@ -1,5 +1,4 @@
 import {
-  addMonths,
   appointmentAllowance,
   effectiveStatus,
   paidPlanLimit,
@@ -171,34 +170,37 @@ describe('Estado efectivo de la suscripción (2.03)', () => {
 });
 
 describe('Duración del plan (duration_months)', () => {
-  it('suma meses sin desbordar el fin de mes', () => {
-    expect(addMonths(new Date(2026, 0, 31), 1)).toEqual(new Date(2026, 1, 28));
-    expect(addMonths(new Date(2028, 0, 31), 1)).toEqual(new Date(2028, 1, 29));
-    expect(addMonths(new Date(2026, 7, 31, 10, 30), 6)).toEqual(
-      new Date(2027, 1, 28, 10, 30),
-    );
-    expect(addMonths(new Date(2026, 4, 15), 12)).toEqual(new Date(2027, 4, 15));
-  });
+  // Instantes explícitos en Bogotá: el resultado no depende de la zona del proceso.
+  const bogota = (wall: string) => new Date(`${wall}-05:00`);
 
   it('el fin del periodo sale de duration_months, no del nombre', () => {
-    const start = new Date(2026, 9, 22);
+    const start = bogota('2026-10-22T10:00:00');
     expect(
       planPeriodEnd(start, { duration_months: 6, name: 'Mensual' } as any),
-    ).toEqual(new Date(2027, 3, 22));
+    ).toEqual(bogota('2027-04-22T10:00:00'));
     expect(
       planPeriodEnd(start, { duration_months: 1, name: 'Anual' } as any),
-    ).toEqual(new Date(2026, 10, 22));
+    ).toEqual(bogota('2026-11-22T10:00:00'));
     expect(planPeriodEnd(start, { duration_months: 12 } as any)).toEqual(
-      new Date(2027, 9, 22),
+      bogota('2027-10-22T10:00:00'),
     );
   });
 
   it('una duración inválida cuenta como 1 mes', () => {
-    const start = new Date(2026, 9, 22);
+    const start = bogota('2026-10-22T10:00:00');
     for (const d of [0, -3, 1.5, null, undefined]) {
       expect(planPeriodEnd(start, { duration_months: d } as any)).toEqual(
-        new Date(2026, 10, 22),
+        bogota('2026-11-22T10:00:00'),
       );
     }
+  });
+
+  it('suma meses en el calendario del negocio, no en UTC', () => {
+    // 30 de enero a las 21:00 en Bogotá ya es 31 de enero en UTC.
+    expect(
+      planPeriodEnd(bogota('2026-01-30T21:00:00'), {
+        duration_months: 1,
+      } as any),
+    ).toEqual(bogota('2026-02-28T21:00:00'));
   });
 });

@@ -124,15 +124,15 @@ export class User {
   reset_password_code: string;
 
   @Exclude({ toPlainOnly: true })
-  @Column({ nullable: true, select: false })
+  @Column({ type: 'timestamptz', nullable: true, select: false })
   reset_password_expires: Date;
 
   @Exclude({ toPlainOnly: true })
-  @Column({ nullable: true, select: false })
+  @Column({ type: 'timestamptz', nullable: true, select: false })
   verification_code_expires: Date;
 
   // 🆕 NUEVO: Soft Delete - TypeORM maneja esto automáticamente
-  @DeleteDateColumn()
+  @DeleteDateColumn({ type: 'timestamptz' })
   deletedAt?: Date;
 
   // 🆕 NUEVO: Razón de la eliminación (opcional)
@@ -155,13 +155,13 @@ export class User {
   employees: User[];
 
   @CreateDateColumn({
-    type: 'timestamp',
+    type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',
   })
   created_at: Date;
 
   @UpdateDateColumn({
-    type: 'timestamp',
+    type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',
   })
   updated_at: Date;

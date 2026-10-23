@@ -150,7 +150,7 @@ export class Service {
   })
   @Column({
     name: 'created_at',
-    type: 'timestamp',
+    type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',
   })
   createdAt: Date;
@@ -161,7 +161,7 @@ export class Service {
   })
   @Column({
     name: 'updated_at',
-    type: 'timestamp',
+    type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',
     onUpdate: 'CURRENT_TIMESTAMP',
   })

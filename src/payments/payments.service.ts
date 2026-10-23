@@ -26,7 +26,11 @@ import { PaymentComparisonStats } from './interfaces/payment-comparison-stats.in
 import { ServiceStats } from './interfaces/service-stats.interface';
 import { ProfessionalStats } from './interfaces/professional-stats.interface';
 import { ClientStats } from './interfaces/client-stats.interface';
-import { PaymentRepository } from './repositories/payment.repository';
+import {
+  businessTimeZone,
+  endOfBusinessDay,
+  startOfBusinessDay,
+} from '../common/utils/date.util';
 
 @Injectable()
 export class PaymentsService {
@@ -92,29 +96,6 @@ export class PaymentsService {
     });
   }
 
-  private async updatePaymentDates(paymentId: string): Promise<void> {
-    try {
-      console.log(`Actualizando fechas para pago: ${paymentId}`);
-
-      // Usa SQL nativo para actualizar directamente las fechas
-      // Cambiamos para usar la zona horaria explícitamente
-      await this.paymentRepository.query(
-        `
-        UPDATE payments 
-        SET created_at = (NOW() AT TIME ZONE 'America/Bogota'), 
-            updated_at = (NOW() AT TIME ZONE 'America/Bogota')
-        WHERE id = $1
-      `,
-        [paymentId],
-      );
-
-      console.log(`Fechas actualizadas exitosamente`);
-    } catch (error) {
-      console.error(`Error al actualizar fechas:`, error);
-      throw error; // Re-lanzar para que se maneje en el método create
-    }
-  }
-
   async create(
     createPaymentDto: CreatePaymentDto,
     tenantId: string,
@@ -135,15 +116,7 @@ export class PaymentsService {
         );
       }
 
-      // Validaciones habituales...
-
-      // PASO 1: Verificamos la configuración de zona horaria
-      const timeCheck = await this.paymentRepository.query(`
-        SELECT NOW() as current_time, CURRENT_SETTING('TIMEZONE') as db_timezone
-      `);
-      console.log('Información antes de crear pago:', timeCheck[0]);
-
-      // PASO 2: Crear objeto pago
+      // PASO 1: Crear objeto pago (created_at/updated_at = now() de la BD, timestamptz)
       const payment = this.paymentRepository.create({
         amount: createPaymentDto.amount,
         payment_method: createPaymentDto.payment_method,
@@ -155,32 +128,10 @@ export class PaymentsService {
         ownerId: tenantId,
       });
 
-      // PASO 3: Guardar inicialmente
+      // PASO 2: Guardar
       const savedPayment = await this.paymentRepository.save(payment);
-      console.log('Pago guardado con ID:', savedPayment.id);
 
-      // PASO 4: Actualizar las fechas
-      await this.paymentRepository.query(
-        `
-        UPDATE payments 
-        SET 
-          created_at = (NOW() AT TIME ZONE 'UTC' - INTERVAL '5 hours'), 
-          updated_at = (NOW() AT TIME ZONE 'UTC' - INTERVAL '5 hours')
-        WHERE id = $1
-      `,
-        [savedPayment.id],
-      );
-
-      // Verificar fechas
-      const checkUpdated = await this.paymentRepository.query(
-        `
-        SELECT created_at, updated_at FROM payments WHERE id = $1
-      `,
-        [savedPayment.id],
-      );
-      console.log('Fechas actualizadas:', checkUpdated[0]);
-
-      // PASO 5: Actualizar el estado de la cita
+      // PASO 3: Actualizar el estado de la cita
       await this.appointmentsService.update(
         appointment.id,
         {
@@ -190,7 +141,7 @@ export class PaymentsService {
         tenantId,
       );
 
-      // PASO 6: Enviar notificación
+      // PASO 4: Enviar notificación
       await this.sendPaymentNotification({
         receiver_id: appointment.client.id,
         payment_amount: payment.amount,
@@ -198,7 +149,7 @@ export class PaymentsService {
         payment_id: savedPayment.id,
       });
 
-      // PASO 7: Recuperar el pago (sin usar relaciones complejas)
+      // PASO 5: Recuperar el pago (sin usar relaciones complejas)
       // Esta es la línea que está causando el error, la simplificamos
       try {
         const completePayment = await this.paymentRepository.findOne({
@@ -219,88 +170,6 @@ export class PaymentsService {
       });
     }
   }
-
-  // Método de diagnóstico corregido
-  async diagnoseTimezoneProblem(): Promise<any> {
-    try {
-      console.log('============= DIAGNÓSTICO DE ZONA HORARIA =============');
-
-      // 1. Hora del sistema JavaScript
-      const jsNow = new Date();
-      console.log('Hora actual de JavaScript:', jsNow);
-      console.log('Hora actual en formato ISO:', jsNow.toISOString());
-      console.log(
-        'Offset de la zona horaria (minutos):',
-        jsNow.getTimezoneOffset(),
-      );
-      console.log('Hora local formateada:', jsNow.toLocaleString());
-
-      // 2. Hora de la base de datos PostgreSQL
-      const pgTimeQuery = await this.paymentRepository.query(`
-      SELECT 
-        NOW() as pg_now,
-        CURRENT_TIMESTAMP as current_timestamp,
-        LOCALTIMESTAMP as local_timestamp,
-        CURRENT_SETTING('TIMEZONE') as timezone_setting,
-        NOW() AT TIME ZONE 'UTC' as now_utc,
-        NOW() AT TIME ZONE 'America/Bogota' as now_bogota
-    `);
-      console.log('Información de hora de PostgreSQL:', pgTimeQuery[0]);
-
-      // 3. Prueba directa con SQL
-      console.log('Ejecutando prueba directa con SQL...');
-
-      // Crear una tabla temporal para la prueba
-      await this.paymentRepository.query(`
-      CREATE TEMPORARY TABLE IF NOT EXISTS timezone_test (
-        id SERIAL PRIMARY KEY,
-        created_at TIMESTAMPTZ,
-        method_name TEXT
-      );
-    `);
-
-      // Insertar con diferentes métodos
-      await this.paymentRepository.query(`
-      INSERT INTO timezone_test (created_at, method_name) VALUES 
-      (NOW(), 'NOW()'),
-      (CURRENT_TIMESTAMP, 'CURRENT_TIMESTAMP'),
-      (NOW() AT TIME ZONE 'UTC', 'NOW() AT TIME ZONE UTC'),
-      (NOW() AT TIME ZONE 'America/Bogota', 'NOW() AT TIME ZONE America/Bogota');
-    `);
-
-      // Recuperar resultados
-      const testResults = await this.paymentRepository.query(`
-      SELECT * FROM timezone_test;
-    `);
-
-      console.log('Resultados de prueba con diferentes métodos de timestamp:');
-      testResults.forEach((result) => {
-        console.log(`${result.method_name}: ${result.created_at}`);
-      });
-
-      // Limpiar tabla temporal
-      await this.paymentRepository.query(`DROP TABLE IF EXISTS timezone_test;`);
-
-      console.log('============= FIN DIAGNÓSTICO =============');
-
-      // Retornar la información recopilada
-      return {
-        javascriptTime: {
-          now: jsNow,
-          iso: jsNow.toISOString(),
-          timezoneOffset: jsNow.getTimezoneOffset(),
-          localeString: jsNow.toLocaleString(),
-        },
-        postgresTime: pgTimeQuery[0],
-        testResults: testResults,
-      };
-    } catch (error) {
-      console.error('Error en diagnóstico de zona horaria:', error);
-      throw error;
-    }
-  }
-
-  // Agrega este método en tu PaymentsService
 
   async findAll(tenantId: string): Promise<Payment[]> {
     try {
@@ -414,9 +283,9 @@ export class PaymentsService {
     tenantId: string,
   ): Promise<PaymentStats> {
     try {
-      // Asegúrate de que endDate incluya todo el día (hasta las 23:59:59.999)
-      const adjustedEndDate = new Date(endDate);
-      adjustedEndDate.setUTCHours(23, 59, 59, 999); // Usa UTC para evitar problemas de zona horaria
+      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
+      startDate = startOfBusinessDay(startDate);
+      const adjustedEndDate = endOfBusinessDay(endDate);
 
       console.log(
         'Buscando pagos entre fechas:',
@@ -485,9 +354,9 @@ export class PaymentsService {
     tenantId: string,
   ): Promise<any> {
     try {
-      // Ajustar la fecha final para incluir todo el día
-      const adjustedEndDate = new Date(endDate);
-      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
+      startDate = startOfBusinessDay(startDate);
+      const adjustedEndDate = endOfBusinessDay(endDate);
 
       console.log(
         `Obteniendo estadísticas para el profesional ID: ${professionalId}`,
@@ -654,7 +523,7 @@ export class PaymentsService {
         dailyStats = await this.paymentRepository.manager.query(
           `
         SELECT 
-          DATE(p.created_at) as date,
+          to_char(p.created_at AT TIME ZONE $5::text, 'YYYY-MM-DD') as date,
           SUM(p.amount) as daily_total,
           COUNT(DISTINCT p.id) as daily_count
         FROM payments p
@@ -663,14 +532,15 @@ export class PaymentsService {
         AND p.status = 'COMPLETED'
         AND a."professional_id" = $2
         AND p.created_at BETWEEN $3 AND $4
-        GROUP BY DATE(p.created_at)
-        ORDER BY date ASC
+        GROUP BY 1
+        ORDER BY 1 ASC
       `,
           [
             tenantId,
             professionalId,
             startDate.toISOString(),
             adjustedEndDate.toISOString(),
+            businessTimeZone(),
           ],
         );
         console.log('Evolución diaria:', dailyStats);
@@ -736,9 +606,9 @@ export class PaymentsService {
     tenantId: string,
   ): Promise<PaymentMethodStats[]> {
     try {
-      // Asegúrate de que endDate incluya todo el día
-      const adjustedEndDate = new Date(endDate);
-      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
+      startDate = startOfBusinessDay(startDate);
+      const adjustedEndDate = endOfBusinessDay(endDate);
 
       console.log(
         'Buscando estadísticas por método de pago entre fechas:',
@@ -808,22 +678,16 @@ export class PaymentsService {
     tenantId: string,
   ): Promise<PaymentComparisonStats> {
     try {
-      // Calcular la duración del período actual en milisegundos
-      const periodDuration = endDate.getTime() - startDate.getTime();
+      // Días completos del negocio: [00:00 del inicio, 23:59:59.999 del fin]
+      startDate = startOfBusinessDay(startDate);
+      const adjustedEndDate = endOfBusinessDay(endDate);
+      const periodDuration = adjustedEndDate.getTime() - startDate.getTime();
 
-      // Asegurarse de que las fechas finales incluyan todo el día (23:59:59.999)
-      const adjustedEndDate = new Date(endDate);
-      adjustedEndDate.setUTCHours(23, 59, 59, 999);
-
-      // Calcular fechas para el período anterior (mismo rango de tiempo)
-      const previousEndDate = new Date(startDate.getTime() - 1); // Un milisegundo antes del inicio del período actual
+      // Período anterior: misma duración y termina justo antes del actual
+      const adjustedPreviousEndDate = new Date(startDate.getTime() - 1);
       const previousStartDate = new Date(
-        previousEndDate.getTime() - periodDuration,
+        adjustedPreviousEndDate.getTime() - periodDuration,
       );
-
-      // Ajustar la fecha final del período anterior también
-      const adjustedPreviousEndDate = new Date(previousEndDate);
-      adjustedPreviousEndDate.setHours(23, 59, 59, 999);
 
       console.log('Período actual:', startDate, 'a', adjustedEndDate);
       console.log(
@@ -912,9 +776,9 @@ export class PaymentsService {
     tenantId: string,
   ): Promise<ServiceStats[]> {
     try {
-      // Ajustar la fecha final para incluir todo el día
-      const adjustedEndDate = new Date(endDate);
-      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
+      startDate = startOfBusinessDay(startDate);
+      const adjustedEndDate = endOfBusinessDay(endDate);
 
       console.log(
         'Buscando estadísticas por servicio entre fechas:',
@@ -1019,9 +883,9 @@ export class PaymentsService {
     tenantId: string,
   ): Promise<ProfessionalStats[]> {
     try {
-      // Asegúrate de que endDate incluya todo el día (hasta las 23:59:59.999)
-      const adjustedEndDate = new Date(endDate);
-      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
+      startDate = startOfBusinessDay(startDate);
+      const adjustedEndDate = endOfBusinessDay(endDate);
 
       console.log(
         'Buscando estadísticas por profesional entre fechas:',
@@ -1112,6 +976,10 @@ export class PaymentsService {
     limit: number = 10,
   ): Promise<ClientStats[]> {
     try {
+      // Días completos del negocio (BUSINESS_TIMEZONE)
+      startDate = startOfBusinessDay(startDate);
+      endDate = endOfBusinessDay(endDate);
+
       // Consulta para obtener estadísticas básicas por cliente
       const clientsQuery = await this.paymentRepository
         .createQueryBuilder('payment')
@@ -1184,9 +1052,9 @@ export class PaymentsService {
     limit: number = 5,
   ): Promise<any[]> {
     try {
-      // Ajustar la fecha final para incluir todo el día
-      const adjustedEndDate = new Date(endDate);
-      adjustedEndDate.setUTCHours(23, 59, 59, 999);
+      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
+      startDate = startOfBusinessDay(startDate);
+      const adjustedEndDate = endOfBusinessDay(endDate);
 
       console.log(
         'Buscando mejores clientes entre fechas:',

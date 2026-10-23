@@ -19,6 +19,7 @@ import { ClientFindOptions } from './interfaces/client-find-options.interface';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { PaginationDto, PaginationResult } from './dto/pagination.dto';
+import { parseBusinessDate } from '../common/utils/date.util';
 
 @Injectable()
 export class ClientsService {
@@ -134,7 +135,7 @@ export class ClientsService {
         showNotes: createClientDto.showNotes ?? false, // Valor por defecto para nuevos campos
         notes: createClientDto.notes ?? null,
         birthday: createClientDto.birthday
-          ? new Date(createClientDto.birthday)
+          ? parseBusinessDate(createClientDto.birthday)
           : null,
         isFromDevice: false,
         isActive: true,
@@ -309,7 +310,7 @@ export class ClientsService {
                 isFromDevice: true,
                 showNotes: dto.showNotes ?? false,
                 notes: dto.notes ?? null,
-                birthday: dto.birthday ? new Date(dto.birthday) : null,
+                birthday: dto.birthday ? parseBusinessDate(dto.birthday) : null,
                 isActive: true,
               });
 
@@ -407,6 +408,10 @@ export class ClientsService {
       const updatedClient = this.clientRepository.create({
         ...currentClient,
         ...updateClientDto,
+        // Fecha sin offset = día del negocio (nunca una cadena directa a Postgres)
+        ...(updateClientDto.birthday
+          ? { birthday: parseBusinessDate(updateClientDto.birthday) }
+          : {}),
         // Asegurarse de que la imagen se actualice
         image: updateClientDto.image || currentClient.image,
       });

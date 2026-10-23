@@ -51,7 +51,7 @@ export class Appointment {
   })
   services: Service[];
 
-  @Column('timestamp', { name: 'date' })
+  @Column('timestamptz', { name: 'date' })
   date: Date;
 
   @Column({
@@ -79,10 +79,10 @@ export class Appointment {
   @Column('text', { nullable: true, name: 'cancellation_reason' })
   cancellation_reason?: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   created_at: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updated_at: Date;
 
   @Column('boolean', { default: false, name: 'reminder_sent' })

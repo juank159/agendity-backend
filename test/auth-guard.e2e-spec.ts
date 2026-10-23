@@ -13,7 +13,6 @@ import { IS_PUBLIC_KEY } from '../src/common/decorators/public.decorator';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
 import { signToken } from './utils/dev-fixtures';
 import { AppointmentReminderService } from '../src/appointments/appointment-reminder.service';
-import { PaymentsService } from '../src/payments/payments.service';
 
 /** Rutas públicas aprobadas (método + ruta Swagger). Cualquier cambio se revisa. */
 const PUBLIC_ROUTES = new Set<string>([
@@ -189,28 +188,6 @@ describe('Guard JWT global (e2e)', () => {
     expect(res.status).toBe(200);
     expect(check).toHaveBeenCalledTimes(1);
     check.mockRestore();
-  });
-
-  it('GET /payments/diagnose-timezone llega a su handler y es solo Admin', async () => {
-    // Mockeado: el real crea y borra una tabla temporal.
-    const diagnose = jest
-      .spyOn(app.get(PaymentsService), 'diagnoseTimezoneProblem')
-      .mockResolvedValue({ ok: true } as never);
-    const user = {
-      id: FAKE_UUID,
-      name: 'e2e',
-      email: 'e2e@test.local',
-    };
-    const asOwner = await http
-      .get('/api/payments/diagnose-timezone')
-      .set('Authorization', `Bearer ${signToken(user, ['Owner'])}`);
-    expect(asOwner.status).toBe(403);
-    const asAdmin = await http
-      .get('/api/payments/diagnose-timezone')
-      .set('Authorization', `Bearer ${signToken(user, ['Admin'])}`);
-    expect(asAdmin.status).toBe(200);
-    expect(diagnose).toHaveBeenCalledTimes(1);
-    diagnose.mockRestore();
   });
 
   it('toda ruta no pública responde 401 sin token', async () => {

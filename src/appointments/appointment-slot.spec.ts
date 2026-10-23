@@ -11,8 +11,9 @@ import {
   timeToMinutes,
 } from './appointment-slot';
 
-// Fechas sin zona = hora local del proceso, como las guarda `appointments.date`.
-const monday = (hhmm: string) => new Date(`2099-01-05T${hhmm}:00`);
+// Instantes explícitos en Bogotá (zona del negocio por defecto): el resultado
+// no depende de la zona del proceso (los tests corren también con TZ=UTC).
+const monday = (hhmm: string) => new Date(`2099-01-05T${hhmm}:00-05:00`);
 const weekdays = (start = '09:00', end = '18:00'): ScheduleWindow[] =>
   [1, 2, 3, 4, 5].map((d) => ({
     day_of_week: d,
@@ -59,7 +60,7 @@ describe('appointment-slot (reglas puras de 2.04)', () => {
 
   it('día ISO: lunes = 1, domingo = 7 (como schedules.day_of_week)', () => {
     expect(isoWeekday(monday('10:00'))).toBe(1);
-    expect(isoWeekday(new Date('2099-01-04T10:00:00'))).toBe(7);
+    expect(isoWeekday(new Date('2099-01-04T10:00:00-05:00'))).toBe(7);
     expect(timeToMinutes('09:30')).toBe(570);
     expect(timeToMinutes('18:00:00')).toBe(1080);
   });
@@ -84,7 +85,7 @@ describe('appointment-slot (reglas puras de 2.04)', () => {
     });
 
     it('día sin franja (domingo) o franja marcada no disponible: no cabe', () => {
-      const sunday = new Date('2099-01-04T10:00:00');
+      const sunday = new Date('2099-01-04T10:00:00-05:00');
       expect(
         fitsSchedule(sunday, appointmentEnd(sunday, [{}]), weekdays()),
       ).toBe(false);

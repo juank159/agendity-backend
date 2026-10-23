@@ -47,10 +47,10 @@ export class Subscription {
   @Column({ type: 'integer', default: 20 })
   trial_appointments_limit: number;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   subscription_start_date: Date;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   subscription_end_date: Date;
 
   @Column({ type: 'boolean', default: false })
@@ -59,9 +59,9 @@ export class Subscription {
   @OneToMany(() => PaymentHistory, (payment) => payment.subscription)
   payments: PaymentHistory[];
 
-  @CreateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  @CreateDateColumn({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  @UpdateDateColumn({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: Date;
 }
