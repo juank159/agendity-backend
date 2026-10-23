@@ -15,9 +15,15 @@ import { PostgresQueryRunner } from 'typeorm/driver/postgres/PostgresQueryRunner
 import { Subscription } from '../src/subscriptions/entities/subscription.entity';
 import { User } from '../src/users/entities/user.entity';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
-import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
+import {
+  allowFictitiousAccounts,
+  findDevOwnerAndEmployee,
+  signToken,
+} from './utils/dev-fixtures';
 
 const STRANGER_ID = '44444444-4444-4444-8444-444444444444';
+/** Owners ficticios aceptados por `JwtStrategy` (ver `allowFictitiousAccounts`). */
+const fictitiousIds: string[] = [STRANGER_ID];
 
 const WRITE_METHODS = {
   repository: [
@@ -68,6 +74,7 @@ describe('Suscripciones por tenant (e2e, solo lectura)', () => {
   beforeAll(async () => {
     let app;
     ({ app, http, close } = await createE2EApp());
+    allowFictitiousAccounts(app, fictitiousIds);
     ds = app.get(DataSource);
     ({ owner, employee } = await findDevOwnerAndEmployee(ds));
     if (
@@ -254,6 +261,7 @@ describe('Suscripciones por tenant (e2e, solo lectura)', () => {
     const before = await snapshot();
 
     // Token de un Owner cuyo tenant es el de esa fila (hoy, una fila huérfana).
+    fictitiousIds.push(overdue.tenant_id);
     const token = signToken(
       { id: overdue.tenant_id, name: 'Vencida', email: 'vencida@e2e.local' },
       ['Owner'],

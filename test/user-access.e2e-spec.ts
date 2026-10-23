@@ -13,7 +13,11 @@ import { INestApplication } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
-import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
+import {
+  allowFictitiousAccounts,
+  findDevOwnerAndEmployee,
+  signToken,
+} from './utils/dev-fixtures';
 
 const STRANGER_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -31,6 +35,7 @@ describe('Acceso a usuarios por Owner (e2e)', () => {
 
   beforeAll(async () => {
     ({ app, http, close } = await createE2EApp());
+    allowFictitiousAccounts(app, [STRANGER_ID]);
     ds = app.get(DataSource);
     ({ owner, employee } = await findDevOwnerAndEmployee(ds));
     ownerToken = signToken(owner, ['Owner']);

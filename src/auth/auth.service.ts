@@ -18,6 +18,7 @@ import {
   omitUserSecrets,
 } from 'src/users/entities/user.entity';
 import { Not, Repository, DataSource, FindOptionsWhere } from 'typeorm';
+import { assertAccountCanLogin } from './account-access';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
 import { UserAccessActor, assertCanManageUser } from 'src/users/user-access';
@@ -148,8 +149,10 @@ export class AuthService {
     where: FindOptionsWhere<User>,
     secrets: UserSecretField[],
     relations: string[] = [],
+    { withDeleted = false }: { withDeleted?: boolean } = {},
   ): Promise<User | null> {
     const qb = this.userRepository.createQueryBuilder('user').where(where);
+    if (withDeleted) qb.withDeleted();
     for (const field of secrets) {
       qb.addSelect(`user.${field}`);
     }
@@ -404,9 +407,9 @@ export class AuthService {
           relations: ['roles', 'owner', 'schedules'], // Añadir relación con schedules
         });
 
+        // Sin `token`: el Owner no debe recibir una sesión del empleado (2.12).
         return {
           user: this.transformUserResponse(employeeWithRelations),
-          token: this.generateToken(employeeWithRelations),
         };
       });
     } catch (error) {
@@ -738,15 +741,19 @@ export class AuthService {
   async login(loginAuthDto: LoginAuthDto) {
     try {
       const { email, password } = loginAuthDto;
+      // Con borrados: así una cuenta dada de baja recibe su motivo (2.12).
       const user = await this.findUserWithSecrets(
         { email },
         ['password'],
         ['roles', 'owner'],
+        { withDeleted: true },
       );
 
       if (!user || !(await bcrypt.compare(password, user.password))) {
         throw new UnauthorizedException('Credenciales inválidas');
       }
+      // Solo tras la contraseña correcta: no revela el estado de cuentas ajenas.
+      assertAccountCanLogin(user);
 
       return {
         user: this.transformUserResponse(user),
@@ -795,12 +802,16 @@ export class AuthService {
       const { email, name } = payload;
 
       // Buscar si el usuario ya existe
+      // Con borrados: una cuenta dada de baja no se "recrea" como Owner nueva.
       let user = await this.userRepository.findOne({
         where: { email },
         relations: ['roles', 'owner'],
+        withDeleted: true,
       });
 
-      if (!user) {
+      if (user) {
+        assertAccountCanLogin(user);
+      } else {
         // Si no existe, crear nuevo usuario
         const ownerRole = await this.getRole('Owner');
 

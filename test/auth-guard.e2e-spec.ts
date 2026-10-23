@@ -11,7 +11,7 @@ import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { JwtService } from '@nestjs/jwt';
 import { IS_PUBLIC_KEY } from '../src/common/decorators/public.decorator';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
-import { signToken } from './utils/dev-fixtures';
+import { allowFictitiousAccounts, signToken } from './utils/dev-fixtures';
 import { AppointmentReminderService } from '../src/appointments/appointment-reminder.service';
 
 /** Rutas públicas aprobadas (método + ruta Swagger). Cualquier cambio se revisa. */
@@ -59,6 +59,7 @@ describe('Guard JWT global (e2e)', () => {
     app = created.app;
     http = created.http;
     close = created.close;
+    allowFictitiousAccounts(app, [FAKE_UUID]);
     const document = created.document;
 
     routes = [];

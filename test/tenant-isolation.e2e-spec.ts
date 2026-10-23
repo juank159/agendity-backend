@@ -22,7 +22,11 @@ import { UserService } from '../src/user-services/entities/user-service.entity';
 import { Notification } from '../src/notifications/entities/notification.entity';
 import { SubscriptionsService } from '../src/subscriptions/services/subscriptions.service';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
-import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
+import {
+  allowFictitiousAccounts,
+  findDevOwnerAndEmployee,
+  signToken,
+} from './utils/dev-fixtures';
 
 const STRANGER_ID = '22222222-2222-4222-8222-222222222222';
 /** Id que no existe en ninguna tabla (citas, pagos, reseñas, bloques… hoy vacías). */
@@ -83,6 +87,7 @@ describe('Aislamiento por tenant (e2e)', () => {
 
   beforeAll(async () => {
     ({ app, http, close } = await createE2EApp());
+    allowFictitiousAccounts(app, [STRANGER_ID]);
     ds = app.get(DataSource);
     ({ owner, employee } = await findDevOwnerAndEmployee(ds));
     if (
