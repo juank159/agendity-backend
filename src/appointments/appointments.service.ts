@@ -239,10 +239,7 @@ export class AppointmentsService {
     }
     const end = appointmentEnd(start, services);
 
-    await manager.query(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-      [`appointment-slot:${professionalId}`],
-    );
+    await this.lockProfessionalSlot(manager, professionalId);
 
     const schedules = await manager.getRepository(Schedule).find({
       where: { user: { id: professionalId } },
@@ -263,6 +260,51 @@ export class AppointmentsService {
     );
     if (blocks.length) this.slotUnavailable('bloqueo de tiempo');
 
+    if (
+      await this.hasOverlappingAppointment(manager, {
+        tenantId,
+        professionalId,
+        start,
+        end,
+        excludeAppointmentId: exclude,
+      })
+    ) {
+      this.slotUnavailable('cruce con otra cita');
+    }
+  }
+
+  /**
+   * Lock del hueco de un profesional hasta el fin de la transacción
+   * (`pg_advisory_xact_lock`). Lo toman todas las escrituras que deciden si un
+   * hueco está libre: citas (`assertSlotAvailable`) y bloqueos de tiempo
+   * (`assertNoAppointmentOverlap`), así no se cruzan en paralelo.
+   */
+  async lockProfessionalSlot(
+    manager: EntityManager,
+    professionalId: string,
+  ): Promise<void> {
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`appointment-slot:${professionalId}`],
+    );
+  }
+
+  /**
+   * ¿Alguna cita del profesional que ocupe hueco (no `CANCELLED`) se cruza con
+   * [start, end)? Fin de cada cita con `appointmentDurationSql` (misma regla que
+   * `appointmentEnd`). Llamar con el lock del profesional tomado.
+   */
+  private async hasOverlappingAppointment(
+    manager: EntityManager,
+    range: {
+      tenantId: string;
+      professionalId: string;
+      start: Date;
+      end: Date;
+      excludeAppointmentId?: string | null;
+    },
+  ): Promise<boolean> {
+    const { tenantId, professionalId, start, end } = range;
     const overlapping = await manager.query(
       `SELECT a.id
          FROM appointments a
@@ -276,9 +318,43 @@ export class AppointmentsService {
         GROUP BY a.id
        HAVING a.date + make_interval(mins => (${appointmentDurationSql('s')})::int) > $5
         LIMIT 1`,
-      [professionalId, tenantId, NON_BLOCKING_STATUSES, end, start, exclude],
+      [
+        professionalId,
+        tenantId,
+        NON_BLOCKING_STATUSES,
+        end,
+        start,
+        range.excludeAppointmentId ?? null,
+      ],
     );
-    if (overlapping.length) this.slotUnavailable('cruce con otra cita');
+    return overlapping.length > 0;
+  }
+
+  /**
+   * Regla de los bloqueos de tiempo (2.08, la más conservadora): un bloqueo no
+   * puede cruzarse con una cita que ocupe hueco (no `CANCELLED`) del mismo
+   * profesional, salvo la cita a la que el bloqueo está ligado
+   * (`excludeAppointmentId`). Toma el mismo lock que las citas: llamar DENTRO de
+   * la transacción que guarda el bloqueo. Falla con el mismo error que una cita
+   * (`SLOT_UNAVAILABLE` "Horario no disponible", HTTP 400 legado).
+   */
+  async assertNoAppointmentOverlap(
+    manager: EntityManager,
+    range: {
+      tenantId: string;
+      professionalId: string;
+      start: Date;
+      end: Date;
+      excludeAppointmentId?: string | null;
+    },
+  ): Promise<void> {
+    if (!range.tenantId || !range.professionalId) {
+      throw new NotFoundException('Profesional no encontrado');
+    }
+    await this.lockProfessionalSlot(manager, range.professionalId);
+    if (await this.hasOverlappingAppointment(manager, range)) {
+      this.slotUnavailable('bloqueo encima de una cita');
+    }
   }
 
   private slotUnavailable(reason: string): never {

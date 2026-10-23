@@ -79,8 +79,8 @@ export class TimeBlocksController {
   findByUser(
     @Tenant() tenantId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Query('startDate', ParseDatePipe) startDate?: Date,
-    @Query('endDate', ParseDatePipe) endDate?: Date,
+    @Query('startDate', new ParseDatePipe({ optional: true })) startDate?: Date,
+    @Query('endDate', new ParseDatePipe({ optional: true })) endDate?: Date,
   ) {
     return this.timeBlocksService.findByUser(
       userId,

@@ -6,6 +6,7 @@ import {
   JoinColumn,
   OneToMany,
   ManyToMany,
+  Index,
 } from 'typeorm';
 import { Category } from '../../categories/entities/category.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
@@ -13,7 +14,9 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Appointment } from 'src/appointments/entities/appointment.entity';
 import { User } from 'src/users/entities/user.entity';
 
+/** Nombre único por negocio (2.08; antes era único en toda la app). */
 @Entity('services')
+@Index('UQ_services_owner_name', ['ownerId', 'name'], { unique: true })
 export class Service {
   @ApiProperty({
     description: 'ID único del servicio',
@@ -36,7 +39,7 @@ export class Service {
     example: 'Pestañas pelo a pelo',
     maxLength: 100,
   })
-  @Column({ unique: true, type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100 })
   name: string;
 
   @ApiProperty({

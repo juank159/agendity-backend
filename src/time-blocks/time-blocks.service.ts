@@ -4,7 +4,15 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, FindOptionsWhere } from 'typeorm';
+import {
+  Repository,
+  Between,
+  DataSource,
+  EntityManager,
+  FindOptionsWhere,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+} from 'typeorm';
 import { TimeBlock } from './entities/time-block.entity';
 import { CreateTimeBlockDto } from './dto/create-time-block.dto';
 import { UpdateTimeBlockDto } from './dto/update-time-block.dto';
@@ -20,6 +28,7 @@ import {
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
 import {
   endOfBusinessDay,
+  isValidDate,
   parseBusinessDate,
   startOfBusinessDay,
 } from '../common/utils/date.util';
@@ -35,6 +44,7 @@ export class TimeBlocksService {
     private readonly timeBlockRepository: Repository<TimeBlock>,
     private readonly usersService: UsersService,
     private readonly appointmentsService: AppointmentsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /** `where` de bloques del negocio (OR: del Owner o de sus empleados). */
@@ -61,29 +71,60 @@ export class TimeBlocksService {
     return timeBlock;
   }
 
-  /** Solapamiento con otros bloques del mismo profesional (ya validado en el negocio). */
-  private async checkTimeBlockAvailability(
-    professionalId: string,
-    startDatetime: Date,
-    endDatetime: Date,
-    excludeBlockId?: string,
-  ): Promise<boolean> {
-    const queryBuilder = this.timeBlockRepository
-      .createQueryBuilder('time_block')
-      .where('time_block.user.id = :professionalId', { professionalId })
-      .andWhere(
-        '(time_block.start_datetime, time_block.end_datetime) OVERLAPS (:startDatetime, :endDatetime)',
-        { startDatetime, endDatetime },
-      );
+  /**
+   * Regla única para guardar un bloqueo (crear y editar), DENTRO de la
+   * transacción que lo guarda:
+   * 1. Citas: `assertNoAppointmentOverlap` toma el lock del hueco del
+   *    profesional (el mismo que las citas) y rechaza si se cruza con una cita
+   *    no `CANCELLED` (salvo la cita ligada al bloqueo) → `SLOT_UNAVAILABLE`.
+   * 2. Otros bloqueos del mismo profesional → 400 "El horario solicitado no
+   *    está disponible" (como antes).
+   * Intervalos semiabiertos [inicio, fin): un bloqueo puede empezar cuando
+   * termina otro. Fechas como `Date` contra `timestamptz` (sin `OVERLAPS` con
+   * parámetros sin tipo, que Postgres no sabía resolver).
+   */
+  private async assertBlockSlotFree(
+    manager: EntityManager,
+    slot: {
+      tenantId: string;
+      professionalId: string;
+      start: Date;
+      end: Date;
+      appointmentId?: string | null;
+      excludeBlockId?: string | null;
+    },
+  ): Promise<void> {
+    TimeBlock.validateDateRange(slot.start, slot.end);
 
-    if (excludeBlockId) {
-      queryBuilder.andWhere('time_block.id != :excludeBlockId', {
-        excludeBlockId,
-      });
+    await this.appointmentsService.assertNoAppointmentOverlap(manager, {
+      tenantId: slot.tenantId,
+      professionalId: slot.professionalId,
+      start: slot.start,
+      end: slot.end,
+      excludeAppointmentId: slot.appointmentId ?? null,
+    });
+
+    const overlappingBlocks = await manager.query(
+      `SELECT 1 FROM time_block tb
+        WHERE tb."userId" = $1
+          AND tb.start_datetime < $2
+          AND tb.end_datetime > $3
+          AND ($4::uuid IS NULL OR tb.id <> $4::uuid)
+        LIMIT 1`,
+      [slot.professionalId, slot.end, slot.start, slot.excludeBlockId ?? null],
+    );
+    if (overlappingBlocks.length) {
+      throw new BadRequestException(ERROR_MESSAGES.UNAVAILABLE_SCHEDULE);
     }
+  }
 
-    const overlappingBlock = await queryBuilder.getOne();
-    return !overlappingBlock;
+  /** Cadena ISO del DTO → `Date` (sin offset = hora del negocio). */
+  private toDate(value: string): Date {
+    const date = parseBusinessDate(value);
+    if (!isValidDate(date)) {
+      throw new BadRequestException('Fecha inválida');
+    }
+    return date;
   }
 
   async findAll(tenantId: string): Promise<TimeBlockResponseDto[]> {
@@ -107,8 +148,13 @@ export class TimeBlocksService {
     const where: FindOptionsWhere<TimeBlock> = {
       user: { id: professionalId },
     };
+    // Filtros opcionales: ninguno = todos; uno solo = desde/hasta.
     if (startDate && endDate) {
       where.start_datetime = Between(startDate, endDate);
+    } else if (startDate) {
+      where.start_datetime = MoreThanOrEqual(startDate);
+    } else if (endDate) {
+      where.start_datetime = LessThanOrEqual(endDate);
     }
 
     const timeBlocks = await this.timeBlockRepository.find({
@@ -129,53 +175,42 @@ export class TimeBlocksService {
     createTimeBlockDto: CreateTimeBlockDto,
     tenantId: string,
   ): Promise<TimeBlockResponseDto> {
-    const { user_id, appointment_id, start_datetime, end_datetime, notes } =
-      createTimeBlockDto;
+    const { user_id, appointment_id, notes } = createTimeBlockDto;
+    const start = this.toDate(createTimeBlockDto.start_datetime);
+    const end = this.toDate(createTimeBlockDto.end_datetime);
+    TimeBlock.validateDateRange(start, end);
 
-    // Validar rango de fechas
-    TimeBlock.validateDateRange(
-      parseBusinessDate(start_datetime),
-      parseBusinessDate(end_datetime),
+    // Profesional y cita deben ser del negocio (si no, 404)
+    const [userFound, appointmentFound] = await Promise.all([
+      this.usersService.findTenantMember(user_id, tenantId),
+      appointment_id
+        ? this.appointmentsService.findOne(appointment_id, tenantId)
+        : null,
+    ]);
+
+    const savedTimeBlock = await this.dataSource.transaction(
+      async (manager) => {
+        await this.assertBlockSlotFree(manager, {
+          tenantId,
+          professionalId: user_id,
+          start,
+          end,
+          appointmentId: appointmentFound?.id,
+        });
+
+        const repository = manager.getRepository(TimeBlock);
+        return repository.save(
+          repository.create({
+            start_datetime: start,
+            end_datetime: end,
+            notes,
+            user: userFound as User,
+            appointment: appointmentFound,
+          }),
+        );
+      },
     );
-
-    try {
-      // Profesional y cita deben ser del negocio (si no, 404)
-      const [userFound, appointmentFound] = await Promise.all([
-        this.usersService.findTenantMember(user_id, tenantId),
-        appointment_id
-          ? this.appointmentsService.findOne(appointment_id, tenantId)
-          : null,
-      ]);
-
-      const isAvailable = await this.checkTimeBlockAvailability(
-        user_id,
-        parseBusinessDate(start_datetime),
-        parseBusinessDate(end_datetime),
-      );
-
-      if (!isAvailable) {
-        throw new BadRequestException(ERROR_MESSAGES.UNAVAILABLE_SCHEDULE);
-      }
-
-      const timeBlock = this.timeBlockRepository.create({
-        start_datetime: parseBusinessDate(start_datetime),
-        end_datetime: parseBusinessDate(end_datetime),
-        notes,
-        user: userFound as User,
-        appointment: appointmentFound,
-      });
-
-      const savedTimeBlock = await this.timeBlockRepository.save(timeBlock);
-      return TimeBlockResponseDto.fromEntity(savedTimeBlock);
-    } catch (error) {
-      if (
-        error instanceof NotFoundException ||
-        error instanceof BadRequestException
-      ) {
-        throw error;
-      }
-      throw new BadRequestException('Error al crear el bloque de tiempo');
-    }
+    return TimeBlockResponseDto.fromEntity(savedTimeBlock);
   }
 
   async update(
@@ -186,56 +221,37 @@ export class TimeBlocksService {
     const timeBlock = await this.getTimeBlockEntity(id, tenantId);
     const { start_datetime, end_datetime, user_id, notes } = updateTimeBlockDto;
 
-    try {
-      if (user_id) {
-        // El nuevo profesional también debe ser del negocio
-        timeBlock.user = await this.usersService.findTenantMember(
-          user_id,
-          tenantId,
-        );
-      }
-
-      if (start_datetime && end_datetime) {
-        TimeBlock.validateDateRange(
-          parseBusinessDate(start_datetime),
-          parseBusinessDate(end_datetime),
-        );
-
-        const isAvailable = await this.checkTimeBlockAvailability(
-          timeBlock.user.id,
-          parseBusinessDate(start_datetime),
-          parseBusinessDate(end_datetime),
-          id,
-        );
-
-        if (!isAvailable) {
-          throw new BadRequestException(ERROR_MESSAGES.UNAVAILABLE_SCHEDULE);
-        }
-      }
-
-      if (start_datetime) {
-        timeBlock.start_datetime = parseBusinessDate(start_datetime);
-      }
-
-      if (end_datetime) {
-        timeBlock.end_datetime = parseBusinessDate(end_datetime);
-      }
-
-      if (notes !== undefined) {
-        timeBlock.notes = notes;
-      }
-
-      const updatedTimeBlock = await this.timeBlockRepository.save(timeBlock);
-      return TimeBlockResponseDto.fromEntity(updatedTimeBlock);
-    } catch (error) {
-      if (
-        error instanceof NotFoundException ||
-        error instanceof BadRequestException
-      ) {
-        throw error;
-      }
-      throw new BadRequestException('Error al actualizar el bloque de tiempo');
+    if (user_id) {
+      // El nuevo profesional también debe ser del negocio
+      timeBlock.user = await this.usersService.findTenantMember(
+        user_id,
+        tenantId,
+      );
     }
+    if (start_datetime) timeBlock.start_datetime = this.toDate(start_datetime);
+    if (end_datetime) timeBlock.end_datetime = this.toDate(end_datetime);
+    if (notes !== undefined) timeBlock.notes = notes;
+
+    // Cualquier cambio de hueco (inicio, fin o profesional, aunque llegue solo
+    // uno) se valida con el rango resultante.
+    const slotChanged = !!(start_datetime || end_datetime || user_id);
+
+    const updatedTimeBlock = await this.dataSource.transaction(
+      async (manager) => {
+        if (slotChanged) {
+          await this.assertBlockSlotFree(manager, {
+            tenantId,
+            professionalId: timeBlock.user.id,
+            start: timeBlock.start_datetime,
+            end: timeBlock.end_datetime,
+            appointmentId: timeBlock.appointment?.id,
+            excludeBlockId: id,
+          });
+        }
+        return manager.getRepository(TimeBlock).save(timeBlock);
+      },
+    );
+    return TimeBlockResponseDto.fromEntity(updatedTimeBlock);
   }
 
   async remove(id: string, tenantId: string): Promise<void> {

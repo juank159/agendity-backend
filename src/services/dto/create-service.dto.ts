@@ -12,6 +12,11 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
+/**
+ * Sin valores iniciales en las propiedades: `PartialType` (UpdateServiceDto) los
+ * hereda y un PATCH parcial pisaría `priceType`, `onlineBooking` y `deposit`
+ * con el valor por defecto. Los defaults del alta los pone `ServicesService.create`.
+ */
 export class CreateServiceDto {
   @ApiProperty({
     description: 'Nombre del servicio',
@@ -87,7 +92,7 @@ export class CreateServiceDto {
   @IsEnum(['Precio fijo', 'Precio variable'], {
     message: 'priceType debe ser "Precio fijo" o "Precio variable"',
   })
-  priceType: 'Precio fijo' | 'Precio variable' = 'Precio fijo';
+  priceType?: 'Precio fijo' | 'Precio variable';
 
   @ApiProperty({
     description: 'Habilitar reserva en línea',
@@ -97,7 +102,7 @@ export class CreateServiceDto {
   })
   @IsOptional()
   @IsBoolean()
-  onlineBooking: boolean = true;
+  onlineBooking?: boolean;
 
   @ApiProperty({
     description: 'URL de la imagen representativa del servicio',
@@ -118,5 +123,5 @@ export class CreateServiceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  deposit: number = 0;
+  deposit?: number;
 }

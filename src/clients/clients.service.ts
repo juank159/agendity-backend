@@ -4,50 +4,45 @@ import {
   NotFoundException,
   InternalServerErrorException,
   HttpException,
-  Patch,
-  UseInterceptors,
-  Param,
-  UploadedFile,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { Client } from './entities/client.entity';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { RELATION_GROUPS } from './constants/relations.constants';
 import { ClientFindOptions } from './interfaces/client-find-options.interface';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { PaginationDto, PaginationResult } from './dto/pagination.dto';
 import { parseBusinessDate } from '../common/utils/date.util';
 
 @Injectable()
 export class ClientsService {
+  private readonly logger = new Logger(ClientsService.name);
+
   constructor(
     @InjectRepository(Client)
     private readonly clientRepository: Repository<Client>,
   ) {}
 
+  /**
+   * Las `HttpException` y los errores de BD (`QueryFailedError`) salen tal cual
+   * al filtro global, que los traduce (22P02 → 400, 23505 → 409 con
+   * `DUPLICATE_PHONE`/`DUPLICATE_EMAIL`, 23503 → 409). Antes se envolvían en un
+   * 500 (`GET /clients/no-uuid`). El resto → 500 sin detalles internos.
+   */
   private handleError(error: any, options: ErrorHandlerOptions): never {
-    console.error(`Error al ${options.operation} ${options.entity}:`, error);
-    console.error('Stack trace:', error.stack);
-
-    if (error instanceof HttpException) {
+    if (error instanceof HttpException || error instanceof QueryFailedError) {
       throw error;
     }
 
-    if (error?.code === '23505') {
-      const match = error.detail.match(/Key \((.*?)\)=/);
-      const field = match ? match[1] : 'campo';
-      throw new ConflictException(
-        `Ya existe ${options.entity} con el mismo ${field}`,
-      );
-    }
-
+    this.logger.error(
+      `Error al ${options.operation} ${options.entity}: ${error?.message}`,
+      error?.stack,
+    );
     throw new InternalServerErrorException(
-      `Error al ${options.operation} ${options.entity}. ${
-        options.detail ? `Detalle: ${options.detail}. ` : ''
-      }Por favor, intenta nuevamente.`,
+      `Error al ${options.operation} ${options.entity}. Por favor, intenta nuevamente.`,
     );
   }
 
@@ -150,7 +145,10 @@ export class ClientsService {
     }
   }
 
-  async findAll(tenantId: string, paginationDto?: PaginationDto): Promise<PaginationResult<Client>> {
+  async findAll(
+    tenantId: string,
+    paginationDto?: PaginationDto,
+  ): Promise<PaginationResult<Client>> {
     try {
       const {
         page = 1,
@@ -159,7 +157,7 @@ export class ClientsService {
         sortBy = 'created_at',
         sortOrder = 'DESC',
         status = 'all',
-        source = 'all'
+        source = 'all',
       } = paginationDto || {};
 
       console.log('📊 Paginación solicitada:', {
@@ -170,7 +168,7 @@ export class ClientsService {
         sortOrder,
         status,
         source,
-        tenantId
+        tenantId,
       });
 
       const skip = (page - 1) * limit;
@@ -185,27 +183,35 @@ export class ClientsService {
         const searchTerm = `%${search.toLowerCase()}%`;
         queryBuilder.andWhere(
           '(LOWER(client.name) LIKE :search OR LOWER(client.lastname) LIKE :search OR LOWER(client.email) LIKE :search OR client.phone LIKE :search)',
-          { search: searchTerm }
+          { search: searchTerm },
         );
       }
 
       // ✅ FILTRO POR ESTADO
       if (status !== 'all') {
         queryBuilder.andWhere('client.isActive = :isActive', {
-          isActive: status === 'active'
+          isActive: status === 'active',
         });
       }
 
       // ✅ FILTRO POR ORIGEN
       if (source !== 'all') {
         queryBuilder.andWhere('client.isFromDevice = :isFromDevice', {
-          isFromDevice: source === 'imported'
+          isFromDevice: source === 'imported',
         });
       }
 
       // ✅ ORDENAMIENTO DINÁMICO
-      const validSortFields = ['name', 'lastname', 'email', 'phone', 'created_at'];
-      const finalSortBy = validSortFields.includes(sortBy) ? sortBy : 'created_at';
+      const validSortFields = [
+        'name',
+        'lastname',
+        'email',
+        'phone',
+        'created_at',
+      ];
+      const finalSortBy = validSortFields.includes(sortBy)
+        ? sortBy
+        : 'created_at';
       queryBuilder.orderBy(`client.${finalSortBy}`, sortOrder);
 
       // ✅ PAGINACIÓN
@@ -230,7 +236,7 @@ export class ClientsService {
         page,
         totalPages,
         hasNextPage,
-        hasPrevPage
+        hasPrevPage,
       });
 
       return {
@@ -240,9 +246,8 @@ export class ClientsService {
         limit,
         totalPages,
         hasNextPage,
-        hasPrevPage
+        hasPrevPage,
       };
-
     } catch (error) {
       console.error('❌ Error en findAll paginado:', error);
       this.handleError(error, {

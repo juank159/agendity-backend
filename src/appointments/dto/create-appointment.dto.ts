@@ -1,15 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 import {
   IsNotEmpty,
   IsUUID,
-  IsDateString,
-  IsNumber,
   IsOptional,
   IsString,
-  IsEnum,
   IsArray,
   ArrayMinSize,
+  ArrayUnique,
   IsISO8601,
 } from 'class-validator';
 
@@ -32,9 +29,12 @@ export class CreateAppointmentDto {
 
   @ApiProperty({
     example: ['123e4567-e89b-12d3-a456-426614174000'],
-    description: 'ID del servicio',
+    description:
+      'Servicios de la cita: al menos uno y sin repetidos (2.08: antes una lista vacía creaba una cita de 0 min)',
   })
   @IsArray()
+  @ArrayMinSize(1, { message: 'La cita debe tener al menos un servicio' })
+  @ArrayUnique({ message: 'La cita no puede repetir un servicio' })
   @IsUUID('4', { each: true })
   service_ids: string[];
 

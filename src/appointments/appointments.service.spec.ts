@@ -687,3 +687,47 @@ describe('AppointmentsService (estados: cancelar y completar, 2.06)', () => {
     });
   });
 });
+
+describe('AppointmentsService.assertNoAppointmentOverlap (bloqueos, 2.08)', () => {
+  const start = new Date('2030-01-07T10:00:00-05:00');
+  const end = new Date('2030-01-07T11:00:00-05:00');
+  const range = { tenantId: TENANT, professionalId: EMPLOYEE, start, end };
+
+  it('toma el lock del hueco del profesional (el mismo que las citas) antes de buscar cruces', async () => {
+    const { service, manager } = build();
+    await service.assertNoAppointmentOverlap(manager as any, range);
+    const [lockSql, lockParams] = manager.query.mock.calls[0];
+    expect(lockSql).toContain('pg_advisory_xact_lock');
+    expect(lockParams).toEqual([`appointment-slot:${EMPLOYEE}`]);
+    const [overlapSql, params] = queriesWith(manager, 'FROM appointments')[0];
+    expect(overlapSql).toContain('appointments_status_enum[]');
+    // [prof, tenant, estados que no ocupan, fin, inicio, excluida]
+    expect(params).toEqual([EMPLOYEE, TENANT, ['CANCELLED'], end, start, null]);
+  });
+
+  it('cruce con una cita no cancelada → SLOT_UNAVAILABLE "Horario no disponible"', async () => {
+    const { service, manager, db } = build();
+    db.overlaps = [{ id: 'cita' }];
+    await expect(
+      service.assertNoAppointmentOverlap(manager as any, range),
+    ).rejects.toMatchObject({
+      code: ErrorCode.SLOT_UNAVAILABLE,
+      message: 'Horario no disponible',
+    });
+  });
+
+  it('excluye la cita ligada al bloqueo y exige tenant y profesional', async () => {
+    const { service, manager } = build();
+    await service.assertNoAppointmentOverlap(manager as any, {
+      ...range,
+      excludeAppointmentId: 'ligada',
+    });
+    expect(queriesWith(manager, 'FROM appointments')[0][1][5]).toBe('ligada');
+    await expect(
+      service.assertNoAppointmentOverlap(manager as any, {
+        ...range,
+        tenantId: undefined,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});

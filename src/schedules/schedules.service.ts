@@ -12,6 +12,7 @@ import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { UsersService } from '../users/users.service';
 import { tenantMembersWhere } from 'src/users/user-access';
+import { timeToMinutes } from 'src/appointments/appointment-slot';
 
 /**
  * Los horarios no tienen `owner_id`: pertenecen a un profesional (`user`), que es
@@ -43,6 +44,13 @@ export class SchedulesService {
     // El profesional debe ser del negocio (si no, 404)
     const user = await this.usersService.findTenantMember(user_id, tenantId);
 
+    // Validar que start_time sea anterior a end_time
+    if (scheduleData.start_time >= scheduleData.end_time) {
+      throw new BadRequestException(
+        'La hora de inicio debe ser anterior a la hora de fin',
+      );
+    }
+
     // Verificar que no exista solapamiento de horarios
     await this.validateScheduleOverlap(
       user_id,
@@ -50,13 +58,6 @@ export class SchedulesService {
       scheduleData.start_time,
       scheduleData.end_time,
     );
-
-    // Validar que start_time sea anterior a end_time
-    if (scheduleData.start_time >= scheduleData.end_time) {
-      throw new BadRequestException(
-        'La hora de inicio debe ser anterior a la hora de fin',
-      );
-    }
 
     const schedule = this.scheduleRepository.create({
       ...scheduleData,
@@ -77,6 +78,13 @@ export class SchedulesService {
     const createdSchedules: Schedule[] = [];
 
     for (const scheduleData of schedules) {
+      // Validar que start_time sea anterior a end_time
+      if (scheduleData.start_time >= scheduleData.end_time) {
+        throw new BadRequestException(
+          'La hora de inicio debe ser anterior a la hora de fin',
+        );
+      }
+
       // Verificar que no exista solapamiento de horarios
       await this.validateScheduleOverlap(
         userId,
@@ -84,13 +92,6 @@ export class SchedulesService {
         scheduleData.start_time,
         scheduleData.end_time,
       );
-
-      // Validar que start_time sea anterior a end_time
-      if (scheduleData.start_time >= scheduleData.end_time) {
-        throw new BadRequestException(
-          'La hora de inicio debe ser anterior a la hora de fin',
-        );
-      }
 
       const schedule = this.scheduleRepository.create({
         ...scheduleData,
@@ -148,25 +149,27 @@ export class SchedulesService {
     }
 
     if (
+      user_id ||
       scheduleData.day_of_week ||
       scheduleData.start_time ||
       scheduleData.end_time
     ) {
-      await this.validateScheduleOverlap(
-        schedule.user.id,
-        scheduleData.day_of_week || schedule.day_of_week,
-        scheduleData.start_time || schedule.start_time,
-        scheduleData.end_time || schedule.end_time,
-        id,
-      );
-    }
-
-    if (scheduleData.start_time && scheduleData.end_time) {
-      if (scheduleData.start_time >= scheduleData.end_time) {
+      // Rango resultante (aunque llegue solo una de las dos horas). La BD
+      // devuelve `HH:mm:ss`: se compara en minutos, no como texto.
+      const startTime = scheduleData.start_time || schedule.start_time;
+      const endTime = scheduleData.end_time || schedule.end_time;
+      if (timeToMinutes(startTime) >= timeToMinutes(endTime)) {
         throw new BadRequestException(
           'La hora de inicio debe ser anterior a la hora de fin',
         );
       }
+      await this.validateScheduleOverlap(
+        schedule.user.id,
+        scheduleData.day_of_week || schedule.day_of_week,
+        startTime,
+        endTime,
+        id,
+      );
     }
 
     Object.assign(schedule, scheduleData);
@@ -189,8 +192,10 @@ export class SchedulesService {
       .createQueryBuilder('schedule')
       .where('schedule.user.id = :userId', { userId })
       .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })
+      // Parámetros con tipo explícito: sin el CAST, Postgres no sabe qué
+      // `overlaps` usar con (time, time, unknown, unknown) y daba 500 (2.08).
       .andWhere(
-        '(schedule.start_time, schedule.end_time) OVERLAPS (:startTime, :endTime)',
+        '(schedule.start_time, schedule.end_time) OVERLAPS (CAST(:startTime AS time), CAST(:endTime AS time))',
         { startTime, endTime },
       );
 
