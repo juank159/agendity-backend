@@ -29,6 +29,7 @@ import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
 import { AppointmentScope, toAppointmentScope } from './appointment-scope';
+import { manualReminderResetOnReschedule } from './appointment-reminder.service';
 import {
   appointmentDurationSql,
   appointmentEnd,
@@ -479,6 +480,12 @@ export class AppointmentsService {
             excludeAppointmentId: id,
           });
         }
+        // Fecha comparada con la fila bloqueada: otra fecha reinicia el
+        // recordatorio manual (2.18).
+        Object.assign(
+          updateData,
+          manualReminderResetOnReschedule(current.date, updateData.date),
+        );
         await manager.getRepository(Appointment).save(updateData);
       });
 

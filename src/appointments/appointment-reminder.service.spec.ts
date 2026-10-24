@@ -2,6 +2,7 @@ import {
   AppointmentReminderService,
   isReminderDue,
   isReminderStatus,
+  manualReminderResetOnReschedule,
   ownerWhatsappEnabled,
   reminderMessage,
   remindersCronEnabled,
@@ -105,6 +106,18 @@ describe('isReminderDue (ventanas 60/30/15)', () => {
         now,
       ),
     ).toBe(false);
+  });
+});
+
+describe('manualReminderResetOnReschedule (2.18)', () => {
+  it('otra fecha → reinicia; mismo instante o sin fecha → nada', () => {
+    expect(
+      manualReminderResetOnReschedule(START, at('2026-10-22T08:00:00-05:00')),
+    ).toEqual({ reminderSent: false, reminderSentAt: null });
+    expect(
+      manualReminderResetOnReschedule(START, at('2026-10-21T13:00:00.000Z')),
+    ).toBeNull();
+    expect(manualReminderResetOnReschedule(START, undefined)).toBeNull();
   });
 });
 

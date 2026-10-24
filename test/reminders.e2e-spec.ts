@@ -424,6 +424,54 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
     expect(res.body).toHaveProperty('reminderSent');
   });
 
+  it('2.18: mover la cita a otra fecha reinicia el recordatorio manual; otros cambios no', async () => {
+    const id = ids.ownerPending;
+    const reminderOf = async () =>
+      (
+        await ds.query(
+          'SELECT reminder_sent, reminder_sent_at FROM appointments WHERE id = $1',
+          [id],
+        )
+      )[0];
+    const markSent = async () => {
+      const res = await http
+        .patch(`/api/appointments/${id}/reminder/mark-sent`)
+        .set(auth(ownerToken));
+      expect(res.status).toBe(200);
+      expect((await reminderOf()).reminder_sent).toBe(true);
+    };
+    const newDate = new Date(T + 6 * 60 * MINUTE); // hueco libre del Owner
+
+    await markSent();
+    const moved = await http
+      .patch(`/api/appointments/${id}`)
+      .set(auth(ownerToken))
+      .send({ date: newDate.toISOString() });
+    expect(moved.status).toBe(200);
+    expect(moved.body.reminderSent).toBe(false);
+    expect(await reminderOf()).toEqual({
+      reminder_sent: false,
+      reminder_sent_at: null,
+    });
+
+    await markSent();
+    const notes = await http
+      .patch(`/api/appointments/${id}`)
+      .set(auth(ownerToken))
+      .send({ notes: 'solo notas 2.18' });
+    expect(notes.status).toBe(200);
+    expect((await reminderOf()).reminder_sent).toBe(true);
+
+    // Mismo instante con otro formato (hora del negocio con offset): no reinicia.
+    const sameInstant = await http
+      .patch(`/api/appointments/${id}`)
+      .set(auth(ownerToken))
+      .send({ date: moved.body.date });
+    expect(sameInstant.status).toBe(200);
+    expect(moved.body.date).not.toBe(newDate.toISOString());
+    expect((await reminderOf()).reminder_sent).toBe(true);
+  });
+
   it('las filas de prueba quedan en 1990 (no afectan a otros specs)', async () => {
     const rows = await ds.getRepository(Appointment).find({
       where: { id: In(Object.values(ids)) },

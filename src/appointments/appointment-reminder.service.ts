@@ -86,6 +86,23 @@ export function isReminderDue(
   return now.getTime() >= reminderTimeFor(appointment.date, bookedAt).getTime();
 }
 
+/**
+ * Regla 2.18 (usuario): mover la cita a OTRA fecha reinicia el recordatorio
+ * manual (`reminderSent=false`, `reminderSentAt=null`) para que vuelva a la
+ * lista de pendientes de la app. Mismo instante u otros cambios: nada.
+ * El automático no hace falta tocarlo: `auto_reminder_for` deja de coincidir
+ * con la fecha nueva.
+ */
+export function manualReminderResetOnReschedule(
+  previousDate: Date,
+  nextDate: Date | undefined,
+): Pick<Appointment, 'reminderSent' | 'reminderSentAt'> | null {
+  if (!nextDate || nextDate.getTime() === new Date(previousDate).getTime()) {
+    return null;
+  }
+  return { reminderSent: false, reminderSentAt: null };
+}
+
 /** El cron corre salvo en los tests (`NODE_ENV=test`) o con `REMINDERS_CRON_ENABLED=false`. */
 export function remindersCronEnabled(
   env: NodeJS.ProcessEnv = process.env,

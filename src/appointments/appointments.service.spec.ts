@@ -476,6 +476,63 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
       expect(txRepo.save).toHaveBeenCalledWith({ id: 'cita-1', notes: 'nota' });
     });
 
+    it('mover a otra fecha reinicia el recordatorio manual (2.18)', async () => {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue({
+        ...existing(),
+        reminderSent: true,
+        reminderSentAt: new Date('2029-12-31T10:00:00-05:00'),
+      });
+      await service.update(
+        'cita-1',
+        { date: '2030-01-01T15:00:00' } as any,
+        TENANT,
+      );
+      expect(txRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'cita-1',
+          date: new Date('2030-01-01T15:00:00-05:00'),
+          reminderSent: false,
+          reminderSentAt: null,
+        }),
+      );
+    });
+
+    it('la misma fecha (otro formato) u otros cambios no reinician el recordatorio (2.18)', async () => {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue({ ...existing(), reminderSent: true });
+      await service.update(
+        'cita-1',
+        { date: '2030-01-01T15:00:00.000Z' } as any, // = 10:00 de Bogotá
+        TENANT,
+      );
+      await service.update('cita-1', { notes: 'x' } as any, TENANT);
+      await service.update(
+        'cita-1',
+        { professional_id: EMPLOYEE, service_ids: [SERVICE] } as any,
+        TENANT,
+      );
+      for (const [saved] of txRepo.save.mock.calls) {
+        expect(saved).not.toHaveProperty('reminderSent');
+        expect(saved).not.toHaveProperty('reminderSentAt');
+      }
+      expect(txRepo.save).toHaveBeenCalledTimes(3);
+    });
+
+    it('compara con la fecha de la fila bloqueada, no con la lectura previa (2.18)', async () => {
+      const { service, repo, txRepo } = build();
+      const moved = new Date('2030-01-01T15:00:00-05:00');
+      repo.findOne
+        .mockResolvedValueOnce(existing()) // lectura previa: 10:00
+        .mockResolvedValue({ ...existing(), date: moved }); // bajo el lock: ya 15:00
+      await service.update(
+        'cita-1',
+        { date: '2030-01-01T15:00:00' } as any,
+        TENANT,
+      );
+      expect(txRepo.save.mock.calls[0][0]).not.toHaveProperty('reminderSent');
+    });
+
     it('cancelar por el PATCH guarda el motivo; el mismo estado es un no-op', async () => {
       const { service, repo, txRepo } = build();
       repo.findOne.mockResolvedValue(existing());
