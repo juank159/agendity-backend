@@ -8,7 +8,6 @@ import {
   Delete,
   Query,
   ParseUUIDPipe,
-  ParseIntPipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -21,7 +20,6 @@ import {
 import { TimeBlocksService } from './time-blocks.service';
 import { CreateTimeBlockDto } from './dto/create-time-block.dto';
 import { UpdateTimeBlockDto } from './dto/update-time-block.dto';
-import { TimeBlock } from './entities/time-block.entity';
 import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
@@ -86,39 +84,6 @@ export class TimeBlocksController {
       userId,
       startDate,
       endDate,
-      tenantId,
-    );
-  }
-
-  @Get('available-slots/:userId')
-  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  @ApiOperation({ summary: 'Obtener slots disponibles para un profesional' })
-  @ApiParam({ name: 'userId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'date', required: true, type: Date })
-  @ApiQuery({ name: 'duration', required: true, type: Number })
-  @ApiResponse({
-    status: 200,
-    description: 'Slots disponibles',
-    schema: {
-      type: 'array',
-      items: {
-        properties: {
-          start: { type: 'string', format: 'date-time' },
-          end: { type: 'string', format: 'date-time' },
-        },
-      },
-    },
-  })
-  getAvailableSlots(
-    @Tenant() tenantId: string,
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Query('date', ParseDatePipe) date: Date,
-    @Query('duration', ParseIntPipe) duration: number,
-  ) {
-    return this.timeBlocksService.getAvailableSlots(
-      userId,
-      date,
-      duration,
       tenantId,
     );
   }

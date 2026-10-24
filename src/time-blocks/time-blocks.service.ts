@@ -26,12 +26,7 @@ import {
   ERROR_MESSAGES,
 } from './constants/time-block.constants';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
-import {
-  endOfBusinessDay,
-  isValidDate,
-  parseBusinessDate,
-  startOfBusinessDay,
-} from '../common/utils/date.util';
+import { isValidDate, parseBusinessDate } from '../common/utils/date.util';
 
 /**
  * Los bloques no tienen `owner_id`: pertenecen al profesional (`user`), y el
@@ -257,52 +252,5 @@ export class TimeBlocksService {
   async remove(id: string, tenantId: string): Promise<void> {
     const timeBlock = await this.getTimeBlockEntity(id, tenantId);
     await this.timeBlockRepository.remove(timeBlock);
-  }
-
-  async getAvailableSlots(
-    professionalId: string,
-    date: Date,
-    duration: number,
-    tenantId: string,
-  ): Promise<Array<{ start: Date; end: Date }>> {
-    // Día del negocio (BUSINESS_TIMEZONE), no el del servidor
-    const startOfDay = startOfBusinessDay(date);
-    const endOfDay = endOfBusinessDay(date);
-
-    // findByUser valida que el profesional sea del negocio (404 si no)
-    const timeBlocks = await this.findByUser(
-      professionalId,
-      startOfDay,
-      endOfDay,
-      tenantId,
-    );
-
-    const workingHours = {
-      start: 9,
-      end: 17,
-      slotDuration: duration,
-      intervalBetweenSlots: 0,
-    };
-
-    return this.calculateAvailableSlots(timeBlocks, workingHours, startOfDay);
-  }
-
-  private calculateAvailableSlots(
-    existingBlocks: TimeBlockResponseDto[],
-    workingHours: {
-      start: number;
-      end: number;
-      slotDuration: number;
-      intervalBetweenSlots: number;
-    },
-    date: Date,
-  ): Array<{ start: Date; end: Date }> {
-    const availableSlots: Array<{ start: Date; end: Date }> = [];
-    const { start, end, slotDuration, intervalBetweenSlots } = workingHours;
-
-    // Implementar lógica de cálculo de slots disponibles aquí
-    // Considerando los bloques existentes y el horario laboral
-
-    return availableSlots;
   }
 }

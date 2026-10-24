@@ -8,11 +8,16 @@ import {
   Delete,
   ParseUUIDPipe,
   BadRequestException,
+  Query,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
+import { AvailableSlotsQueryDto } from './dto/available-slots-query.dto';
+import { SLOT_STEP_MINUTES } from './appointment-slot';
+import { BusinessException } from '../common/exceptions/business.exception';
+import { ErrorCode } from '../common/constants/error-codes';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
@@ -111,6 +116,32 @@ export class AppointmentsController {
       message: 'Reminder check completed',
       processed: result.processed.length,
     };
+  }
+
+  /**
+   * Inicios libres (ISO con el offset del negocio) de un profesional en un día
+   * del negocio para los servicios pedidos (2.14). Misma regla que al agendar.
+   * Owner: cualquier profesional del negocio; Employee: solo su agenda (403).
+   */
+  @Get('available-slots')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  findAvailableSlots(
+    @Query() query: AvailableSlotsQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const day = parseBusinessDate(query.date);
+    if (!isValidDate(day)) {
+      throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Fecha inválida');
+    }
+    return this.appointmentsService.findAvailableSlots(
+      {
+        professionalId: query.professional_id,
+        day,
+        serviceIds: query.service_ids,
+        stepMinutes: query.step ?? SLOT_STEP_MINUTES.default,
+      },
+      appointmentScopeOf(user),
+    );
   }
 
   @Get(':id')

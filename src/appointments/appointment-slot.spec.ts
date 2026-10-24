@@ -6,6 +6,8 @@ import {
   blocksSlot,
   DEFAULT_SERVICE_DURATION_MINUTES,
   fitsSchedule,
+  freeSlotStarts,
+  intervalsOverlap,
   isoWeekday,
   ScheduleWindow,
   timeToMinutes,
@@ -127,5 +129,94 @@ describe('appointment-slot (reglas puras de 2.04)', () => {
         fitsSchedule(start, appointmentEnd(start, [{ duration: 60 }]), allDay),
       ).toBe(false);
     });
+  });
+});
+
+describe('freeSlotStarts (huecos libres de un día, 2.14)', () => {
+  const dayStart = monday('00:00');
+  const nextDayStart = new Date('2099-01-06T00:00:00-05:00');
+  const hhmm = (dates: Date[]) =>
+    dates.map((d) =>
+      new Date(d.getTime() - 5 * 3_600_000).toISOString().slice(11, 16),
+    );
+  const base = {
+    dayStart,
+    nextDayStart,
+    durationMinutes: 60,
+    stepMinutes: 30,
+    schedules: weekdays('09:00', '12:00'),
+    busy: [],
+  };
+
+  it('dentro del horario y sin pasar del cierre (cita de 60 min, paso 30)', () => {
+    expect(hhmm(freeSlotStarts(base))).toEqual([
+      '09:00',
+      '09:30',
+      '10:00',
+      '10:30',
+      '11:00',
+    ]);
+  });
+
+  it('una cita o un bloqueo ocupan [inicio, fin): se puede empezar al terminar', () => {
+    const busy = [{ start: monday('10:00'), end: monday('10:30') }];
+    expect(hhmm(freeSlotStarts({ ...base, busy }))).toEqual([
+      '09:00',
+      '10:30',
+      '11:00',
+    ]);
+  });
+
+  it('día sin franja del profesional (domingo) → ninguno', () => {
+    const sunday = new Date('2099-01-04T00:00:00-05:00');
+    expect(
+      freeSlotStarts({ ...base, dayStart: sunday, nextDayStart: dayStart }),
+    ).toEqual([]);
+  });
+
+  it('sin horario configurado no restringe: todo el día, incluso cruzando medianoche', () => {
+    const slots = freeSlotStarts({ ...base, schedules: [], stepMinutes: 60 });
+    expect(slots).toHaveLength(24);
+    expect(hhmm(slots).at(-1)).toBe('23:00');
+  });
+
+  it('paso no positivo → lista vacía (nunca un bucle infinito)', () => {
+    expect(freeSlotStarts({ ...base, stepMinutes: 0 })).toEqual([]);
+  });
+
+  it('coincide con la regla de guardar (fitsSchedule + cruces) en cada candidato', () => {
+    const busy = [
+      { start: monday('09:45'), end: monday('10:15') },
+      { start: monday('11:30'), end: monday('11:30') }, // cita de 0 min
+    ];
+    const free = new Set(
+      freeSlotStarts({ ...base, busy, stepMinutes: 15 }).map((d) =>
+        d.getTime(),
+      ),
+    );
+    for (let t = dayStart.getTime(); t < nextDayStart.getTime(); t += 900_000) {
+      const slot = { start: new Date(t), end: new Date(t + 3_600_000) };
+      const allowed =
+        fitsSchedule(slot.start, slot.end, base.schedules) &&
+        !busy.some((b) => intervalsOverlap(slot, b));
+      expect([slot.start.toISOString(), free.has(t)]).toEqual([
+        slot.start.toISOString(),
+        allowed,
+      ]);
+    }
+  });
+
+  it('intervalsOverlap es semiabierto, como las consultas SQL', () => {
+    const a = { start: monday('09:00'), end: monday('10:00') };
+    expect(
+      intervalsOverlap(a, { start: monday('10:00'), end: monday('11:00') }),
+    ).toBe(false);
+    expect(
+      intervalsOverlap(a, { start: monday('09:59'), end: monday('11:00') }),
+    ).toBe(true);
+    // Cita de 0 min estrictamente dentro: en SQL (date < fin AND date + 0 > inicio) también cuenta.
+    expect(
+      intervalsOverlap(a, { start: monday('09:30'), end: monday('09:30') }),
+    ).toBe(true);
   });
 });

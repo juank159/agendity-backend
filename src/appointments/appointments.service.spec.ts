@@ -64,6 +64,8 @@ function build() {
     transaction: jest.fn(async (work: (m: any) => Promise<any>) =>
       work(manager),
     ),
+    // Lecturas fuera de transacción (huecos libres, 2.14): el mismo manager simulado.
+    manager,
   };
   const service = new AppointmentsService(
     repo as any,
@@ -786,5 +788,112 @@ describe('AppointmentsService.assertNoAppointmentOverlap (bloqueos, 2.08)', () =
         tenantId: undefined,
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('AppointmentsService.findAvailableSlots (huecos libres, 2.14)', () => {
+  // 2030-01-07 es lunes; día del negocio (Bogotá).
+  const day = new Date('2030-01-07T00:00:00-05:00');
+  const at = (hhmm: string) => new Date(`2030-01-07T${hhmm}:00-05:00`);
+  const query = {
+    professionalId: EMPLOYEE,
+    day,
+    serviceIds: [SERVICE],
+    stepMinutes: 30,
+  };
+  const workday = [
+    {
+      day_of_week: 1,
+      start_time: '09:00:00',
+      end_time: '11:00:00',
+      is_available: true,
+    },
+  ];
+
+  it('horario, bloqueos y citas: devuelve solo los inicios libres, sin lock ni transacción', async () => {
+    const { service, db, manager, dataSource } = build();
+    db.schedules = workday;
+    db.blocks = [{ start: at('09:00'), end: at('09:30') }];
+    db.overlaps = [{ id: 'cita', start: at('10:00'), end: at('10:30') }];
+    const slots = await service.findAvailableSlots(query, TENANT);
+    expect(slots).toEqual([at('09:30'), at('10:30')]);
+    expect(queriesWith(manager, 'pg_advisory_xact_lock')).toHaveLength(0);
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('usa las MISMAS consultas que al guardar, sobre todo el día (+ la duración)', async () => {
+    const { service, manager } = build();
+    await service.findAvailableSlots(query, TENANT);
+    const [[apptSql, apptParams]] = queriesWith(manager, 'FROM appointments');
+    expect(apptSql).toContain('NOT (a.status = ANY($3');
+    // [prof, tenant, estados que no ocupan, fin del rango, inicio, excluida]
+    expect(apptParams).toEqual([
+      EMPLOYEE,
+      TENANT,
+      ['CANCELLED'],
+      new Date('2030-01-08T00:30:00-05:00'),
+      day,
+      null,
+    ]);
+    const [[, blockParams]] = queriesWith(manager, 'FROM time_block');
+    expect(blockParams).toEqual([
+      EMPLOYEE,
+      new Date('2030-01-08T00:30:00-05:00'),
+      day,
+      null,
+    ]);
+  });
+
+  it('la duración es la suma de los servicios pedidos (sin duración = 30 min)', async () => {
+    const { service, services, db } = build();
+    db.schedules = workday;
+    services.findOne
+      .mockResolvedValueOnce({ id: SERVICE, price: '1', duration: 60 })
+      .mockResolvedValueOnce({ id: 'otro', price: '1', duration: null });
+    const slots = await service.findAvailableSlots(
+      { ...query, serviceIds: [SERVICE, 'otro'] },
+      TENANT,
+    );
+    expect(slots).toEqual([at('09:00'), at('09:30')]); // 90 min hasta las 11:00
+  });
+
+  it('Employee: otra agenda → 403 sin leer nada; la suya, sí', async () => {
+    const { service, users, manager } = build();
+    const scope = { tenantId: TENANT, professionalId: 'otro-empleado' };
+    const error = await service
+      .findAvailableSlots(query, scope)
+      .catch((e) => e);
+    expect(error.getStatus()).toBe(403);
+    expect(error.getResponse()).toMatchObject({ code: ErrorCode.FORBIDDEN });
+    expect(users.findTenantMember).not.toHaveBeenCalled();
+    expect(manager.query).not.toHaveBeenCalled();
+    await service.findAvailableSlots(query, {
+      tenantId: TENANT,
+      professionalId: EMPLOYEE,
+    });
+    expect(users.findTenantMember).toHaveBeenCalledWith(EMPLOYEE, TENANT);
+  });
+
+  it('profesional o servicio de otro negocio → 404; profesional inactivo → PROFESSIONAL_INACTIVE', async () => {
+    const { service, users, services, manager } = build();
+    services.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.findAvailableSlots(query, TENANT),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(services.findOne).toHaveBeenCalledWith(SERVICE, TENANT);
+
+    users.findTenantMember.mockRejectedValueOnce(new NotFoundException());
+    await expect(
+      service.findAvailableSlots(query, TENANT),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    users.findTenantMember.mockResolvedValueOnce({
+      id: EMPLOYEE,
+      isActive: false,
+    });
+    await expect(
+      service.findAvailableSlots(query, TENANT),
+    ).rejects.toMatchObject({ code: ErrorCode.PROFESSIONAL_INACTIVE });
+    expect(manager.query).not.toHaveBeenCalled();
   });
 });

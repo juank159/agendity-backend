@@ -117,3 +117,66 @@ export function fitsSchedule(
 
   return merged.some(([s, e]) => s <= from && to <= e);
 }
+
+/** Intervalo semiabierto [start, end) de la agenda (cita o bloqueo ya guardados). */
+export interface SlotInterval {
+  start: Date;
+  end: Date;
+}
+
+/**
+ * ¿Se cruzan [a.start, a.end) y [b.start, b.end)? Misma condición que las
+ * consultas de cruces de `AppointmentsService` (`inicio < fin_otro AND fin >
+ * inicio_otro`): una cita puede empezar justo cuando termina otra.
+ */
+export function intervalsOverlap(a: SlotInterval, b: SlotInterval): boolean {
+  return (
+    a.start.getTime() < b.end.getTime() && a.end.getTime() > b.start.getTime()
+  );
+}
+
+/** Pasos permitidos (minutos) para listar huecos libres (2.14). */
+export const SLOT_STEP_MINUTES = { default: 15, min: 5, max: 240 } as const;
+
+/**
+ * Inicios libres de un día del negocio (2.14): la MISMA regla que
+ * `AppointmentsService.assertSlotAvailable`, aplicada a cada candidato.
+ * - Candidatos: desde las 00:00 del día del negocio (`dayStart`) cada
+ *   `stepMinutes`, mientras empiecen antes de `nextDayStart`.
+ * - Libre = cabe en el horario (`fitsSchedule`, sin filas = sin restricción) y
+ *   no se cruza con ningún intervalo ocupado (`busy`: bloqueos y citas que no
+ *   están `CANCELLED`, ya filtrados por quien los carga).
+ * Pura: quien llama carga horarios y ocupación de [dayStart, nextDayStart +
+ * duración) con las mismas consultas que la comprobación al guardar.
+ */
+export function freeSlotStarts(options: {
+  dayStart: Date;
+  nextDayStart: Date;
+  durationMinutes: number;
+  stepMinutes: number;
+  schedules: ScheduleWindow[];
+  busy: SlotInterval[];
+  timeZone?: string;
+}): Date[] {
+  const { dayStart, nextDayStart, durationMinutes, stepMinutes } = options;
+  const timeZone = options.timeZone ?? businessTimeZone();
+  if (!(stepMinutes > 0)) return [];
+  const starts: Date[] = [];
+  for (
+    let t = dayStart.getTime();
+    t < nextDayStart.getTime();
+    t += stepMinutes * 60_000
+  ) {
+    const slot = {
+      start: new Date(t),
+      end: new Date(t + durationMinutes * 60_000),
+    };
+    if (
+      fitsSchedule(slot.start, slot.end, options.schedules, timeZone) &&
+      !options.busy.some((busy) => intervalsOverlap(slot, busy))
+    ) {
+      starts.push(slot.start);
+    }
+  }
+  return starts;
+}

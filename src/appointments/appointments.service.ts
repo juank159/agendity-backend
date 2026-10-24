@@ -31,11 +31,14 @@ import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.s
 import { AppointmentScope, toAppointmentScope } from './appointment-scope';
 import { manualReminderResetOnReschedule } from './appointment-reminder.service';
 import {
+  appointmentDurationMinutes,
   appointmentDurationSql,
   appointmentEnd,
   blocksSlot,
   fitsSchedule,
+  freeSlotStarts,
   NON_BLOCKING_STATUSES,
+  SlotInterval,
 } from './appointment-slot';
 import {
   assertCancellable,
@@ -45,7 +48,11 @@ import {
 import { Payment } from 'src/payments/entities/payment.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { User } from 'src/users/entities/user.entity';
-import { parseBusinessDate } from 'src/common/utils/date.util';
+import {
+  endOfBusinessDay,
+  parseBusinessDate,
+  startOfBusinessDay,
+} from 'src/common/utils/date.util';
 
 @Injectable()
 export class AppointmentsService {
@@ -114,12 +121,11 @@ export class AppointmentsService {
       } = createAppointmentDto;
 
       // Regla del usuario (2.15): un Employee agenda solo para sí mismo.
-      if (ownProfessionalId && professional_id !== ownProfessionalId) {
-        throw new BusinessException(
-          ErrorCode.FORBIDDEN,
-          'Solo puedes agendar citas para ti',
-        );
-      }
+      this.assertOwnAgenda(
+        ownProfessionalId,
+        professional_id,
+        'Solo puedes agendar citas para ti',
+      );
 
       const [client, professional] = await Promise.all([
         this.clientsService.findOne(client_id, tenantId),
@@ -131,13 +137,7 @@ export class AppointmentsService {
       }
       this.assertProfessionalSchedulable(professional);
 
-      const services = await Promise.all(
-        service_ids.map((id) => this.servicesService.findOne(id, tenantId)),
-      );
-
-      if (services.some((service) => !service)) {
-        throw new NotFoundException('Uno o más servicios no encontrados');
-      }
+      const services = await this.loadTenantServices(service_ids, tenantId);
 
       const appointmentToSave = {
         ownerId: tenantId,
@@ -191,6 +191,95 @@ export class AppointmentsService {
     }
   }
 
+  /**
+   * Regla del usuario (2.15): el Employee (alcance con `professionalId`) solo
+   * actúa sobre su propia agenda; si no, 403 `FORBIDDEN` antes de leer nada.
+   */
+  private assertOwnAgenda(
+    ownProfessionalId: string | undefined,
+    professionalId: string,
+    message: string,
+  ): void {
+    if (ownProfessionalId && professionalId !== ownProfessionalId) {
+      throw new BusinessException(ErrorCode.FORBIDDEN, message);
+    }
+  }
+
+  /** Servicios pedidos, todos del negocio (si alguno no lo es, 404). */
+  private async loadTenantServices(serviceIds: string[], tenantId: string) {
+    const services = await Promise.all(
+      serviceIds.map((id) => this.servicesService.findOne(id, tenantId)),
+    );
+    if (services.some((service) => !service)) {
+      throw new NotFoundException('Uno o más servicios no encontrados');
+    }
+    return services;
+  }
+
+  /**
+   * Inicios libres de un profesional en un día del negocio para los servicios
+   * pedidos (2.14, para el selector de horas). Misma regla que
+   * `assertSlotAvailable` (horario, bloqueos y citas no `CANCELLED`, duración
+   * con `appointment-slot.ts`, zona del negocio) y mismas consultas, sin lock:
+   * es una lectura y no escribe. El resultado orienta; quien decide es la
+   * comprobación con lock al guardar.
+   * - Employee: solo su agenda (si no, 403 `FORBIDDEN`).
+   * - Profesional o servicios de otro negocio: 404. Profesional inactivo:
+   *   `PROFESSIONAL_INACTIVE` (el mismo error que al agendar).
+   */
+  async findAvailableSlots(
+    query: {
+      professionalId: string;
+      day: Date;
+      serviceIds: string[];
+      stepMinutes: number;
+    },
+    scope: AppointmentScope | string,
+  ): Promise<Date[]> {
+    const { tenantId, professionalId: ownProfessionalId } =
+      toAppointmentScope(scope);
+    const { professionalId, serviceIds, stepMinutes } = query;
+    this.assertOwnAgenda(
+      ownProfessionalId,
+      professionalId,
+      'Solo puedes consultar tu propia agenda',
+    );
+    if (!tenantId) throw new NotFoundException('Profesional no encontrado');
+
+    const professional = await this.usersService.findTenantMember(
+      professionalId,
+      tenantId,
+    );
+    this.assertProfessionalSchedulable(professional);
+    const services = await this.loadTenantServices(serviceIds, tenantId);
+    const durationMinutes = appointmentDurationMinutes(services);
+
+    const dayStart = startOfBusinessDay(query.day);
+    const nextDayStart = new Date(endOfBusinessDay(query.day).getTime() + 1);
+    const manager = this.dataSource.manager;
+    // Ocupación hasta el fin del último candidato (puede pasar de medianoche).
+    const range = {
+      tenantId,
+      professionalId,
+      start: dayStart,
+      end: new Date(nextDayStart.getTime() + durationMinutes * 60_000),
+    };
+    const [schedules, blocks, appointments] = await Promise.all([
+      this.loadSchedules(manager, professionalId),
+      this.findBusyBlocks(manager, range),
+      this.findBusyAppointments(manager, range),
+    ]);
+
+    return freeSlotStarts({
+      dayStart,
+      nextDayStart,
+      durationMinutes,
+      stepMinutes,
+      schedules,
+      busy: [...blocks, ...appointments],
+    });
+  }
+
   /** Un profesional desactivado (o borrado) no recibe citas nuevas ni movidas. */
   private assertProfessionalSchedulable(professional: User): void {
     if (!professional?.isActive || professional.deletedAt) {
@@ -242,36 +331,64 @@ export class AppointmentsService {
 
     await this.lockProfessionalSlot(manager, professionalId);
 
-    const schedules = await manager.getRepository(Schedule).find({
-      where: { user: { id: professionalId } },
-    });
+    const schedules = await this.loadSchedules(manager, professionalId);
     if (!fitsSchedule(start, end, schedules)) {
       this.slotUnavailable('fuera del horario del profesional');
     }
 
-    // Fechas como `Date` (instantes) contra columnas `timestamptz` (2.05).
-    const blocks = await manager.query(
-      `SELECT 1 FROM time_block tb
+    const range = {
+      tenantId,
+      professionalId,
+      start,
+      end,
+      excludeAppointmentId: exclude,
+    };
+    if ((await this.findBusyBlocks(manager, range)).length) {
+      this.slotUnavailable('bloqueo de tiempo');
+    }
+    if ((await this.findBusyAppointments(manager, range)).length) {
+      this.slotUnavailable('cruce con otra cita');
+    }
+  }
+
+  /** Horario del profesional (`schedules`); sin filas = sin restricción. */
+  private loadSchedules(
+    manager: EntityManager,
+    professionalId: string,
+  ): Promise<Schedule[]> {
+    return manager.getRepository(Schedule).find({
+      where: { user: { id: professionalId } },
+    });
+  }
+
+  /**
+   * Bloqueos (`time_block`) del profesional que se cruzan con [start, end),
+   * salvo los ligados a `excludeAppointmentId` (la cita que se edita). Fechas
+   * como `Date` (instantes) contra columnas `timestamptz` (2.05).
+   */
+  private findBusyBlocks(
+    manager: EntityManager,
+    range: {
+      professionalId: string;
+      start: Date;
+      end: Date;
+      excludeAppointmentId?: string | null;
+    },
+  ): Promise<SlotInterval[]> {
+    return manager.query(
+      `SELECT tb.start_datetime AS "start", tb.end_datetime AS "end"
+         FROM time_block tb
         WHERE tb."userId" = $1
           AND tb.start_datetime < $2
           AND tb.end_datetime > $3
-          AND ($4::uuid IS NULL OR tb."appointmentId" IS DISTINCT FROM $4::uuid)
-        LIMIT 1`,
-      [professionalId, end, start, exclude],
+          AND ($4::uuid IS NULL OR tb."appointmentId" IS DISTINCT FROM $4::uuid)`,
+      [
+        range.professionalId,
+        range.end,
+        range.start,
+        range.excludeAppointmentId ?? null,
+      ],
     );
-    if (blocks.length) this.slotUnavailable('bloqueo de tiempo');
-
-    if (
-      await this.hasOverlappingAppointment(manager, {
-        tenantId,
-        professionalId,
-        start,
-        end,
-        excludeAppointmentId: exclude,
-      })
-    ) {
-      this.slotUnavailable('cruce con otra cita');
-    }
   }
 
   /**
@@ -291,11 +408,12 @@ export class AppointmentsService {
   }
 
   /**
-   * ¿Alguna cita del profesional que ocupe hueco (no `CANCELLED`) se cruza con
-   * [start, end)? Fin de cada cita con `appointmentDurationSql` (misma regla que
-   * `appointmentEnd`). Llamar con el lock del profesional tomado.
+   * Citas del profesional que ocupan hueco (no `CANCELLED`) y se cruzan con
+   * [start, end), con su intervalo. Fin de cada cita con `appointmentDurationSql`
+   * (misma regla que `appointmentEnd`). Para decidir al guardar, llamar con el
+   * lock del profesional tomado.
    */
-  private async hasOverlappingAppointment(
+  private findBusyAppointments(
     manager: EntityManager,
     range: {
       tenantId: string;
@@ -304,10 +422,11 @@ export class AppointmentsService {
       end: Date;
       excludeAppointmentId?: string | null;
     },
-  ): Promise<boolean> {
+  ): Promise<SlotInterval[]> {
     const { tenantId, professionalId, start, end } = range;
-    const overlapping = await manager.query(
-      `SELECT a.id
+    const duration = `make_interval(mins => (${appointmentDurationSql('s')})::int)`;
+    return manager.query(
+      `SELECT a.id, a.date AS "start", a.date + ${duration} AS "end"
          FROM appointments a
          LEFT JOIN appointment_services aps ON aps.appointment_id = a.id
          LEFT JOIN services s ON s.id = aps.service_id
@@ -317,8 +436,7 @@ export class AppointmentsService {
           AND a.date < $4
           AND ($6::uuid IS NULL OR a.id <> $6::uuid)
         GROUP BY a.id
-       HAVING a.date + make_interval(mins => (${appointmentDurationSql('s')})::int) > $5
-        LIMIT 1`,
+       HAVING a.date + ${duration} > $5`,
       [
         professionalId,
         tenantId,
@@ -328,7 +446,6 @@ export class AppointmentsService {
         range.excludeAppointmentId ?? null,
       ],
     );
-    return overlapping.length > 0;
   }
 
   /**
@@ -353,7 +470,7 @@ export class AppointmentsService {
       throw new NotFoundException('Profesional no encontrado');
     }
     await this.lockProfessionalSlot(manager, range.professionalId);
-    if (await this.hasOverlappingAppointment(manager, range)) {
+    if ((await this.findBusyAppointments(manager, range)).length) {
       this.slotUnavailable('bloqueo encima de una cita');
     }
   }

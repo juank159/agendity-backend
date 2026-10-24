@@ -342,7 +342,7 @@ describe('Aislamiento por tenant (e2e)', () => {
             () =>
               http
                 .get(
-                  `/api/time-blocks/available-slots/${id}?date=2030-01-01&duration=30`,
+                  `/api/appointments/available-slots?professional_id=${id}&date=2030-01-01&service_ids=${MISSING_ID}`,
                 )
                 .set(t),
             404,
