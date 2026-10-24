@@ -175,10 +175,10 @@ describe('Guard JWT global (e2e)', () => {
   });
 
   it('GET /appointments/check-reminders llega a su handler (no a :id)', async () => {
-    // Mockeado: el real programa envíos de recordatorios.
+    // Mockeado: el real escribe (marca citas y crea notificaciones).
     const check = jest
-      .spyOn(app.get(AppointmentReminderService), 'checkAndScheduleReminders')
-      .mockResolvedValue(undefined);
+      .spyOn(app.get(AppointmentReminderService), 'processDueReminders')
+      .mockResolvedValue({ checked: 0, processed: [] });
     const token = signToken(
       { id: FAKE_UUID, name: 'e2e', email: 'e2e@test.local' },
       ['Owner'],
@@ -188,6 +188,8 @@ describe('Guard JWT global (e2e)', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(check).toHaveBeenCalledTimes(1);
+    // Solo el negocio de quien llama (2.09a).
+    expect(check.mock.calls[0][1]).toBe(FAKE_UUID);
     check.mockRestore();
   });
 

@@ -6,6 +6,7 @@ import { WhatsappConfiguration } from './entities/whatsapp-config.entity';
 import axios from 'axios';
 import { CreateWhatsappConfigDto } from './dto/create-whatsapp-config.dto';
 import { UpdateWhatsappConfigDto } from './dto/update-whatsapp-config.dto';
+import { toWhatsappPhone } from './whatsapp-phone';
 
 @Injectable()
 export class WhatsappService {
@@ -51,31 +52,6 @@ export class WhatsappService {
       );
       throw error;
     }
-  }
-
-  private formatPhoneNumber(phone: string): string {
-    // Eliminar espacios, guiones y paréntesis
-    let cleanNumber = phone.replace(/[\s\-()]/g, '');
-
-    // Si comienza con '+', eliminar el '+'
-    if (cleanNumber.startsWith('+')) {
-      cleanNumber = cleanNumber.substring(1);
-      return cleanNumber; // Ya incluye código de país
-    }
-
-    // Si comienza con '57', asumimos que ya tiene código de país
-    if (cleanNumber.startsWith('57') && cleanNumber.length >= 11) {
-      return cleanNumber;
-    }
-
-    // Los números colombianos típicamente tienen 10 dígitos
-    // Si solo tiene 10 dígitos, agregamos el código de país '57'
-    if (cleanNumber.length === 10) {
-      return `57${cleanNumber}`;
-    }
-
-    // Si nada de lo anterior aplica, devolvemos el número limpio
-    return cleanNumber;
   }
 
   // Encontrar configuración por ownerId
@@ -146,12 +122,9 @@ export class WhatsappService {
       // Formatear el mensaje para URL
       const encodedMessage = encodeURIComponent(message);
 
-      // Formatear el número del cliente (eliminar '+' si existe)
-      //   const formattedPhone = phoneNumber.startsWith('+')
-      //     ? phoneNumber.substring(1)
-      //     : phoneNumber;
-
-      const formattedPhone = this.formatPhoneNumber(phoneNumber);
+      // CallMeBot entrega SIEMPRE al número del Owner (`config.phoneNumber`);
+      // `phoneNumber` solo se usa en el log.
+      const formattedPhone = toWhatsappPhone(phoneNumber);
 
       // Construir URL de CallMeBot
       const apiUrl = `https://api.callmebot.com/whatsapp.php?phone=${config.phoneNumber}&text=${encodedMessage}&apikey=${config.apiKey}`;
@@ -189,6 +162,16 @@ export class WhatsappService {
         details: error.response?.data || 'Unknown error',
       };
     }
+  }
+
+  /**
+   * Aviso al propio Owner por CallMeBot (CallMeBot solo entrega al número que
+   * registró el Owner, nunca al cliente). Sin configuración activa no envía y
+   * devuelve `success: false`. Lo usa el recordatorio automático solo si
+   * `REMINDER_OWNER_WHATSAPP=true` (2.09a, D-05).
+   */
+  async sendToOwner(ownerId: string, message: string): Promise<any> {
+    return this.sendWhatsAppMessage(ownerId, 'owner', message);
   }
 
   // Enviar mensaje de prueba

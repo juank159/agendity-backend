@@ -650,22 +650,28 @@ export class AppointmentsService {
     }
   }
 
-  async markReminderAsSent(
-    id: string,
-    scope: AppointmentScope,
-  ): Promise<Appointment> {
-    try {
-      const appointment = await this.findOne(id, scope);
-
-      appointment.reminderSent = true;
-      appointment.reminderSentAt = new Date();
-
-      return await this.appointmentRepository.save(appointment);
-    } catch (error) {
-      this.handleError(error, {
-        entity: 'la cita',
-        operation: 'actualizar',
-      });
+  /**
+   * Registra que se envió el recordatorio MANUAL al cliente (`wa.me` desde la
+   * app). Owner: cualquier cita del negocio; Employee: solo las suyas (otras →
+   * 404). Escribe solo las dos columnas del recordatorio (no pisa estado ni
+   * otros cambios hechos en paralelo) y conserva la primera hora de envío si
+   * se repite. Devuelve esa hora.
+   */
+  async markReminderAsSent(id: string, scope: AppointmentScope): Promise<Date> {
+    const where = { id, ...this.scopeWhere(toAppointmentScope(scope)) };
+    const result = await this.appointmentRepository
+      .createQueryBuilder()
+      .update(Appointment)
+      .set({
+        reminderSent: true,
+        reminderSentAt: () => 'COALESCE(reminder_sent_at, now())',
+      })
+      .where(where)
+      .returning('reminder_sent_at')
+      .execute();
+    if (!result.affected) {
+      throw new NotFoundException(`Cita con ID ${id} no encontrada`);
     }
+    return new Date(result.raw[0].reminder_sent_at);
   }
 }

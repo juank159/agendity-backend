@@ -8,7 +8,6 @@ import {
   Delete,
   ParseUUIDPipe,
   BadRequestException,
-  Logger,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
@@ -25,7 +24,6 @@ import { isValidDate, parseBusinessDate } from '../common/utils/date.util';
 
 @Controller('appointments')
 export class AppointmentsController {
-  private readonly logger = new Logger(AppointmentsController.name);
   constructor(
     private readonly appointmentsService: AppointmentsService,
     private readonly appointmentReminderService: AppointmentReminderService,
@@ -49,13 +47,18 @@ export class AppointmentsController {
     );
   }
 
+  /**
+   * Recordatorio manual (D-05): devuelve teléfono del cliente (por la cita),
+   * texto y enlace `wa.me`. No envía ni marca nada; tras abrir WhatsApp la app
+   * llama a `mark-sent`. Owner: citas del negocio; Employee: solo las suyas.
+   */
   @Post(':id/send-reminder')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async sendAppointmentReminder(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.appointmentReminderService.sendManualReminder(
+    return this.appointmentReminderService.prepareManualReminder(
       id,
       appointmentScopeOf(user),
     );
@@ -67,16 +70,15 @@ export class AppointmentsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
   ) {
-    await this.appointmentsService.markReminderAsSent(
+    const sentAt = await this.appointmentsService.markReminderAsSent(
       id,
       appointmentScopeOf(user),
     );
-    this.logger.log(`Recordatorio marcado como enviado para la cita ${id}`);
     return {
       success: true,
       message: 'Recordatorio marcado como enviado',
       appointmentId: id,
-      sentAt: new Date(),
+      sentAt,
     };
   }
 
@@ -93,11 +95,22 @@ export class AppointmentsController {
   }
 
   // Las rutas estáticas van ANTES de ':id' (si no, ':id' + ParseUUIDPipe las captura con 400).
+  /**
+   * Fuerza ahora la pasada del cron de recordatorios, SOLO para el negocio de
+   * quien llama (antes disparaba los de todos los negocios). Idempotente: lo ya
+   * procesado no se repite. La app no la usa.
+   */
   @Get('check-reminders')
-  async checkReminders(@CurrentUser() user: AuthUser) {
-    this.logger.log(`Manual reminder check requested by user ${user.id}`);
-    await this.appointmentReminderService.checkAndScheduleReminders();
-    return { message: 'Reminder check completed' };
+  @hasRoles(JwtRoles.Owner)
+  async checkReminders(@Tenant() tenantId: string) {
+    const result = await this.appointmentReminderService.processDueReminders(
+      new Date(),
+      tenantId,
+    );
+    return {
+      message: 'Reminder check completed',
+      processed: result.processed.length,
+    };
   }
 
   @Get(':id')

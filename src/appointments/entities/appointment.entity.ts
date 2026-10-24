@@ -10,6 +10,7 @@ import {
   ManyToMany,
   JoinTable,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Client } from '../../clients/entities/client.entity';
 import { User } from '../../users/entities/user.entity';
@@ -20,6 +21,8 @@ import { Review } from 'src/reviews/entities/review.entity';
 import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
 
 @Entity('appointments')
+// Lo usa el cron de recordatorios (2.09a) y cualquier consulta por rango de fechas.
+@Index('IDX_appointments_date', ['date'])
 export class Appointment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -93,6 +96,19 @@ export class Appointment {
 
   @Column('boolean', { default: true, name: 'send_reminder' })
   sendReminder: boolean;
+
+  /**
+   * Fecha de la cita para la que el cron ya procesó el recordatorio automático
+   * (2.09a). Si la cita se mueve, deja de coincidir con `date` y vuelve a
+   * tocar. Interno: no sale en las respuestas. No confundir con
+   * `reminderSent`, que es el recordatorio MANUAL al cliente (`wa.me`).
+   */
+  @Column('timestamptz', {
+    nullable: true,
+    name: 'auto_reminder_for',
+    select: false,
+  })
+  autoReminderFor?: Date | null;
 
   @OneToOne(() => TimeBlock, (timeBlock) => timeBlock.appointment)
   timeBlock: TimeBlock;

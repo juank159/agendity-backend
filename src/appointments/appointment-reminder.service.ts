@@ -1,29 +1,52 @@
 // src/appointments/appointment-reminder.service.ts
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Cron, SchedulerRegistry } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  Repository,
-  Between,
-  MoreThanOrEqual,
-  LessThanOrEqual,
-  In,
-} from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
-import { CronJob } from 'cron';
+import { whatsappLink } from '../whatsapp/whatsapp-phone';
 import { AppointmentStatus } from '../common/enums/status.enum';
-import { OnEvent } from '@nestjs/event-emitter';
 import { AppointmentScope } from './appointment-scope';
 import {
-  businessTimeZone,
   formatBusinessLongDate,
   formatBusinessTime,
 } from '../common/utils/date.util';
+import { BusinessException } from '../common/exceptions/business.exception';
+import { ErrorCode } from '../common/constants/error-codes';
+import {
+  Notification,
+  NotificationType,
+  ReceiverType,
+} from '../notifications/entities/notification.entity';
 
 /**
- * Minutos de antelación del recordatorio según cuánto falta para la cita:
- * ≥ 24 h → 60; ≥ 2 h → 30; menos → 15. Todo con instantes (sin zona).
+ * Recordatorios de cita (2.09a, D-05).
+ *
+ * - **Al cliente**: solo MANUAL. El Owner o el Employee abre `wa.me` desde la
+ *   app (`POST :id/send-reminder` le da el enlace con el teléfono del cliente
+ *   por su id) y registra el envío con `PATCH :id/reminder/mark-sent`
+ *   (`reminderSent`). El envío automático por un proveedor está en pausa (2.09b).
+ * - **Automático (cron por minuto)**: busca en la BD las citas `PENDING` o
+ *   `CONFIRMED` que entraron en su ventana y aún no se procesaron, y deja una
+ *   notificación interna al profesional (tabla `notifications`). Opcional, con
+ *   `REMINDER_OWNER_WHATSAPP=true`: aviso por CallMeBot al número del propio
+ *   Owner. Nunca escribe al cliente.
+ */
+
+/** Estados a los que se les recuerda la cita (CLAUDE.md §1). */
+export const REMINDER_STATUSES: readonly AppointmentStatus[] = [
+  AppointmentStatus.PENDING,
+  AppointmentStatus.CONFIRMED,
+];
+
+/** Mayor antelación posible: el cron solo mira la próxima hora. */
+export const MAX_REMINDER_LEAD_MINUTES = 60;
+
+/**
+ * Minutos de antelación del recordatorio según cuánto faltaba para la cita
+ * cuando se agendó: ≥ 24 h → 60; ≥ 2 h → 30; menos → 15. Todo con instantes
+ * (sin zona).
  */
 export function reminderLeadMinutes(appointmentDate: Date, now: Date): number {
   const hoursUntil = (appointmentDate.getTime() - now.getTime()) / 3_600_000;
@@ -32,7 +55,7 @@ export function reminderLeadMinutes(appointmentDate: Date, now: Date): number {
   return 15;
 }
 
-/** Instante en que se envía el recordatorio de una cita. */
+/** Instante en que toca el recordatorio de una cita agendada en `now`. */
 export function reminderTimeFor(appointmentDate: Date, now: Date): Date {
   return new Date(
     appointmentDate.getTime() -
@@ -40,435 +63,313 @@ export function reminderTimeFor(appointmentDate: Date, now: Date): Date {
   );
 }
 
-/** Texto del recordatorio, con día y hora en la zona del negocio. */
-export function reminderMessage(
-  appointment: Pick<Appointment, 'date' | 'services'>,
-): string {
+export function isReminderStatus(status: AppointmentStatus): boolean {
+  return REMINDER_STATUSES.includes(status);
+}
+
+/**
+ * ¿Le toca ya el recordatorio automático? Ventana [fecha − antelación, fecha):
+ * la antelación (60/30/15) sale de cuánto faltaba al agendarla (`createdAt`).
+ * Si el servidor estuvo caído al abrirse la ventana, se envía al volver
+ * mientras la cita no haya empezado; una cita que ya empezó no se recuerda.
+ */
+export function isReminderDue(
+  appointment: { date: Date; createdAt: Date },
+  now: Date,
+): boolean {
+  const start = appointment.date.getTime();
+  if (now.getTime() >= start) return false;
+  const bookedAt =
+    appointment.createdAt.getTime() <= now.getTime()
+      ? appointment.createdAt
+      : now;
+  return now.getTime() >= reminderTimeFor(appointment.date, bookedAt).getTime();
+}
+
+/** El cron corre salvo en los tests (`NODE_ENV=test`) o con `REMINDERS_CRON_ENABLED=false`. */
+export function remindersCronEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.NODE_ENV !== 'test' && env.REMINDERS_CRON_ENABLED !== 'false';
+}
+
+/** Aviso por CallMeBot al Owner: APAGADO salvo `REMINDER_OWNER_WHATSAPP=true` (D-05). */
+export function ownerWhatsappEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.REMINDER_OWNER_WHATSAPP === 'true';
+}
+
+type ReminderAppointment = Pick<Appointment, 'date' | 'services'> & {
+  client?: Pick<Appointment['client'], 'name'> | null;
+};
+
+function serviceNames(appointment: Pick<Appointment, 'services'>): string {
+  return appointment.services?.length
+    ? appointment.services.map((s) => s.name).join(', ')
+    : 'servicio programado';
+}
+
+function clientFullName(client?: { name?: string; lastname?: string }): string {
+  return [client?.name, client?.lastname].filter(Boolean).join(' ').trim();
+}
+
+/** Texto del recordatorio AL CLIENTE, con día y hora en la zona del negocio. */
+export function reminderMessage(appointment: ReminderAppointment): string {
   const appointmentDate = new Date(appointment.date);
   const dateStr = formatBusinessLongDate(appointmentDate);
   const timeStr = formatBusinessTime(appointmentDate);
-  const serviceName = appointment.services?.length
-    ? appointment.services.map((s) => s.name).join(', ')
-    : 'servicio programado';
-  return `👋 Hola , te recordamos tu cita para *${serviceName}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual.`;
+  const greeting = appointment.client?.name
+    ? `👋 Hola ${appointment.client.name},`
+    : '👋 Hola,';
+  return `${greeting} te recordamos tu cita para *${serviceNames(appointment)}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual.`;
+}
+
+/** Texto de la notificación interna (profesional) y del aviso opcional al Owner. */
+export function staffReminderMessage(appointment: Appointment): string {
+  const date = new Date(appointment.date);
+  const client = clientFullName(appointment.client) || 'tu cliente';
+  const pending = appointment.reminderSent
+    ? ''
+    : ' Aún no se le ha enviado el recordatorio por WhatsApp.';
+  return `Cita con ${client} (${serviceNames(appointment)}) el ${formatBusinessLongDate(date)} a las ${formatBusinessTime(date)}.${pending}`;
+}
+
+/** Cita candidata leída por el cron (SQL crudo). */
+interface ReminderCandidate {
+  id: string;
+  date: Date;
+  createdAt: Date;
+}
+
+export interface ReminderRunResult {
+  /** Citas en la próxima hora sin recordatorio procesado. */
+  checked: number;
+  /** Ids procesados en esta pasada (cada uno una sola vez en su vida para esa fecha). */
+  processed: string[];
+}
+
+/** Lo que necesita la app para abrir `wa.me` (recordatorio manual). */
+export interface ManualReminder {
+  appointmentId: string;
+  clientId: string;
+  phone: string;
+  message: string;
+  whatsappUrl: string;
 }
 
 @Injectable()
 export class AppointmentReminderService {
   private readonly logger = new Logger(AppointmentReminderService.name);
+  /** Evita dos pasadas solapadas en el mismo proceso (entre procesos, lo evita el UPDATE condicional). */
+  private running = false;
 
   constructor(
     @InjectRepository(Appointment)
-    private appointmentsRepository: Repository<Appointment>,
-    private whatsappService: WhatsappService,
-    private schedulerRegistry: SchedulerRegistry,
-  ) {
-    this.logger.log('Inicializando servicio de recordatorios de citas');
+    private readonly appointmentsRepository: Repository<Appointment>,
+    private readonly dataSource: DataSource,
+    private readonly whatsappService: WhatsappService,
+  ) {}
 
-    // Inicializar recordatorios al inicio de la aplicación
-    this.initializeReminders();
+  /** Cada minuto. Sustituye a los `CronJob` en memoria y a la limpieza cada 6 h. */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'appointment-reminders' })
+  async runDueReminders(): Promise<void> {
+    if (!remindersCronEnabled() || this.running) return;
+    this.running = true;
+    try {
+      await this.processDueReminders(new Date());
+    } catch (error) {
+      this.logger.error(
+        `Error procesando recordatorios: ${error.message}`,
+        error.stack,
+      );
+    } finally {
+      this.running = false;
+    }
   }
 
-  @OnEvent('appointment.created')
-  async handleAppointmentCreatedEvent(appointment: Appointment) {
-    this.logger.log(
-      `Nueva cita creada, programando recordatorio: ${appointment.id}`,
+  /**
+   * Procesa los recordatorios que tocan en `now`. Con `tenantId`, solo los de
+   * ese negocio (`GET /appointments/check-reminders`). Idempotente: cada cita
+   * se procesa una vez por fecha, aunque se llame varias veces o en paralelo.
+   */
+  async processDueReminders(
+    now: Date,
+    tenantId?: string,
+  ): Promise<ReminderRunResult> {
+    if (tenantId !== undefined && !tenantId) {
+      throw new Error('processDueReminders: tenantId vacío');
+    }
+    const candidates = await this.findCandidates(now, tenantId);
+    const processed: string[] = [];
+
+    for (const candidate of candidates) {
+      if (!isReminderDue(candidate, now)) continue;
+      try {
+        const appointment = await this.dataSource.transaction((manager) =>
+          this.claimAndNotify(manager, candidate),
+        );
+        if (!appointment) continue;
+        processed.push(appointment.id);
+        if (ownerWhatsappEnabled()) await this.notifyOwnerSafely(appointment);
+      } catch (error) {
+        this.logger.error(
+          `Error en el recordatorio de la cita ${candidate.id}: ${error.message}`,
+          error.stack,
+        );
+      }
+    }
+
+    if (processed.length) {
+      this.logger.log(`Recordatorios procesados: ${processed.length}`);
+    }
+    return { checked: candidates.length, processed };
+  }
+
+  /** Citas de la próxima hora, en estado recordable y sin recordatorio procesado para su fecha. */
+  private async findCandidates(
+    now: Date,
+    tenantId?: string,
+  ): Promise<ReminderCandidate[]> {
+    const until = new Date(now.getTime() + MAX_REMINDER_LEAD_MINUTES * 60_000);
+    const params: unknown[] = [REMINDER_STATUSES, now, until];
+    let tenantFilter = '';
+    if (tenantId) {
+      params.push(tenantId);
+      tenantFilter = 'AND a.owner_id = $4';
+    }
+    return this.appointmentsRepository.query(
+      `SELECT a.id, a."date" AS "date", a.created_at AS "createdAt"
+         FROM appointments a
+        WHERE a.status::text = ANY($1::text[])
+          AND a.send_reminder
+          AND a."date" > $2 AND a."date" <= $3
+          AND a.auto_reminder_for IS DISTINCT FROM a."date"
+          ${tenantFilter}
+        ORDER BY a."date"`,
+      params,
     );
-
-    try {
-      // Asegurarse de que la cita tiene todas las relaciones necesarias
-      if (!appointment.client || !appointment.services) {
-        const fullAppointment = await this.appointmentsRepository.findOne({
-          where: { id: appointment.id },
-          relations: ['client', 'professional', 'services'],
-        });
-
-        if (fullAppointment) {
-          await this.scheduleAppointmentReminder(fullAppointment);
-        }
-      } else {
-        await this.scheduleAppointmentReminder(appointment);
-      }
-    } catch (error) {
-      this.logger.error(
-        `Error al programar recordatorio para nueva cita ${appointment.id}: ${error.message}`,
-        error.stack,
-      );
-    }
   }
 
-  // Se ejecuta cuando arranca la aplicación
-  private async initializeReminders() {
-    this.logger.log('Iniciando programación de recordatorios');
-    try {
-      // Programar recordatorios para todas las citas futuras
-      await this.scheduleUpcomingReminders();
-      this.logger.log('Programación de recordatorios completada');
-    } catch (error) {
-      this.logger.error(
-        `Error initializing reminders: ${error.message}`,
-        error.stack,
-      );
-    }
-  }
+  /**
+   * Marca la cita como procesada para su fecha con un UPDATE condicional (solo
+   * gana una pasada) y, en la misma transacción, deja la notificación interna.
+   * Devuelve la cita si esta pasada la procesó; `null` si otra se adelantó o si
+   * la cita cambió (fecha, estado o `send_reminder`) desde la consulta.
+   */
+  private async claimAndNotify(
+    manager: EntityManager,
+    candidate: ReminderCandidate,
+  ): Promise<Appointment | null> {
+    const claim = await manager
+      .createQueryBuilder()
+      .update(Appointment)
+      .set({ autoReminderFor: () => '"date"' })
+      .where('id = :id', { id: candidate.id })
+      // Postgres guarda microsegundos y `Date` solo milisegundos.
+      .andWhere(`date_trunc('milliseconds', "date") = :date`, {
+        date: candidate.date,
+      })
+      .andWhere('status IN (:...statuses)', { statuses: REMINDER_STATUSES })
+      .andWhere('send_reminder = true')
+      .andWhere('auto_reminder_for IS DISTINCT FROM "date"')
+      .execute();
+    if (!claim.affected) return null;
 
-  // Todos los días a medianoche, hora del negocio
-  @Cron('0 0 * * *', { timeZone: businessTimeZone() })
-  async scheduleDailyReminders() {
-    this.logger.log(
-      '🕐 Ejecutando tarea diaria de programación de recordatorios',
+    const appointment = await manager.getRepository(Appointment).findOne({
+      where: { id: candidate.id },
+      relations: { client: true, services: true },
+    });
+    if (!appointment) return null;
+
+    const notifications = manager.getRepository(Notification);
+    await notifications.save(
+      notifications.create({
+        receiver_id: appointment.professionalId,
+        receiver_type: ReceiverType.USER,
+        type: NotificationType.APPOINTMENT_REMINDER,
+        title: 'Recordatorio de cita',
+        message: staffReminderMessage(appointment),
+        metadata: {
+          appointment_id: appointment.id,
+          client_id: appointment.client?.id ?? null,
+          appointment_date: appointment.date.toISOString(),
+          reminder_sent_to_client: appointment.reminderSent,
+        },
+      }),
     );
-    await this.scheduleUpcomingReminders();
-    await this.cleanupExpiredReminders();
+    return appointment;
   }
 
-  // ✅ NUEVA FUNCIONALIDAD: Limpiar recordatorios de citas pasadas
-  @Cron('0 */6 * * *') // Ejecutar cada 6 horas
-  async cleanupExpiredReminders() {
-    this.logger.log('🧹 Iniciando limpieza de recordatorios expirados');
-
+  /** Aviso opcional al Owner por CallMeBot, fuera de la transacción y sin romper la pasada. */
+  private async notifyOwnerSafely(appointment: Appointment): Promise<void> {
     try {
-      const currentDate = new Date();
-
-      // Buscar citas que ya pasaron pero aún tienen reminderSent: false
-      const expiredAppointments = await this.appointmentsRepository.find({
-        where: {
-          date: LessThanOrEqual(currentDate),
-          reminderSent: false,
-        },
-        select: ['id', 'date', 'reminderSent'],
-      });
-
-      this.logger.log(
-        `📊 Encontradas ${expiredAppointments.length} citas pasadas sin recordatorio marcado`,
+      const result = await this.whatsappService.sendToOwner(
+        appointment.ownerId,
+        `🔔 ${staffReminderMessage(appointment)}`,
       );
-
-      // Marcar como recordatorio enviado para evitar procesamiento futuro
-      if (expiredAppointments.length > 0) {
-        const expiredIds = expiredAppointments.map((app) => app.id);
-
-        await this.appointmentsRepository.update(
-          { id: In(expiredIds) },
-          { reminderSent: true, reminderSentAt: currentDate },
-        );
-
-        this.logger.log(
-          `✅ Marcadas ${expiredAppointments.length} citas pasadas como procesadas`,
+      if (!result?.success) {
+        this.logger.warn(
+          `Aviso al Owner no enviado (cita ${appointment.id}): ${result?.message ?? result?.error}`,
         );
       }
-
-      // Limpiar trabajos cron de citas que ya pasaron
-      await this.cleanupExpiredCronJobs();
     } catch (error) {
-      this.logger.error(
-        `❌ Error durante limpieza de recordatorios: ${error.message}`,
-        error.stack,
+      this.logger.warn(
+        `Aviso al Owner no enviado (cita ${appointment.id}): ${error.message}`,
       );
     }
   }
 
-  // ✅ MÉTODO AUXILIAR: Limpiar trabajos cron expirados
-  private async cleanupExpiredCronJobs() {
-    try {
-      const currentDate = new Date();
-      const allJobs = this.schedulerRegistry.getCronJobs();
-      let cleanedCount = 0;
-
-      allJobs.forEach((job, jobName) => {
-        // Solo procesar trabajos de recordatorios
-        if (jobName.startsWith('reminder-')) {
-          const appointmentId = jobName.replace('reminder-', '');
-
-          // Verificar si el trabajo debería ser eliminado
-          // (esto es una aproximación, idealmente deberíamos verificar con la base de datos)
-          try {
-            this.schedulerRegistry.deleteCronJob(jobName);
-            cleanedCount++;
-            this.logger.log(`🗑️ Trabajo cron ${jobName} eliminado`);
-          } catch (e) {
-            // Trabajo ya no existe o error al eliminar
-            this.logger.warn(
-              `⚠️ No se pudo eliminar trabajo ${jobName}: ${e.message}`,
-            );
-          }
-        }
-      });
-
-      if (cleanedCount > 0) {
-        this.logger.log(
-          `🧹 Limpieza de trabajos cron completada: ${cleanedCount} eliminados`,
-        );
-      }
-    } catch (error) {
-      this.logger.error(`❌ Error limpiando trabajos cron: ${error.message}`);
-    }
-  }
-
-  // Busca y programa recordatorios para citas próximas
-  private async scheduleUpcomingReminders() {
-    try {
-      const currentDate = new Date();
-
-      this.logger.log(
-        `🔍 Buscando citas futuras desde ${currentDate.toISOString()}`,
-      );
-
-      // ✅ FILTRO MEJORADO: Solo citas futuras que no han enviado recordatorio
-      const upcomingAppointments = await this.appointmentsRepository.find({
-        where: {
-          date: MoreThanOrEqual(currentDate), // Solo citas futuras
-          reminderSent: false, // Solo las que no han sido enviadas
-          status: AppointmentStatus.PENDING, // Solo citas confirmadas
-        },
-        relations: ['client', 'professional', 'services'],
-        order: { date: 'ASC' }, // Ordenar por fecha más próxima primero
-      });
-
-      this.logger.log(
-        `Se encontraron ${upcomingAppointments.length} citas próximas para recordatorios`,
-      );
-
-      // Listar todas las citas encontradas con su hora
-      upcomingAppointments.forEach((appointment) => {
-        this.logger.log(
-          `Cita ID: ${appointment.id}, Cliente: ${appointment.client?.name || 'Sin nombre'}, Fecha: ${appointment.date}, Teléfono: ${appointment.client?.phone || 'Sin teléfono'}`,
-        );
-      });
-
-      // Programar recordatorios para cada cita
-      for (const appointment of upcomingAppointments) {
-        await this.scheduleAppointmentReminder(appointment);
-      }
-    } catch (error) {
-      this.logger.error(
-        `Error scheduling upcoming reminders: ${error.message}`,
-        error.stack,
-      );
-    }
-  }
-
-  /** Recordatorio manual de una cita visible para el alcance (negocio y, para el Employee, solo las suyas). */
-  public async sendManualReminder(
+  /**
+   * Recordatorio MANUAL: devuelve el teléfono del cliente (por la relación de
+   * la cita, nunca por nombre), el texto y el enlace `wa.me`. No envía nada ni
+   * marca la cita: la app abre WhatsApp y después llama a `mark-sent`.
+   * Owner: citas del negocio; Employee: solo las suyas (otras → 404).
+   */
+  async prepareManualReminder(
     appointmentId: string,
     scope: AppointmentScope,
-  ) {
-    try {
-      if (!scope?.tenantId) {
-        throw new NotFoundException(
-          `Appointment with ID ${appointmentId} not found`,
-        );
-      }
-      const appointment = await this.appointmentsRepository.findOne({
-        where: {
-          id: appointmentId,
-          ownerId: scope.tenantId,
-          ...(scope.professionalId
-            ? { professionalId: scope.professionalId }
-            : {}),
-        },
-        relations: ['client', 'professional', 'services'],
-      });
+  ): Promise<ManualReminder> {
+    const notFound = () =>
+      new NotFoundException(`Cita con ID ${appointmentId} no encontrada`);
+    if (!scope?.tenantId) throw notFound();
 
-      if (!appointment) {
-        throw new NotFoundException(
-          `Appointment with ID ${appointmentId} not found`,
-        );
-      }
+    const appointment = await this.appointmentsRepository.findOne({
+      where: {
+        id: appointmentId,
+        ownerId: scope.tenantId,
+        ...(scope.professionalId
+          ? { professionalId: scope.professionalId }
+          : {}),
+      },
+      relations: { client: true, services: true },
+    });
+    if (!appointment) throw notFound();
 
-      return await this.sendReminderNow(appointment);
-    } catch (error) {
-      this.logger.error(
-        `Error sending manual reminder for appointment ${appointmentId}: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
-  }
-
-  // src/appointments/appointment-reminder.service.ts
-  // Modifica el método scheduleAppointmentReminder
-
-  public async scheduleAppointmentReminder(appointment: Appointment) {
-    try {
-      // Verificar si la cita tiene cliente
-      if (!appointment.client?.phone) {
-        this.logger.warn(
-          `Cannot schedule reminder for appointment ${appointment.id}: Client has no phone number`,
-        );
-        return;
-      }
-
-      const appointmentDate = new Date(appointment.date);
-      const now = new Date();
-
-      // ✅ VALIDACIÓN PREVIA: Verificar que la cita sea futura
-      if (appointmentDate <= now) {
-        this.logger.warn(
-          `⏰ Cita ${appointment.id} ya pasó (${appointmentDate.toISOString()}), no se programará recordatorio`,
-        );
-        return;
-      }
-
-      const reminderMinutesBefore = reminderLeadMinutes(appointmentDate, now);
-      const reminderTime = reminderTimeFor(appointmentDate, now);
-
-      this.logger.log(
-        `📅 Cita ${appointment.id} programada para: ${appointmentDate.toISOString()}`,
-      );
-      this.logger.log(
-        `⏰ Recordatorio ${reminderMinutesBefore} min antes: ${reminderTime.toISOString()}`,
-      );
-      this.logger.log(`🕐 Hora actual: ${now.toISOString()}`);
-
-      // ✅ VERIFICACIÓN MEJORADA: Si el recordatorio ya pasó
-      if (reminderTime <= now) {
-        this.logger.warn(
-          `⚠️ El tiempo de recordatorio para la cita ${appointment.id} ya pasó. Enviando inmediatamente.`,
-        );
-
-        // Enviar el recordatorio inmediatamente para citas muy próximas
-        await this.sendReminderNow(appointment);
-        return;
-      }
-
-      // Verificamos si ya existe un trabajo programado para esta cita
-      const jobName = `reminder-${appointment.id}`;
-      try {
-        const existingJob = this.schedulerRegistry.getCronJob(jobName);
-        if (existingJob) {
-          this.logger.log(
-            `Recordatorio ya programado para cita ${appointment.id}, se omitirá`,
-          );
-          return;
-        }
-      } catch (e) {
-        // No existe, continuamos
-        this.logger.log(
-          `Creando nuevo trabajo programado para cita ${appointment.id}`,
-        );
-      }
-
-      try {
-        // Un `Date` como cronTime = una sola ejecución en ese instante (sin
-        // depender de la zona del proceso ni repetirse al año siguiente).
-        const job = new CronJob(reminderTime, async () => {
-          this.logger.log(
-            `Ejecutando recordatorio programado para cita ${appointment.id}`,
-          );
-          await this.sendReminderNow(appointment);
-
-          // Eliminar el trabajo después de su ejecución
-          try {
-            this.schedulerRegistry.deleteCronJob(jobName);
-            this.logger.log(
-              `Trabajo ${jobName} eliminado después de ejecución`,
-            );
-          } catch (e) {
-            this.logger.error(
-              `Error removiendo trabajo ${jobName}: ${e.message}`,
-            );
-          }
-        });
-
-        // Registrar y comenzar el trabajo
-        this.schedulerRegistry.addCronJob(jobName, job);
-        job.start();
-
-        this.logger.log(
-          `Recordatorio programado para cita ${appointment.id} a las ${reminderTime.toISOString()}`,
-        );
-      } catch (cronError) {
-        this.logger.error(
-          `Error al programar cron job para cita ${appointment.id}: ${cronError.message}`,
-        );
-
-        // Si hay un error al programar el cron pero la cita aún está en el futuro,
-        // intentamos un enfoque alternativo con setTimeout
-        if (appointmentDate > now) {
-          const timeUntilReminder = reminderTime.getTime() - now.getTime();
-          if (timeUntilReminder > 0) {
-            this.logger.log(
-              `Usando setTimeout como alternativa para cita ${appointment.id}`,
-            );
-            setTimeout(async () => {
-              this.logger.log(
-                `Ejecutando recordatorio con setTimeout para cita ${appointment.id}`,
-              );
-              await this.sendReminderNow(appointment);
-            }, timeUntilReminder);
-          }
-        }
-      }
-    } catch (error) {
-      this.logger.error(
-        `Error programando recordatorio para cita ${appointment.id}: ${error.message}`,
-        error.stack,
+    if (!isReminderStatus(appointment.status)) {
+      throw new BusinessException(
+        ErrorCode.CONFLICT,
+        'Solo se envían recordatorios de citas pendientes o confirmadas',
       );
     }
-  }
-
-  public async checkAndScheduleReminders() {
-    this.logger.log('Checking and scheduling reminders manually');
-    return this.scheduleUpcomingReminders();
-  }
-
-  // Método para enviar un recordatorio manual
-  private async sendReminderNow(appointment: Appointment) {
-    try {
-      this.logger.log(
-        `Iniciando envío de recordatorio para cita ${appointment.id}`,
+    if (!appointment.client?.phone?.trim()) {
+      throw new BusinessException(
+        ErrorCode.CONFLICT,
+        'El cliente no tiene número de teléfono registrado',
       );
+    }
 
-      if (!appointment.client?.phone) {
-        this.logger.warn(
-          `No se puede enviar recordatorio: Cliente no tiene número de teléfono`,
-        );
-        return;
-      }
-
-      this.logger.log(`Teléfono del cliente: ${appointment.client.phone}`);
-
-      // Mensaje con día y hora en la zona del negocio
-      const message = reminderMessage(appointment);
-
-      this.logger.log(`Mensaje a enviar: ${message}`);
-
-      // Enviar el mensaje usando el servicio de WhatsApp
-      this.logger.log(
-        `Enviando mensaje a WhatsApp para owner ${appointment.ownerId}`,
-      );
-      const result = await this.whatsappService.sendWhatsAppMessage(
-        appointment.ownerId,
+    const message = reminderMessage(appointment);
+    return {
+      appointmentId: appointment.id,
+      clientId: appointment.client.id,
+      phone: appointment.client.phone,
+      message,
+      whatsappUrl: whatsappLink(
         appointment.client.phone,
         message,
-      );
-
-      this.logger.log(`Resultado del envío: ${JSON.stringify(result)}`);
-
-      if (result.success) {
-        this.logger.log(
-          `Recordatorio enviado correctamente para cita ${appointment.id}`,
-        );
-
-        // Actualizar el estado del recordatorio
-        await this.appointmentsRepository.update(appointment.id, {
-          reminderSent: true,
-          reminderSentAt: new Date(),
-        });
-        this.logger.log(`Estado de cita actualizado: reminderSent=true`);
-      } else {
-        this.logger.warn(
-          `Error al enviar recordatorio para cita ${appointment.id}: ${result.message || result.error}`,
-        );
-      }
-
-      return result;
-    } catch (error) {
-      this.logger.error(
-        `Error enviando recordatorio para cita ${appointment.id}: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
+        appointment.client.countryCode,
+      ),
+    };
   }
 }
