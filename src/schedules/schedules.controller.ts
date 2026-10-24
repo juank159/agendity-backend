@@ -7,12 +7,16 @@ import {
   Param,
   Delete,
   ParseUUIDPipe,
+  ParseArrayPipe,
 } from '@nestjs/common';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SchedulesService } from './schedules.service';
-import { CreateScheduleDto } from './dto/create-schedule.dto';
+import {
+  CreateScheduleBatchItemDto,
+  CreateScheduleDto,
+} from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { Schedule } from './entities/schedule.entity';
 import { Tenant } from '../common/decorators/tenant.decorator';
@@ -46,8 +50,16 @@ export class SchedulesController {
     type: [Schedule],
   })
   createBatch(
-    @Param('userId') userId: string,
-    @Body() schedules: Omit<CreateScheduleDto, 'user_id'>[],
+    @Param('userId', ParseUUIDPipe) userId: string,
+    // El ValidationPipe global no valida arrays: cada elemento con su DTO (2.17).
+    @Body(
+      new ParseArrayPipe({
+        items: CreateScheduleBatchItemDto,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    schedules: CreateScheduleBatchItemDto[],
     @Tenant() tenantId: string,
   ) {
     return this.schedulesService.createBatch(userId, schedules, tenantId);

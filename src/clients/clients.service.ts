@@ -7,7 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { EntityManager, QueryFailedError, Repository } from 'typeorm';
 import { Client } from './entities/client.entity';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -276,72 +276,49 @@ export class ClientsService {
     return await this.findClient({ id, ownerId: tenantId });
   }
 
+  /**
+   * Importación masiva desde los contactos del teléfono. Contrato PARCIAL (la
+   * app lo lee así): se importan las filas válidas y cada fila rechazada va en
+   * `errors` con su motivo.
+   *
+   * 2.17: cada fila corre en su propio SAVEPOINT (`manager.transaction`
+   * anidado = `SAVEPOINT typeorm_N` en TypeORM 0.3). Antes, un error de BD en
+   * una fila (unique por una alta simultánea, dato demasiado largo…) se
+   * capturaba dentro de la transacción ya abortada: las filas siguientes
+   * fallaban con "current transaction is aborted" y el COMMIT final hacía
+   * ROLLBACK de todo, aunque la respuesta decía que se habían importado.
+   * Con el savepoint solo se deshace esa fila. Un error que no es de la fila
+   * (conexión, etc.) sale de la transacción y no importa nada.
+   */
   async importBatch(createClientDtos: CreateClientDto[], tenantId: string) {
     try {
-      console.log('Iniciando importación:', {
-        totalClients: createClientDtos.length,
-        tenantId,
-      });
-
       const results: Client[] = [];
       const errors: Array<{ data: CreateClientDto; error: string }> = [];
 
-      await this.clientRepository.manager.transaction(
-        async (transactionalEntityManager) => {
-          for (const dto of createClientDtos) {
-            try {
-              const existingClient = await transactionalEntityManager.findOne(
-                Client,
-                {
-                  where: {
-                    phone: dto.phone,
-                    ownerId: tenantId,
-                  },
-                },
-              );
-
-              if (existingClient) {
-                console.log('Cliente existente:', existingClient);
-                errors.push({
-                  data: dto,
-                  error: `Cliente con teléfono ${dto.phone} ya existe`,
-                });
-                continue;
-              }
-
-              const client = transactionalEntityManager.create(Client, {
-                ...dto,
-                ownerId: tenantId,
-                isFromDevice: true,
-                showNotes: dto.showNotes ?? false,
-                notes: dto.notes ?? null,
-                birthday: dto.birthday ? parseBusinessDate(dto.birthday) : null,
-                isActive: true,
-              });
-
-              const savedClient = await transactionalEntityManager.save(
-                Client,
-                client,
-              );
-              console.log('Cliente guardado:', savedClient);
-              results.push(savedClient);
-            } catch (error) {
-              console.error('Error procesando cliente:', dto, error);
+      await this.clientRepository.manager.transaction(async (manager) => {
+        for (const dto of createClientDtos) {
+          try {
+            const saved = await manager.transaction((rowManager) =>
+              this.importRow(rowManager, dto, tenantId),
+            );
+            if (saved) {
+              results.push(saved);
+            } else {
               errors.push({
                 data: dto,
-                error: error.message || 'Error desconocido',
+                error: `Cliente con teléfono ${dto.phone} ya existe`,
               });
             }
+          } catch (error) {
+            if (!(error instanceof QueryFailedError)) throw error;
+            errors.push({ data: dto, error: this.importRowError(error, dto) });
           }
+        }
+      });
 
-          console.log('Resumen:', {
-            total: createClientDtos.length,
-            success: results.length,
-            failed: errors.length,
-          });
-        },
+      this.logger.log(
+        `Importación de clientes: ${results.length} de ${createClientDtos.length} (rechazados ${errors.length})`,
       );
-
       return {
         imported: results,
         errors,
@@ -350,7 +327,6 @@ export class ClientsService {
         total: createClientDtos.length,
       };
     } catch (error) {
-      console.error('Error en transacción:', error);
       this.handleError(error, {
         entity: 'los clientes',
         operation: 'batch',
@@ -358,6 +334,45 @@ export class ClientsService {
       });
     }
   }
+
+  /** Una fila del import; `null` si el teléfono ya existe en el negocio. */
+  private async importRow(
+    manager: EntityManager,
+    dto: CreateClientDto,
+    tenantId: string,
+  ): Promise<Client | null> {
+    const existing = await manager.findOne(Client, {
+      where: { phone: dto.phone, ownerId: tenantId },
+    });
+    if (existing) return null;
+
+    const client = manager.create(Client, {
+      ...dto,
+      ownerId: tenantId,
+      isFromDevice: true,
+      showNotes: dto.showNotes ?? false,
+      notes: dto.notes ?? null,
+      birthday: dto.birthday ? parseBusinessDate(dto.birthday) : null,
+      isActive: true,
+    });
+    return manager.save(Client, client);
+  }
+
+  /** Motivo apto para el usuario (sin el texto interno de Postgres). */
+  private importRowError(
+    error: QueryFailedError,
+    dto: CreateClientDto,
+  ): string {
+    const code = (
+      error as QueryFailedError & { driverError?: { code?: string } }
+    ).driverError?.code;
+    if (code === '23505') {
+      return `Cliente con teléfono ${dto.phone} ya existe`;
+    }
+    this.logger.warn(`Fila de importación rechazada por la BD (${code})`);
+    return 'No se pudo importar este cliente';
+  }
+
   async updateClientImage(
     clientId: string,
     imageUrl: string,

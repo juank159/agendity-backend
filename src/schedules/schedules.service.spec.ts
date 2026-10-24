@@ -17,7 +17,23 @@ function build(overlap: object | null = null) {
     findOne: jest.fn(),
   };
   const users = { findTenantMember: jest.fn(async (id: string) => ({ id })) };
-  return { service: new SchedulesService(repo as any, users as any), repo, qb };
+  // Transacción simulada (2.17): el repositorio del manager es el mismo mock.
+  const manager = {
+    getRepository: jest.fn(() => repo),
+    query: jest.fn(async () => [{}]),
+  };
+  const dataSource = {
+    transaction: jest.fn(async (work: (m: any) => Promise<any>) =>
+      work(manager),
+    ),
+  };
+  return {
+    service: new SchedulesService(repo as any, users as any, dataSource as any),
+    repo,
+    qb,
+    manager,
+    dataSource,
+  };
 }
 
 const dto = {
@@ -65,5 +81,69 @@ describe('SchedulesService (2.08)', () => {
     await expect(
       service.update('h1', { end_time: '12:30' }, TENANT),
     ).resolves.toMatchObject({ end_time: '12:30' });
+  });
+});
+
+describe('SchedulesService (escrituras en transacción, 2.17)', () => {
+  const item = {
+    day_of_week: 1,
+    start_time: '09:00',
+    end_time: '12:00',
+    is_available: true,
+  };
+
+  it('createBatch: lock del profesional y todo el lote en UNA transacción', async () => {
+    const { service, repo, manager, dataSource } = build();
+    await service.createBatch(PRO, [item, { ...item, day_of_week: 2 }], TENANT);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    const [lockSql, lockParams] = manager.query.mock.calls[0] as any[];
+    expect(lockSql).toContain('pg_advisory_xact_lock');
+    expect(lockParams).toEqual([`schedule:${PRO}`]);
+    expect(manager.query.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.save.mock.invocationCallOrder[0],
+    );
+    expect(repo.save).toHaveBeenCalledTimes(2);
+  });
+
+  it('createBatch: un solape a mitad hace fallar la transacción entera (el error sale de ella)', async () => {
+    const { service, repo, qb, dataSource } = build();
+    qb.getOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'x' });
+    const run = service.createBatch(PRO, [item, { ...item }], TENANT);
+    await expect(run).rejects.toBeInstanceOf(BadRequestException);
+    // El primero se guardó DENTRO de la transacción que falla → rollback.
+    expect(repo.save).toHaveBeenCalledTimes(1);
+    await expect(
+      dataSource.transaction.mock.results[0].value,
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('createBatch: un rango inválido en cualquier elemento → 400 sin abrir la transacción', async () => {
+    const { service, dataSource, repo } = build();
+    await expect(
+      service.createBatch(
+        PRO,
+        [item, { ...item, start_time: '13:00', end_time: '12:00' }],
+        TENANT,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('create y update también comprueban solapes y guardan bajo el mismo lock', async () => {
+    const { service, manager, repo } = build();
+    await service.create(dto, TENANT);
+    repo.findOne.mockResolvedValue({
+      id: 'h1',
+      user: { id: PRO },
+      day_of_week: 7,
+      start_time: '10:00:00',
+      end_time: '12:00:00',
+    });
+    await service.update('h1', { end_time: '13:00' }, TENANT);
+    const locks = manager.query.mock.calls.filter(([sql]: any[]) =>
+      String(sql).includes('pg_advisory_xact_lock'),
+    );
+    expect(locks).toHaveLength(2);
   });
 });

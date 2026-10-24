@@ -6,7 +6,12 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  FindOptionsWhere,
+  Repository,
+} from 'typeorm';
 import { Schedule } from './entities/schedule.entity';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
@@ -25,7 +30,36 @@ export class SchedulesService {
     private readonly scheduleRepository: Repository<Schedule>,
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
+    private readonly dataSource: DataSource,
   ) {}
+
+  /**
+   * Escrituras de horarios de un profesional (2.17): en UNA transacción y con
+   * lock por profesional (`pg_advisory_xact_lock('schedule:'+id)`), así la
+   * comprobación de solapes y el guardado no se cruzan con otra escritura del
+   * mismo profesional, y un lote falla entero o se guarda entero.
+   */
+  private inProfessionalSchedule<T>(
+    professionalId: string,
+    work: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`schedule:${professionalId}`],
+      );
+      return work(manager);
+    });
+  }
+
+  /** Inicio < fin (en minutos: la BD devuelve `HH:mm:ss`, el DTO `HH:mm`). */
+  private assertTimeRange(startTime: string, endTime: string): void {
+    if (timeToMinutes(startTime) >= timeToMinutes(endTime)) {
+      throw new BadRequestException(
+        'La hora de inicio debe ser anterior a la hora de fin',
+      );
+    }
+  }
 
   /** `where` de horarios del negocio (OR: del Owner o de sus empleados). */
   private tenantWhere(
@@ -44,27 +78,20 @@ export class SchedulesService {
     // El profesional debe ser del negocio (si no, 404)
     const user = await this.usersService.findTenantMember(user_id, tenantId);
 
-    // Validar que start_time sea anterior a end_time
-    if (scheduleData.start_time >= scheduleData.end_time) {
-      throw new BadRequestException(
-        'La hora de inicio debe ser anterior a la hora de fin',
+    this.assertTimeRange(scheduleData.start_time, scheduleData.end_time);
+
+    return this.inProfessionalSchedule(user_id, async (manager) => {
+      // Verificar que no exista solapamiento de horarios
+      await this.validateScheduleOverlap(
+        manager,
+        user_id,
+        scheduleData.day_of_week,
+        scheduleData.start_time,
+        scheduleData.end_time,
       );
-    }
-
-    // Verificar que no exista solapamiento de horarios
-    await this.validateScheduleOverlap(
-      user_id,
-      scheduleData.day_of_week,
-      scheduleData.start_time,
-      scheduleData.end_time,
-    );
-
-    const schedule = this.scheduleRepository.create({
-      ...scheduleData,
-      user,
+      const repository = manager.getRepository(Schedule);
+      return repository.save(repository.create({ ...scheduleData, user }));
     });
-
-    return await this.scheduleRepository.save(schedule);
   }
 
   async createBatch(
@@ -75,33 +102,31 @@ export class SchedulesService {
     // El profesional debe ser del negocio (si no, 404)
     const user = await this.usersService.findTenantMember(userId, tenantId);
 
-    const createdSchedules: Schedule[] = [];
+    // Todos los rangos se validan antes de abrir la transacción.
+    schedules.forEach((item) =>
+      this.assertTimeRange(item.start_time, item.end_time),
+    );
 
-    for (const scheduleData of schedules) {
-      // Validar que start_time sea anterior a end_time
-      if (scheduleData.start_time >= scheduleData.end_time) {
-        throw new BadRequestException(
-          'La hora de inicio debe ser anterior a la hora de fin',
+    // Todo o nada (2.17): antes un fallo a mitad dejaba guardados los
+    // anteriores. Cada horario se compara con la BD y con los ya guardados del
+    // mismo lote (misma transacción).
+    return this.inProfessionalSchedule(userId, async (manager) => {
+      const repository = manager.getRepository(Schedule);
+      const created: Schedule[] = [];
+      for (const scheduleData of schedules) {
+        await this.validateScheduleOverlap(
+          manager,
+          userId,
+          scheduleData.day_of_week,
+          scheduleData.start_time,
+          scheduleData.end_time,
+        );
+        created.push(
+          await repository.save(repository.create({ ...scheduleData, user })),
         );
       }
-
-      // Verificar que no exista solapamiento de horarios
-      await this.validateScheduleOverlap(
-        userId,
-        scheduleData.day_of_week,
-        scheduleData.start_time,
-        scheduleData.end_time,
-      );
-
-      const schedule = this.scheduleRepository.create({
-        ...scheduleData,
-        user,
-      });
-
-      createdSchedules.push(await this.scheduleRepository.save(schedule));
-    }
-
-    return createdSchedules;
+      return created;
+    });
   }
 
   /** Todos los horarios de todos los negocios: solo para Admin. */
@@ -148,32 +173,31 @@ export class SchedulesService {
       );
     }
 
-    if (
+    const slotChanged = !!(
       user_id ||
       scheduleData.day_of_week ||
       scheduleData.start_time ||
       scheduleData.end_time
-    ) {
-      // Rango resultante (aunque llegue solo una de las dos horas). La BD
-      // devuelve `HH:mm:ss`: se compara en minutos, no como texto.
-      const startTime = scheduleData.start_time || schedule.start_time;
-      const endTime = scheduleData.end_time || schedule.end_time;
-      if (timeToMinutes(startTime) >= timeToMinutes(endTime)) {
-        throw new BadRequestException(
-          'La hora de inicio debe ser anterior a la hora de fin',
+    );
+    // Rango resultante (aunque llegue solo una de las dos horas).
+    const startTime = scheduleData.start_time || schedule.start_time;
+    const endTime = scheduleData.end_time || schedule.end_time;
+    if (slotChanged) this.assertTimeRange(startTime, endTime);
+
+    return this.inProfessionalSchedule(schedule.user.id, async (manager) => {
+      if (slotChanged) {
+        await this.validateScheduleOverlap(
+          manager,
+          schedule.user.id,
+          scheduleData.day_of_week || schedule.day_of_week,
+          startTime,
+          endTime,
+          id,
         );
       }
-      await this.validateScheduleOverlap(
-        schedule.user.id,
-        scheduleData.day_of_week || schedule.day_of_week,
-        startTime,
-        endTime,
-        id,
-      );
-    }
-
-    Object.assign(schedule, scheduleData);
-    return await this.scheduleRepository.save(schedule);
+      Object.assign(schedule, scheduleData);
+      return manager.getRepository(Schedule).save(schedule);
+    });
   }
 
   async remove(id: string, tenantId: string): Promise<void> {
@@ -182,13 +206,15 @@ export class SchedulesService {
   }
 
   private async validateScheduleOverlap(
+    manager: EntityManager,
     userId: string,
     dayOfWeek: number,
     startTime: string,
     endTime: string,
     excludeId?: string,
   ): Promise<void> {
-    const queryBuilder = this.scheduleRepository
+    const queryBuilder = manager
+      .getRepository(Schedule)
       .createQueryBuilder('schedule')
       .where('schedule.user.id = :userId', { userId })
       .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })

@@ -3,9 +3,11 @@ import {
   NotFoundException,
   BadRequestException,
   InternalServerErrorException,
+  HttpException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { Review } from './entities/review.entity';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { UpdateReviewDto } from './dto/update-review.dto';
@@ -18,22 +20,27 @@ import { AppointmentStatus } from 'src/common/enums/status.enum';
 
 @Injectable()
 export class ReviewsService {
+  private readonly logger = new Logger(ReviewsService.name);
   constructor(
     @InjectRepository(Review)
     private readonly reviewRepository: Repository<Review>,
     private readonly appointmentsService: AppointmentsService,
   ) {}
 
+  /**
+   * 2.17: toda `HttpException` (incluidas `ConflictException` y
+   * `BusinessException`) y todo error de BD (`QueryFailedError`) salen tal
+   * cual al filtro global (22P02 → 400, 23505/23503 → 409); antes solo
+   * pasaban 400 y 404 y el resto acababa en 500. Lo demás → 500 sin detalles.
+   */
   private handleError(error: any, options: ErrorHandlerOptions): never {
-    console.error(`Error al ${options.operation} ${options.entity}:`, error);
-
-    if (
-      error instanceof BadRequestException ||
-      error instanceof NotFoundException
-    ) {
+    if (error instanceof HttpException || error instanceof QueryFailedError) {
       throw error;
     }
-
+    this.logger.error(
+      `Error al ${options.operation} ${options.entity}: ${error?.message}`,
+      error?.stack,
+    );
     throw new InternalServerErrorException(
       `Error al ${options.operation} ${options.entity}. Por favor, intenta nuevamente.`,
     );

@@ -4,12 +4,14 @@ import {
   ConflictException,
   BadRequestException,
   InternalServerErrorException,
+  HttpException,
+  Logger,
 } from '@nestjs/common';
 import { Category } from './entities/category.entity';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Not, Repository } from 'typeorm';
+import { Not, QueryFailedError, Repository } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 
 import { FindOptionsCategory } from './interfaces/find-options.interface';
@@ -17,6 +19,7 @@ import { ErrorHandlerOptions } from 'src/common/interfaces';
 
 @Injectable()
 export class CategoriesService {
+  private readonly logger = new Logger(CategoriesService.name);
   private readonly DEFAULT_RELATIONS = ['services'];
   private readonly UUID_REGEX =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -28,23 +31,28 @@ export class CategoriesService {
     private readonly userRepository: Repository<User>,
   ) {}
 
+  /**
+   * 2.17: toda `HttpException` (incluida `BusinessException`) y todo error de
+   * BD (`QueryFailedError`) salen tal cual al filtro global (22P02 → 400,
+   * 23503 → 409…); antes solo pasaban tres clases y el resto acababa en 500.
+   * El 23505 conserva su texto propio. Lo demás → 500 sin detalles.
+   */
   private handleError(error: any, options: ErrorHandlerOptions): never {
-    console.error(`Error al ${options.operation} ${options.entity}:`, error);
+    if (error instanceof HttpException) throw error;
 
-    if (
-      error instanceof ConflictException ||
-      error instanceof NotFoundException ||
-      error instanceof BadRequestException
-    ) {
+    if (error instanceof QueryFailedError) {
+      if ((error as QueryFailedError & { code?: string }).code === '23505') {
+        throw new ConflictException(
+          `Ya existe ${options.entity} con ${options.detail}`,
+        );
+      }
       throw error;
     }
 
-    if (error?.code === '23505') {
-      throw new ConflictException(
-        `Ya existe ${options.entity} con ${options.detail}`,
-      );
-    }
-
+    this.logger.error(
+      `Error al ${options.operation} ${options.entity}: ${error?.message}`,
+      error?.stack,
+    );
     throw new InternalServerErrorException(
       `Error al ${options.operation} ${options.entity}. Por favor, intenta nuevamente.`,
     );
