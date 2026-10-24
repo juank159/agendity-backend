@@ -97,10 +97,12 @@ export class AuthService {
         );
   }
 
-  private async validateUserExists(email: string, phone: string) {
-    const existingUser = await this.userRepository.findOne({
-      where: [{ email }, { phone }],
-    });
+  private async validateUserExists(email: string, phone?: string | null) {
+    // TypeORM ignora `phone: undefined` (la condición casaría con cualquier
+    // usuario): el teléfono solo se compara si viene.
+    const where: FindOptionsWhere<User>[] = [{ email }];
+    if (phone) where.push({ phone });
+    const existingUser = await this.userRepository.findOne({ where });
 
     if (existingUser) {
       throw this.duplicateUserError(existingUser.email === email, email, phone);
@@ -823,7 +825,7 @@ export class AuthService {
           email,
           name: firstName || '',
           lastname: lastName || '',
-          phone: '', // Este campo podría ser solicitado después
+          phone: null, // Sin teléfono: único pero opcional (2.10)
           password: await this.hashPassword(uuid()), // Generar contraseña aleatoria
           is_google_account: true,
           is_email_verified: true, // Los emails de Google ya están verificados
@@ -843,9 +845,14 @@ export class AuthService {
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      // TODO(2.10): `phone: ''` único hace fallar el alta desde el 2.º usuario nuevo.
-      throw new UnauthorizedException(
-        'Error en autenticación con Google: ' + error.message,
+      // El detalle (p. ej. un error de BD) va al log, nunca a la respuesta.
+      this.logger.error(
+        `Error en el login con Google: ${error?.message}`,
+        error?.stack,
+      );
+      throw new BusinessException(
+        ErrorCode.UNAUTHORIZED,
+        'Error en autenticación con Google',
       );
     }
   }
@@ -864,7 +871,7 @@ export class AuthService {
           is_email_verified: false,
           name: 'Pendiente',
           lastname: 'Pendiente',
-          phone: 'Pendiente',
+          phone: null,
           // Nunca en texto plano: contraseña aleatoria con hash hasta el registro real.
           password: await this.hashPassword(uuid()),
           is_google_account: false,

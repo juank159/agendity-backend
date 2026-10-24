@@ -1,4 +1,4 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, Matches } from 'class-validator';
 
 /**
  * Datos de perfil editables por `PATCH /users/:id`.
@@ -14,8 +14,12 @@ export class UpdateUserDto {
   @IsString()
   lastname?: string;
 
+  // Misma regla que el registro (10 dígitos). Antes aceptaba '' y chocaba con el índice único (2.10).
   @IsOptional()
   @IsString()
+  @Matches(/^[0-9]{10}$/, {
+    message: 'El teléfono debe contener exactamente 10 dígitos numéricos',
+  })
   phone?: string;
 
   @IsOptional()

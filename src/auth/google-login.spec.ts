@@ -142,3 +142,104 @@ describe('AuthService.googleLogin: audiencia obligatoria', () => {
     expect(userRepository.findOne).not.toHaveBeenCalled();
   });
 });
+
+describe('AuthService.googleLogin: usuarios nuevos sin teléfono (2.10)', () => {
+  beforeAll(() => Logger.overrideLogger(false));
+  afterEach(() => jest.restoreAllMocks());
+
+  function buildNew() {
+    const config = {
+      get: (key: string) => (key === 'GOOGLE_CLIENT_ID' ? WEB : undefined),
+    } as unknown as ConfigService;
+    const saved: any[] = [];
+    const userRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((data: any) => ({ ...data })),
+      save: jest.fn(async (user: any) => {
+        saved.push({ ...user });
+        return user;
+      }),
+    };
+    const roleRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'r1', name: 'Owner' }),
+    };
+    const jwtService = {
+      sign: jest.fn((payload: any) => `agendity-jwt-for-${payload.id}`),
+    };
+    const service = new AuthService(
+      userRepository as any,
+      roleRepository as any,
+      jwtService as any,
+      config,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { service, userRepository, jwtService, saved };
+  }
+
+  it('dos altas seguidas guardan phone = null (nunca "") y responden el JWT propio', async () => {
+    const verify = jest.spyOn(OAuth2Client.prototype as any, 'verifyIdToken');
+    const { service, saved, jwtService } = buildNew();
+
+    const results = [];
+    for (const email of ['uno@gmail.com', 'dos@gmail.com']) {
+      verify.mockResolvedValueOnce(
+        ticket({ email, email_verified: true, name: 'Ana María Pérez' }),
+      );
+      results.push(await service.googleLogin('google-id-token'));
+    }
+
+    expect(saved).toHaveLength(2);
+    for (const user of saved) {
+      expect(user.phone).toBeNull();
+      expect(user.is_google_account).toBe(true);
+      expect(user.is_email_verified).toBe(true);
+      expect(user.tenant_id).toBe(user.id);
+    }
+    expect(saved[0].name).toBe('Ana');
+    expect(saved[0].lastname).toBe('María Pérez');
+    // El token es el de Agendity (firmado por el backend), no el de Google.
+    for (const [i, result] of results.entries()) {
+      expect(result.token).toBe(`agendity-jwt-for-${saved[i].id}`);
+      expect(result.token).not.toBe('google-id-token');
+      expect(result.user).toMatchObject({
+        email: saved[i].email,
+        phone: null,
+        roles: [{ name: 'Owner' }],
+      });
+      expect(result.user).not.toHaveProperty('password');
+    }
+    expect(jwtService.sign.mock.calls[0][0]).toMatchObject({
+      roles: ['Owner'],
+      tenantId: saved[0].id,
+      tenant_id: saved[0].id,
+    });
+  });
+
+  it('un error inesperado responde 401 genérico sin el detalle interno', async () => {
+    jest
+      .spyOn(OAuth2Client.prototype as any, 'verifyIdToken')
+      .mockResolvedValue(
+        ticket({ email: 'tres@gmail.com', email_verified: true, name: 'X' }),
+      );
+    const { service, userRepository } = buildNew();
+    userRepository.save.mockRejectedValue(
+      new Error('duplicate key value violates unique constraint "UQ_secreto"'),
+    );
+
+    const error = await service.googleLogin('t').catch((e) => e);
+    expect(error).toBeInstanceOf(BusinessException);
+    expect(error.getStatus()).toBe(HttpStatus.UNAUTHORIZED);
+    expect(error.getResponse()).toEqual(
+      expect.objectContaining({
+        code: ErrorCode.UNAUTHORIZED,
+        message: 'Error en autenticación con Google',
+      }),
+    );
+    expect(JSON.stringify(error.getResponse())).not.toContain('UQ_secreto');
+  });
+});

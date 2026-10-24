@@ -73,12 +73,17 @@ export class User {
   })
   email: string;
 
+  /**
+   * Único, pero opcional (2.10): las cuentas de Google y el registro temporal
+   * de `verify/request-code` no tienen teléfono → `null` (nunca `''`: el índice
+   * único admite varios NULL pero no dos cadenas vacías).
+   */
   @Column({
     type: 'varchar',
     unique: true,
-    nullable: false,
+    nullable: true,
   })
-  phone: string;
+  phone: string | null;
 
   @Column({
     type: 'varchar',
