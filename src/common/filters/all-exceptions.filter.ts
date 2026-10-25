@@ -183,6 +183,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
           message:
             'No se puede realizar la operación porque hay registros relacionados',
         };
+      case '23502':
+        // NOT NULL: falta un dato obligatorio. Sin el nombre de la columna (2.20).
+        return {
+          statusCode: HttpStatus.BAD_REQUEST,
+          code: ErrorCode.VALIDATION_ERROR,
+          message: 'Falta un dato obligatorio',
+        };
       case '22P02':
         return {
           statusCode: HttpStatus.BAD_REQUEST,

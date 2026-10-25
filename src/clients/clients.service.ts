@@ -107,8 +107,9 @@ export class ClientsService {
     );
 
     if (existingClient) {
+      // Sin email (null) nunca es un duplicado de email (2.20).
       const duplicatedField =
-        existingClient.email === dto.email ? 'email' : 'teléfono';
+        dto.email && existingClient.email === dto.email ? 'email' : 'teléfono';
       const duplicatedValue =
         duplicatedField === 'email' ? dto.email : dto.phone;
       throw new ConflictException(

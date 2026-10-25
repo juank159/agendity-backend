@@ -1,4 +1,5 @@
 // src/clients/dto/create-client.dto.ts
+import { Transform } from 'class-transformer';
 import {
   IsEmail,
   IsString,
@@ -15,9 +16,14 @@ export class CreateClientDto {
   @IsString()
   lastname: string;
 
+  // Opcional (2.20). La app envía '' cuando el cliente no tiene email: '' (o
+  // solo espacios) se guarda como null en vez de fallar la validación.
+  @Transform(({ value }) =>
+    typeof value === 'string' && value.trim() === '' ? null : value,
+  )
   @IsEmail()
   @IsOptional()
-  email?: string;
+  email?: string | null;
 
   @IsString()
   @Matches(/^\+?[\d\s-]+$/, {

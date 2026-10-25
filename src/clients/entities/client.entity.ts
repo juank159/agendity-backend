@@ -27,8 +27,9 @@ export class Client {
   @Column('text')
   lastname: string;
 
-  @Column('text')
-  email: string;
+  // Opcional (2.20): muchos contactos del teléfono no tienen email.
+  @Column('text', { nullable: true })
+  email: string | null;
 
   @Column('text')
   phone: string;

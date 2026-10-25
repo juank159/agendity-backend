@@ -204,7 +204,6 @@ describeWritable(
           clients: phones.map((phone, i) => ({
             name: `Import217 ${i}`,
             lastname: 'Prueba',
-            // `clients.email` es NOT NULL aunque el DTO lo declare opcional.
             email: `import217.${stamp}.${i}@example.com`,
             phone,
           })),

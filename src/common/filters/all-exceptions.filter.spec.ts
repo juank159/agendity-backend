@@ -127,4 +127,18 @@ describe('AllExceptionsFilter (formato §3)', () => {
     );
     expect(filter.toBody(dbError('XX000')).code).toBe('INTERNAL_ERROR');
   });
+
+  it('TypeORM: NOT NULL (23502) → 400 VALIDATION_ERROR sin el nombre de la columna (2.20)', () => {
+    const error = Object.assign(dbError('23502'), {
+      column: 'email',
+      detail: 'Failing row contains (secreto)',
+    });
+    const body = filter.toBody(error);
+    expect(body).toEqual({
+      statusCode: HttpStatus.BAD_REQUEST,
+      code: 'VALIDATION_ERROR',
+      message: 'Falta un dato obligatorio',
+    });
+    expect(JSON.stringify(body)).not.toMatch(/email|secreto/);
+  });
 });
