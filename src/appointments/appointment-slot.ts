@@ -1,4 +1,6 @@
 import { AppointmentStatus } from 'src/common/enums/status.enum';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode } from 'src/common/constants/error-codes';
 import {
   businessMinutesOfDay,
   businessTimeZone,
@@ -135,6 +137,45 @@ export function intervalsOverlap(a: SlotInterval, b: SlotInterval): boolean {
   );
 }
 
+/**
+ * Regla del usuario (2.21): solo se agenda a futuro. ÚNICA comprobación de
+ * "hora pasada", compartida por crear, mover y `available-slots`. Un inicio
+ * es pasado si es anterior a `now` (instantes: la zona del negocio no cambia
+ * el resultado). Empezar justo ahora está permitido.
+ */
+export function startsInPast(start: Date, now: Date = new Date()): boolean {
+  return start.getTime() < now.getTime();
+}
+
+export const APPOINTMENT_IN_PAST_MESSAGE =
+  'No se pueden agendar citas en una fecha u hora que ya pasó';
+
+/** Crear o mover a una hora pasada → `APPOINTMENT_IN_PAST` (400). */
+export function assertStartNotInPast(
+  start: Date,
+  now: Date = new Date(),
+): void {
+  if (startsInPast(start, now)) {
+    throw new BusinessException(
+      ErrorCode.APPOINTMENT_IN_PAST,
+      APPOINTMENT_IN_PAST_MESSAGE,
+    );
+  }
+}
+
+/**
+ * ¿La cita cambia de fecha? (`next` distinto de `previous`, comparando
+ * instantes). Mover reinicia el recordatorio manual (2.18) y exige una hora
+ * futura (2.21); reenviar la misma fecha (la app la manda siempre al editar)
+ * no cuenta como mover.
+ */
+export function isRescheduled(
+  previous: Date | string,
+  next: Date | undefined,
+): boolean {
+  return !!next && next.getTime() !== new Date(previous).getTime();
+}
+
 /** Pasos permitidos (minutos) para listar huecos libres (2.14). */
 export const SLOT_STEP_MINUTES = { default: 15, min: 5, max: 240 } as const;
 
@@ -143,7 +184,7 @@ export const SLOT_STEP_MINUTES = { default: 15, min: 5, max: 240 } as const;
  * `AppointmentsService.assertSlotAvailable`, aplicada a cada candidato.
  * - Candidatos: desde las 00:00 del día del negocio (`dayStart`) cada
  *   `stepMinutes`, mientras empiecen antes de `nextDayStart`.
- * - Libre = cabe en el horario (`fitsSchedule`, sin filas = sin restricción) y
+ * - Libre = no ha pasado (`now`, 2.21), cabe en el horario (`fitsSchedule`, sin filas = sin restricción) y
  *   no se cruza con ningún intervalo ocupado (`busy`: bloqueos y citas que no
  *   están `CANCELLED`, ya filtrados por quien los carga).
  * Pura: quien llama carga horarios y ocupación de [dayStart, nextDayStart +
@@ -157,6 +198,8 @@ export function freeSlotStarts(options: {
   schedules: ScheduleWindow[];
   busy: SlotInterval[];
   timeZone?: string;
+  /** Inicios anteriores a `now` no se ofrecen (2.21, `startsInPast`). */
+  now?: Date;
 }): Date[] {
   const { dayStart, nextDayStart, durationMinutes, stepMinutes } = options;
   const timeZone = options.timeZone ?? businessTimeZone();
@@ -172,6 +215,7 @@ export function freeSlotStarts(options: {
       end: new Date(t + durationMinutes * 60_000),
     };
     if (
+      !(options.now && startsInPast(slot.start, options.now)) &&
       fitsSchedule(slot.start, slot.end, options.schedules, timeZone) &&
       !options.busy.some((busy) => intervalsOverlap(slot, busy))
     ) {

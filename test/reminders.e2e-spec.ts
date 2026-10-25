@@ -28,7 +28,12 @@ import {
   findDevOwnerAndEmployee,
   signToken,
 } from './utils/dev-fixtures';
-import { assertWritableDatabase, describeWritable } from './utils/writable-db';
+import {
+  assertWritableDatabase,
+  describeWritable,
+  firstFreeWeek,
+  futureMonday,
+} from './utils/writable-db';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const STRANGER_ID = '55555555-5555-4555-8555-555555555555';
@@ -440,9 +445,27 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
       expect(res.status).toBe(200);
       expect((await reminderOf()).reminder_sent).toBe(true);
     };
-    const newDate = new Date(T + 6 * 60 * MINUTE); // hueco libre del Owner
-
+    const [{ date: originalDate }] = await ds.query(
+      'SELECT date FROM appointments WHERE id = $1',
+      [id],
+    );
     await markSent();
+
+    // 2.21: a otra hora PASADA no se puede mover (y no toca el recordatorio).
+    const toPast = await http
+      .patch(`/api/appointments/${id}`)
+      .set(auth(ownerToken))
+      .send({ date: new Date(T + 6 * 60 * MINUTE).toISOString() });
+    expect([toPast.status, toPast.body.code]).toEqual([
+      400,
+      'APPOINTMENT_IN_PAST',
+    ]);
+    expect((await reminderOf()).reminder_sent).toBe(true);
+
+    // A futuro sí: semana libre de la copia, lunes 10:00 Bogotá.
+    const newDate = new Date(
+      futureMonday(await firstFreeWeek(ds)) + 15 * 60 * MINUTE,
+    );
     const moved = await http
       .patch(`/api/appointments/${id}`)
       .set(auth(ownerToken))
@@ -470,6 +493,12 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
     expect(sameInstant.status).toBe(200);
     expect(moved.body.date).not.toBe(newDate.toISOString());
     expect((await reminderOf()).reminder_sent).toBe(true);
+
+    // Vuelve a 1990 (por SQL: la API ya no mueve al pasado) para el resto del spec.
+    await ds.query('UPDATE appointments SET date = $2 WHERE id = $1', [
+      id,
+      originalDate,
+    ]);
   });
 
   it('las filas de prueba quedan en 1990 (no afectan a otros specs)', async () => {

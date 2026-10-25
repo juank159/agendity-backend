@@ -25,13 +25,12 @@ import {
   assertWritableDatabase,
   describeWritable,
   resetTrialQuota,
+  firstFreeWeek,
+  futureMonday,
 } from './utils/writable-db';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const ADMIN_ID = '44444444-4444-4444-8444-444444444444';
-/** Lunes 2010-01-04 00:00 UTC (las citas de otros specs van desde 2000). */
-const BASE_MONDAY = Date.UTC(2010, 0, 4);
-const WEEK_MS = 7 * 24 * 3_600_000;
 
 describe('Bugs menores 2.08 (e2e, solo lectura)', () => {
   let app: INestApplication;
@@ -145,7 +144,7 @@ describe('Bugs menores 2.08 (e2e, solo lectura)', () => {
     const base = {
       client_id: client?.id ?? owner.id,
       professional_id: owner.id,
-      date: '2000-01-03T10:00:00',
+      date: '2100-01-04T10:00:00',
     };
     for (const service_ids of [[], [sid, sid]]) {
       const created = await http
@@ -225,14 +224,9 @@ describeWritable(
         .getRepository(Service)
         .findOneOrFail({ where: { ownerId: owner.id, isActive: true } });
       await resetTrialQuota(ds, owner.id, { limit: 1000 });
-      // Semanas propias desde el lunes 2010-01-04, después de la última cita o
-      // bloqueo de la copia (no chocan con corridas anteriores).
-      const [{ last }] = await ds.query(
-        `SELECT GREATEST((SELECT max(date) FROM appointments),
-                         (SELECT max(end_datetime) FROM time_block)) AS last`,
-      );
-      const elapsed = last ? new Date(last).getTime() - BASE_MONDAY : -1;
-      week = elapsed < 0 ? 0 : Math.floor(elapsed / WEEK_MS) + 1;
+      // Semanas propias a futuro (2.21), después de la última cita o bloqueo
+      // de la copia (no chocan con corridas anteriores). `nextMonday` suma 1.
+      week = (await firstFreeWeek(ds)) - 1;
     });
 
     afterAll(async () => {
@@ -240,10 +234,10 @@ describeWritable(
       await close?.();
     });
 
-    /** Lunes 10:00 de Bogotá de una semana nueva (en el pasado: sin recordatorios). */
+    /** Lunes 10:00 de Bogotá de una semana nueva (a futuro, 2.21). */
     function nextMonday(hour = 10): Date {
       week += 1;
-      return new Date(BASE_MONDAY + week * WEEK_MS + (hour + 5) * 3_600_000);
+      return new Date(futureMonday(week) + (hour + 5) * 3_600_000);
     }
     const plus = (d: Date, min: number) => new Date(d.getTime() + min * 60_000);
 

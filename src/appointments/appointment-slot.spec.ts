@@ -6,8 +6,11 @@ import {
   blocksSlot,
   DEFAULT_SERVICE_DURATION_MINUTES,
   fitsSchedule,
+  assertStartNotInPast,
   freeSlotStarts,
   intervalsOverlap,
+  isRescheduled,
+  startsInPast,
   isoWeekday,
   ScheduleWindow,
   timeToMinutes,
@@ -218,5 +221,51 @@ describe('freeSlotStarts (huecos libres de un día, 2.14)', () => {
     expect(
       intervalsOverlap(a, { start: monday('09:30'), end: monday('09:30') }),
     ).toBe(true);
+  });
+});
+
+describe('solo a futuro (2.21)', () => {
+  const now = new Date('2099-01-05T10:07:00-05:00');
+
+  it('startsInPast: antes de ahora sí; justo ahora o después, no', () => {
+    expect(startsInPast(new Date('2099-01-05T10:06:59-05:00'), now)).toBe(true);
+    expect(startsInPast(now, now)).toBe(false);
+    expect(startsInPast(new Date('2099-01-05T10:30:00-05:00'), now)).toBe(
+      false,
+    );
+  });
+
+  it('assertStartNotInPast → APPOINTMENT_IN_PAST (400)', () => {
+    let error: any;
+    try {
+      assertStartNotInPast(new Date('2099-01-05T09:00:00-05:00'), now);
+    } catch (e) {
+      error = e;
+    }
+    expect(error.getStatus()).toBe(400);
+    expect(error.getResponse()).toMatchObject({ code: 'APPOINTMENT_IN_PAST' });
+    expect(() => assertStartNotInPast(now, now)).not.toThrow();
+  });
+
+  it('freeSlotStarts con now: oculta las horas pasadas de hoy (misma regla)', () => {
+    const slots = freeSlotStarts({
+      dayStart: monday('00:00'),
+      nextDayStart: new Date('2099-01-06T00:00:00-05:00'),
+      durationMinutes: 30,
+      stepMinutes: 30,
+      schedules: weekdays('09:00', '12:00'),
+      busy: [],
+      now,
+    });
+    expect(slots).toEqual([monday('10:30'), monday('11:00'), monday('11:30')]);
+    expect(slots.some((s) => startsInPast(s, now))).toBe(false);
+  });
+
+  it('isRescheduled: misma fecha (otro formato u objeto) no es mover', () => {
+    const date = new Date('2099-01-05T10:00:00-05:00');
+    expect(isRescheduled(date, new Date(date.getTime()))).toBe(false);
+    expect(isRescheduled('2099-01-05T15:00:00.000Z', date)).toBe(false);
+    expect(isRescheduled(date, undefined)).toBe(false);
+    expect(isRescheduled(date, new Date(date.getTime() + 60_000))).toBe(true);
   });
 });

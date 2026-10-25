@@ -79,3 +79,33 @@ describe('CategoriesService.handleError (2.17)', () => {
     expect(error.message).not.toContain('interno');
   });
 });
+
+describe('CategoriesService.remove: con servicios no se borra (2.21)', () => {
+  it('con servicios → CATEGORY_HAS_SERVICES 409 y no borra', async () => {
+    const { service, categories } = build();
+    const qb = categories.createQueryBuilder();
+    qb.getOne.mockResolvedValueOnce({
+      id: CATEGORY,
+      ownerId: TENANT,
+      services: [{ id: 's1', isActive: false }],
+    });
+    const error = await service.remove(CATEGORY, TENANT).catch((e) => e);
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.CATEGORY_HAS_SERVICES,
+    });
+    expect(categories.remove).not.toHaveBeenCalled();
+  });
+
+  it('sin servicios → se borra', async () => {
+    const { service, categories } = build();
+    const qb = categories.createQueryBuilder();
+    qb.getOne.mockResolvedValueOnce({
+      id: CATEGORY,
+      ownerId: TENANT,
+      services: [],
+    });
+    await service.remove(CATEGORY, TENANT);
+    expect(categories.remove).toHaveBeenCalledTimes(1);
+  });
+});

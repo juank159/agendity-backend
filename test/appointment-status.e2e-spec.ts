@@ -26,6 +26,8 @@ import {
   assertWritableDatabase,
   describeWritable,
   resetTrialQuota,
+  firstFreeWeek,
+  futureMonday,
 } from './utils/writable-db';
 
 const MISSING_ID = '33333333-3333-4333-8333-333333333333';
@@ -180,22 +182,19 @@ describeWritable(
       // cupo de trial de sobra y fechas después de todas las citas ya creadas
       // en la copia (cada corrida crea las suyas, sin cruzarse con las previas).
       await resetTrialQuota(ds, owner.id, { limit: 1000 });
-      const [{ n }] = await ds.query(
-        'SELECT count(*)::int AS n FROM appointments',
-      );
-      day = n;
+      day = await firstFreeWeek(ds);
     });
 
     afterAll(async () => close?.());
 
-    /** Cita en el PASADO (sin recordatorios), cada una en un día distinto. */
+    /** Cita a FUTURO (2.21), cada una en una semana distinta. */
     async function newAppointment(
       token = ownerToken,
       professionalId = owner.id,
     ): Promise<{ id: string; total: number }> {
       day += 1;
-      // Lunes 2000-01-03 + 1 semana por cita (10:00 Bogotá): horario L-V 9-18 y en el pasado.
-      const date = new Date(Date.UTC(2000, 0, 3 + 7 * day, 15, 0, 0));
+      // Lunes de una semana libre a las 10:00 Bogotá (horario L-V 9-18).
+      const date = new Date(futureMonday(day) + 15 * 3_600_000);
       const res = await http
         .post('/api/appointments')
         .set(auth(token))
@@ -442,7 +441,7 @@ describeWritable(
           client_id: client.id,
           professional_id: owner.id,
           service_ids: [service.id],
-          date: '2020-01-06T10:00:00-05:00',
+          date: '2100-01-04T10:00:00-05:00', // el 403 sale antes de mirar la fecha
         });
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('FORBIDDEN');

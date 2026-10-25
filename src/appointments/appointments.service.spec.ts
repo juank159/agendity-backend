@@ -897,3 +897,83 @@ describe('AppointmentsService.findAvailableSlots (huecos libres, 2.14)', () => {
     expect(manager.query).not.toHaveBeenCalled();
   });
 });
+
+describe('AppointmentsService: solo a futuro (2.21)', () => {
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  it('crear en una hora pasada → APPOINTMENT_IN_PAST 400 sin leer ni consumir el cupo', async () => {
+    const { service, subscriptions, users, txRepo } = build();
+    const error = await service
+      .create({ ...dto, date: '2000-01-03T10:00:00' }, TENANT)
+      .catch((e) => e);
+    expect(error.getStatus()).toBe(400);
+    expect(error.getResponse()).toMatchObject({ code: 'APPOINTMENT_IN_PAST' });
+    expect(users.findTenantMember).not.toHaveBeenCalled();
+    expect(subscriptions.consumeAppointmentQuota).not.toHaveBeenCalled();
+    expect(txRepo.save).not.toHaveBeenCalled();
+  });
+
+  describe('mover', () => {
+    const past = new Date('2000-01-03T10:00:00-05:00');
+    const setup = () => {
+      const ctx = build();
+      ctx.repo.findOne.mockResolvedValue({
+        id: 'cita',
+        ownerId: TENANT,
+        professionalId: EMPLOYEE,
+        date: past,
+        status: AppointmentStatus.PENDING,
+        services: [{ duration: 30 }],
+      });
+      return ctx;
+    };
+
+    it('a otra hora pasada → APPOINTMENT_IN_PAST y no guarda', async () => {
+      const { service, txRepo } = setup();
+      const error = await service
+        .update('cita', { date: '2000-01-04T10:00:00-05:00' } as any, TENANT)
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'APPOINTMENT_IN_PAST',
+      });
+      expect(txRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('reenviar la MISMA fecha pasada (lo que hace la app al editar) sí guarda', async () => {
+      const { service, txRepo } = setup();
+      await service.update(
+        'cita',
+        { date: past.toISOString(), notes: 'nota' } as any,
+        TENANT,
+      );
+      expect(txRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ notes: 'nota' }),
+      );
+    });
+
+    it('una cita pasada se puede mover a una hora futura', async () => {
+      const { service, txRepo } = setup();
+      await service.update(
+        'cita',
+        { date: '2030-01-07T10:00:00-05:00' } as any,
+        TENANT,
+      );
+      expect(txRepo.save).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('available-slots de un día pasado → [] (las horas pasadas no se ofrecen)', async () => {
+    const { service } = build();
+    const slots = await service.findAvailableSlots(
+      {
+        professionalId: EMPLOYEE,
+        day: new Date('2000-01-03T00:00:00-05:00'),
+        serviceIds: [SERVICE],
+        stepMinutes: 30,
+      },
+      TENANT,
+    );
+    expect(slots).toEqual([]);
+  });
+});

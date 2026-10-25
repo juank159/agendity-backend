@@ -31,6 +31,8 @@ import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.s
 import { AppointmentScope, toAppointmentScope } from './appointment-scope';
 import { manualReminderResetOnReschedule } from './appointment-reminder.service';
 import {
+  assertStartNotInPast,
+  isRescheduled,
   appointmentDurationMinutes,
   appointmentDurationSql,
   appointmentEnd,
@@ -126,6 +128,9 @@ export class AppointmentsService {
         professional_id,
         'Solo puedes agendar citas para ti',
       );
+      // Regla del usuario (2.21): solo a futuro, antes de leer o consumir nada.
+      const start = parseBusinessDate(date);
+      assertStartNotInPast(start);
 
       const [client, professional] = await Promise.all([
         this.clientsService.findOne(client_id, tenantId),
@@ -142,7 +147,7 @@ export class AppointmentsService {
       const appointmentToSave = {
         ownerId: tenantId,
         professionalId: professional_id,
-        date: parseBusinessDate(date),
+        date: start,
         total_price: services.reduce(
           (sum, service) => sum + Number(service.price),
           0,
@@ -277,6 +282,7 @@ export class AppointmentsService {
       stepMinutes,
       schedules,
       busy: [...blocks, ...appointments],
+      now: new Date(), // horas ya pasadas de hoy, fuera (2.21)
     });
   }
 
@@ -576,6 +582,13 @@ export class AppointmentsService {
                 updateAppointmentDto.cancellation_reason ?? null;
             }
           }
+        }
+
+        // Mover a OTRA fecha exige una hora futura (2.21). Reenviar la misma
+        // fecha (la app la manda siempre al editar) no cuenta: una cita pasada
+        // se puede seguir editando, completando y pagando.
+        if (isRescheduled(current.date, updateData.date)) {
+          assertStartNotInPast(updateData.date);
         }
 
         // Una cita CANCELLED no ocupa hueco: moverla no se comprueba. Como

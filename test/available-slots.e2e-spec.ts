@@ -13,6 +13,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
 import { Client } from '../src/clients/entities/client.entity';
 import { Service } from '../src/services/entities/service.entity';
+import { toBusinessIso } from '../src/common/utils/date.util';
 import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
@@ -20,6 +21,8 @@ import {
   assertWritableDatabase,
   describeWritable,
   resetTrialQuota,
+  firstFreeWeek,
+  futureMonday,
 } from './utils/writable-db';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -171,6 +174,37 @@ describe('Huecos libres 2.14 (e2e, solo lectura)', () => {
     expect([res.status, res.body.code]).toEqual([400, 'VALIDATION_ERROR']);
   });
 
+  it('hoy: no ofrece horas pasadas (2.21)', async () => {
+    const now = Date.now();
+    const today = toBusinessIso(new Date(now)).slice(0, 10);
+    const res = await http
+      .get(
+        `/api/appointments/available-slots?professional_id=${owner.id}` +
+          `&date=${today}&service_ids=${service.id}&step=30`,
+      )
+      .set(auth(ownerToken));
+    expect(res.status).toBe(200);
+    expect(
+      res.body.filter((iso: string) => new Date(iso).getTime() < now),
+    ).toEqual([]);
+  });
+
+  it('crear una cita en una hora pasada → 400 APPOINTMENT_IN_PAST sin escribir (2.21)', async () => {
+    const client = await ds
+      .getRepository(Client)
+      .findOneOrFail({ where: { ownerId: owner.id } });
+    const res = await http
+      .post('/api/appointments')
+      .set(auth(ownerToken))
+      .send({
+        client_id: client.id,
+        professional_id: employee.id,
+        service_ids: [service.id],
+        date: new Date(Date.now() - 3_600_000).toISOString(),
+      });
+    expect([res.status, res.body.code]).toEqual([400, 'APPOINTMENT_IN_PAST']);
+  });
+
   it('servicio inexistente o de otro negocio → 404', async () => {
     const res = await http
       .get(
@@ -197,8 +231,6 @@ describeWritable(
     let service: Service;
     let day: string;
 
-    const BASE_MONDAY = Date.UTC(2010, 0, 4);
-    const WEEK_MS = 7 * 24 * 3_600_000;
     const at = (time: string) => `${day}T${time}:00-05:00`;
     const listSlots = async (token = ownerToken) => {
       const res = await http
@@ -236,15 +268,10 @@ describeWritable(
         .findOneOrFail({ where: { ownerId: owner.id } });
       service = await devService30(ds, owner.id);
       await resetTrialQuota(ds, owner.id, { limit: 1000 });
-      // Un lunes propio después de la última cita o bloqueo de la copia
-      // (pasado: sin recordatorios; no choca con corridas anteriores).
-      const [{ last }] = await ds.query(
-        `SELECT GREATEST((SELECT max(date) FROM appointments),
-                         (SELECT max(end_datetime) FROM time_block)) AS last`,
-      );
-      const elapsed = last ? new Date(last).getTime() - BASE_MONDAY : -1;
-      const week = elapsed < 0 ? 1 : Math.floor(elapsed / WEEK_MS) + 1;
-      day = new Date(BASE_MONDAY + week * WEEK_MS).toISOString().slice(0, 10);
+      // Un lunes propio a futuro (2.21), después de la última cita o bloqueo
+      // de la copia (no choca con corridas anteriores).
+      const week = await firstFreeWeek(ds);
+      day = new Date(futureMonday(week)).toISOString().slice(0, 10);
     });
 
     afterAll(async () => {

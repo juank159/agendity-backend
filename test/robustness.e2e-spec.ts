@@ -26,12 +26,14 @@ describe('Robustez 2.17 (e2e, solo lectura)', () => {
   let close: () => Promise<void>;
   let employee: User;
   let ownerToken: string;
+  let ownerId: string;
   const writes: string[] = [];
 
   beforeAll(async () => {
     ({ app, http, close } = await createE2EApp());
     const dev = await findDevOwnerAndEmployee(app.get(DataSource));
     employee = dev.employee as User;
+    ownerId = dev.owner.id;
     ownerToken = signToken(dev.owner, ['Owner']);
   });
 
@@ -105,6 +107,19 @@ describe('Robustez 2.17 (e2e, solo lectura)', () => {
       .set(auth(ownerToken))
       .send(body);
     expect(res.status).toBe(400);
+  });
+
+  it('DELETE de una categoría con servicios → 409 CATEGORY_HAS_SERVICES sin borrar (2.21)', async () => {
+    const [category] = await app.get(DataSource).query(
+      `SELECT c.id FROM categories c JOIN services s ON s.category_id = c.id
+          WHERE c.owner_id = $1 LIMIT 1`,
+      [ownerId],
+    );
+    if (!category) return; // la BD de dev no tiene categorías con servicios
+    const res = await http
+      .delete(`/api/categories/${category.id}`)
+      .set(auth(ownerToken));
+    expect([res.status, res.body.code]).toEqual([409, 'CATEGORY_HAS_SERVICES']);
   });
 
   it('POST /schedules/batch/no-uuid → 400', async () => {
@@ -220,7 +235,7 @@ describeWritable(
       expect(saved).toHaveLength(2); // antes: 0 (ROLLBACK de todo)
     });
 
-    it('borrar una categoría con servicios en uso → 409 CONFLICT (antes 500) y sigue existiendo', async () => {
+    it('borrar una categoría con servicios → 409 CATEGORY_HAS_SERVICES (2.21; antes 500) y sigue existiendo', async () => {
       const [category] = await ds.query(
         `SELECT c.id FROM categories c
            JOIN services s ON s.category_id = c.id
@@ -233,7 +248,10 @@ describeWritable(
       const res = await http
         .delete(`/api/categories/${category.id}`)
         .set(auth(ownerToken));
-      expect([res.status, res.body.code]).toEqual([409, 'CONFLICT']);
+      expect([res.status, res.body.code]).toEqual([
+        409,
+        'CATEGORY_HAS_SERVICES',
+      ]);
       const [still] = await ds.query('SELECT 1 FROM categories WHERE id = $1', [
         category.id,
       ]);

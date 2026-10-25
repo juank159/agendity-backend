@@ -16,6 +16,8 @@ import { User } from 'src/users/entities/user.entity';
 
 import { FindOptionsCategory } from './interfaces/find-options.interface';
 import { ErrorHandlerOptions } from 'src/common/interfaces';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode } from 'src/common/constants/error-codes';
 
 @Injectable()
 export class CategoriesService {
@@ -227,9 +229,20 @@ export class CategoriesService {
     }
   }
 
+  /**
+   * Regla del usuario (2.21): una categoría con servicios (activos o no) no se
+   * borra → `CATEGORY_HAS_SERVICES` 409. La FK `services.category_id` es
+   * RESTRICT: si en paralelo entra un servicio, la BD también lo impide (23503).
+   */
   async remove(id: string, tenantId: string): Promise<void> {
     try {
       const category = await this.findCategory({ id, ownerId: tenantId });
+      if (category.services?.length) {
+        throw new BusinessException(
+          ErrorCode.CATEGORY_HAS_SERVICES,
+          'No se puede eliminar la categoría porque tiene servicios. Muévelos a otra categoría o elimínalos primero.',
+        );
+      }
       await this.categoryRepository.remove(category);
     } catch (error) {
       this.handleError(error, {

@@ -141,8 +141,9 @@ export class Service {
     description: 'Información completa de la categoría',
     type: () => Category,
   })
+  // RESTRICT (2.21): borrar una categoría nunca borra sus servicios.
   @ManyToOne(() => Category, (category) => category.services, {
-    onDelete: 'CASCADE',
+    onDelete: 'RESTRICT',
   })
   @JoinColumn({ name: 'category_id' })
   category: Category;

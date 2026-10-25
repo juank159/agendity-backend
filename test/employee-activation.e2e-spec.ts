@@ -21,6 +21,8 @@ import {
   assertWritableDatabase,
   describeWritable,
   resetTrialQuota,
+  firstFreeWeek,
+  futureMonday,
 } from './utils/writable-db';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -47,7 +49,7 @@ describeWritable(
     const employeeRow = () =>
       ds.getRepository(User).findOneOrFail({ where: { id: employeeId } });
 
-    /** Cita en el PASADO (sin recordatorios), un lunes distinto cada vez, 10:00. */
+    /** Cita a FUTURO (2.21), un lunes distinto cada vez, 10:00 Bogotá. */
     const book = () => {
       day += 1;
       return http
@@ -57,7 +59,7 @@ describeWritable(
           client_id: client.id,
           professional_id: employeeId,
           service_ids: [service.id],
-          date: new Date(Date.UTC(2000, 0, 3 + 7 * day, 15)).toISOString(),
+          date: new Date(futureMonday(day) + 15 * 3_600_000).toISOString(),
         });
     };
 
@@ -79,10 +81,7 @@ describeWritable(
         .getRepository(Service)
         .findOneOrFail({ where: { ownerId: owner.id } });
       await resetTrialQuota(ds, owner.id, { limit: 1000 });
-      const [{ n }] = await ds.query(
-        'SELECT count(*)::int AS n FROM appointments',
-      );
-      day = n;
+      day = await firstFreeWeek(ds);
     });
 
     // El empleado creado se queda (activo) en la copia: `findDevOwnerAndEmployee`

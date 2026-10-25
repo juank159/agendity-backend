@@ -8,6 +8,7 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { whatsappLink } from '../whatsapp/whatsapp-phone';
 import { AppointmentStatus } from '../common/enums/status.enum';
 import { AppointmentScope } from './appointment-scope';
+import { isRescheduled } from './appointment-slot';
 import {
   formatBusinessLongDate,
   formatBusinessTime,
@@ -97,9 +98,7 @@ export function manualReminderResetOnReschedule(
   previousDate: Date,
   nextDate: Date | undefined,
 ): Pick<Appointment, 'reminderSent' | 'reminderSentAt'> | null {
-  if (!nextDate || nextDate.getTime() === new Date(previousDate).getTime()) {
-    return null;
-  }
+  if (!isRescheduled(previousDate, nextDate)) return null;
   return { reminderSent: false, reminderSentAt: null };
 }
 

@@ -46,3 +46,27 @@ export async function resetTrialQuota(
     [tenantId, used, limit],
   );
 }
+
+/**
+ * Fechas de citas y bloqueos de prueba (2.21: solo se agenda a futuro).
+ * Base: lunes 2100-01-04 00:00 UTC. Cada spec pide su primera semana libre
+ * (después de toda cita o bloqueo de la copia) y avanza desde ahí: no choca
+ * con corridas anteriores ni con otros specs (`--runInBand`).
+ */
+export const FUTURE_BASE_MONDAY = Date.UTC(2100, 0, 4);
+export const WEEK_MS = 7 * 24 * 3_600_000;
+
+/** Índice (≥ 1) de la primera semana sin citas ni bloqueos desde la base. */
+export async function firstFreeWeek(ds: DataSource): Promise<number> {
+  const [{ last }] = await ds.query(
+    `SELECT GREATEST((SELECT max(date) FROM appointments),
+                     (SELECT max(end_datetime) FROM time_block)) AS last`,
+  );
+  const elapsed = last ? new Date(last).getTime() - FUTURE_BASE_MONDAY : -1;
+  return elapsed < 0 ? 1 : Math.floor(elapsed / WEEK_MS) + 1;
+}
+
+/** Lunes 00:00 UTC de la semana `week` (Bogotá: domingo 19:00). */
+export function futureMonday(week: number): number {
+  return FUTURE_BASE_MONDAY + week * WEEK_MS;
+}
