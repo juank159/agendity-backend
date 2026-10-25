@@ -166,20 +166,95 @@ describe('AuthService.googleLogin: usuarios nuevos sin teléfono (2.10)', () => 
     const jwtService = {
       sign: jest.fn((payload: any) => `agendity-jwt-for-${payload.id}`),
     };
+    // Alta de Owner (2.19): usuario y trial en la misma transacción.
+    const manager = { getRepository: jest.fn(() => userRepository) };
+    const dataSource = {
+      transaction: jest.fn(async (work: (m: any) => Promise<any>) =>
+        work(manager),
+      ),
+    };
+    const subscriptions = {
+      createTrialSubscription: jest.fn(async (tenantId: string) => ({
+        tenant_id: tenantId,
+      })),
+    };
     const service = new AuthService(
       userRepository as any,
       roleRepository as any,
       jwtService as any,
       config,
       {} as any,
-      {} as any,
-      {} as any,
+      subscriptions as any,
+      dataSource as any,
       {} as any,
       {} as any,
       {} as any,
     );
-    return { service, userRepository, jwtService, saved };
+    return {
+      service,
+      userRepository,
+      jwtService,
+      saved,
+      subscriptions,
+      manager,
+      dataSource,
+    };
   }
+
+  it('un alta por Google crea la suscripción trial del negocio, en la transacción del usuario (2.19)', async () => {
+    jest
+      .spyOn(OAuth2Client.prototype as any, 'verifyIdToken')
+      .mockResolvedValue(
+        ticket({ email: 'nuevo@gmail.com', email_verified: true, name: 'N' }),
+      );
+    const { service, saved, subscriptions, manager, dataSource } = buildNew();
+    await service.googleLogin('t');
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(subscriptions.createTrialSubscription).toHaveBeenCalledWith(
+      saved[0].id,
+      manager,
+    );
+  });
+
+  it('el registro por email usa la MISMA alta (Owner + trial en una transacción)', async () => {
+    const { service, saved, subscriptions, manager, userRepository } =
+      buildNew();
+    userRepository.findOne.mockResolvedValue(null);
+    const result = await service.createOwner({
+      name: 'Ana',
+      lastname: 'Pérez',
+      email: 'ana@example.com',
+      phone: '3001234567',
+      password: 'Secreta1!',
+      roles: ['Admin'],
+    } as any);
+    expect(subscriptions.createTrialSubscription).toHaveBeenCalledWith(
+      saved[0].id,
+      manager,
+    );
+    expect(saved[0].tenant_id).toBe(saved[0].id);
+    expect(saved[0].roles).toEqual([{ id: 'r1', name: 'Owner' }]); // ignora los del DTO
+    expect(saved[0].password).toMatch(/^\$2/);
+    expect(result.user.roles).toEqual([{ name: 'Owner' }]);
+  });
+
+  it('si falla el trial, el error sale de la transacción (no queda Owner sin suscripción)', async () => {
+    jest
+      .spyOn(OAuth2Client.prototype as any, 'verifyIdToken')
+      .mockResolvedValue(
+        ticket({ email: 'otro@gmail.com', email_verified: true, name: 'N' }),
+      );
+    const { service, subscriptions, dataSource } = buildNew();
+    subscriptions.createTrialSubscription.mockRejectedValueOnce(
+      new Error('fallo de BD'),
+    );
+    await expect(service.googleLogin('t')).rejects.toMatchObject({
+      code: ErrorCode.UNAUTHORIZED,
+    });
+    await expect(dataSource.transaction.mock.results[0].value).rejects.toThrow(
+      'fallo de BD',
+    );
+  });
 
   it('dos altas seguidas guardan phone = null (nunca "") y responden el JWT propio', async () => {
     const verify = jest.spyOn(OAuth2Client.prototype as any, 'verifyIdToken');
@@ -241,5 +316,33 @@ describe('AuthService.googleLogin: usuarios nuevos sin teléfono (2.10)', () => 
       }),
     );
     expect(JSON.stringify(error.getResponse())).not.toContain('UQ_secreto');
+  });
+});
+
+describe('AuthService.generateVerificationCode: sin registros temporales (2.19)', () => {
+  it('email desconocido → 404 y no crea ninguna fila (antes: usuario "Pendiente")', async () => {
+    const userRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn(),
+      save: jest.fn(),
+    };
+    const service = new AuthService(
+      userRepository as any,
+      {} as any,
+      {} as any,
+      { get: () => undefined } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const error = await service
+      .generateVerificationCode('nadie@example.com')
+      .catch((e) => e);
+    expect(error.getStatus()).toBe(HttpStatus.NOT_FOUND);
+    expect(userRepository.create).not.toHaveBeenCalled();
+    expect(userRepository.save).not.toHaveBeenCalled();
   });
 });

@@ -119,11 +119,9 @@ export class AuthController {
   @Public()
   @RateLimit(AUTH_RATE_LIMITS.requestCode)
   @Post('verify/request-code')
-  requestVerificationCode(
-    @Body('email') email: string,
-    @Body('isNewUser') isNewUser: boolean = false,
-  ) {
-    return this.authService.generateVerificationCode(email, isNewUser);
+  // `isNewUser` (lo sigue enviando la app) ya no cambia nada: nunca crea cuentas (2.19).
+  requestVerificationCode(@Body('email') email: string) {
+    return this.authService.generateVerificationCode(email);
   }
 
   @Public()

@@ -248,27 +248,37 @@ export class AuthService {
     };
   }
 
+  /**
+   * ÚNICA alta de un negocio (Owner), por email o por Google (2.19): el tenant
+   * es su propio id (2.01) y nace con su fila de suscripción trial, las dos en
+   * la misma transacción (sin Owner sin suscripción ni suscripción huérfana).
+   * `data` trae ya la contraseña con hash; el rol siempre es Owner (los
+   * `roles` que traiga el DTO se ignoran, como antes).
+   */
+  private async createOwnerAccount(
+    data: Omit<Partial<User>, 'roles'>,
+  ): Promise<User> {
+    const ownerRole = await this.getRole('Owner');
+    const id = uuid();
+    return this.dataSource.transaction(async (manager) => {
+      const users = manager.getRepository(User);
+      const owner = await users.save(
+        users.create({ ...data, id, tenant_id: id, roles: [ownerRole] }),
+      );
+      await this.subscriptionsService.createTrialSubscription(id, manager);
+      return owner;
+    });
+  }
+
   async createOwner(createAuthDto: CreateAuthDto) {
     try {
       await this.validateUserExists(createAuthDto.email, createAuthDto.phone);
 
-      const ownerRole = await this.getRole('Owner');
       const { password, ...userData } = createAuthDto;
-
-      // El tenant del Owner es su propio id (2.01).
-      const id = uuid();
-      const newUser = this.userRepository.create({
+      const newUser = await this.createOwnerAccount({
         ...userData,
-        id,
         password: await this.hashPassword(password),
-        roles: [ownerRole],
-        tenant_id: id,
       });
-
-      await this.userRepository.save(newUser);
-
-      // Crear suscripción de prueba para el nuevo tenant
-      await this.subscriptionsService.createTrialSubscription(id);
 
       return {
         user: this.transformUserResponse(newUser),
@@ -814,14 +824,12 @@ export class AuthService {
       if (user) {
         assertAccountCanLogin(user);
       } else {
-        // Si no existe, crear nuevo usuario
-        const ownerRole = await this.getRole('Owner');
-
-        // Extraer nombre y apellido del nombre completo
+        // Si no existe: alta de un negocio nuevo, igual que el registro por
+        // email (Owner + trial, 2.19). Nombre y apellido del nombre completo.
         const [firstName, ...lastNameParts] = (name ?? '').split(' ');
         const lastName = lastNameParts.join(' ');
 
-        user = this.userRepository.create({
+        user = await this.createOwnerAccount({
           email,
           name: firstName || '',
           lastname: lastName || '',
@@ -829,13 +837,7 @@ export class AuthService {
           password: await this.hashPassword(uuid()), // Generar contraseña aleatoria
           is_google_account: true,
           is_email_verified: true, // Los emails de Google ya están verificados
-          roles: [ownerRole],
         });
-        // El tenant del Owner es su propio id (2.01).
-        user.id = uuid();
-        user.tenant_id = user.id;
-
-        await this.userRepository.save(user);
       }
 
       // Generar token y retornar usuario
@@ -857,25 +859,19 @@ export class AuthService {
     }
   }
 
-  async generateVerificationCode(email: string, isNewUser: boolean = false) {
+  /**
+   * Envía un código de verificación a una cuenta que YA existe (2.19). Antes,
+   * con `isNewUser: true` y un email desconocido, creaba un registro temporal
+   * ('Pendiente', sin rol) que después bloqueaba `register/owner` con ese email
+   * (`DUPLICATE_EMAIL`) y dejaba a cualquiera reservar emails ajenos desde una
+   * ruta pública. La app nunca lo necesitó: registra primero y pide el código
+   * después. Email desconocido → 404 (como ya pasaba con `isNewUser: false`).
+   */
+  async generateVerificationCode(email: string) {
     try {
-      let user = await this.userRepository.findOne({ where: { email } });
-
+      const user = await this.userRepository.findOne({ where: { email } });
       if (!user) {
-        if (!isNewUser) {
-          throw new NotFoundException('Usuario no encontrado');
-        }
-        // Registro temporal hasta completar el alta.
-        user = this.userRepository.create({
-          email: email,
-          is_email_verified: false,
-          name: 'Pendiente',
-          lastname: 'Pendiente',
-          phone: null,
-          // Nunca en texto plano: contraseña aleatoria con hash hasta el registro real.
-          password: await this.hashPassword(uuid()),
-          is_google_account: false,
-        });
+        throw new NotFoundException('Usuario no encontrado');
       }
 
       const code = this.generateCode();

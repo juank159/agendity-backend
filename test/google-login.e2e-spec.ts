@@ -3,7 +3,8 @@
  *
  * - Bloque de solo lectura (corre siempre): escrituras de TypeORM bloqueadas.
  * - Bloque que escribe (solo con `E2E_WRITABLE_DB=<copia> DB_NAME=<copia>`):
- *   dos altas nuevas de Google y dos registros temporales sin teléfono.
+ *   dos altas nuevas de Google (con su trial, 2.19) y `request-code` sin
+ *   registros temporales (2.19).
  *
  * El ID token de Google se simula (`OAuth2Client.prototype.verifyIdToken`) y
  * el email no se envía (`EmailService.sendVerificationCode` mockeado).
@@ -175,20 +176,51 @@ describeWritable('Login con Google 2.10 (e2e, escribe en copia)', () => {
     ).toBe(1);
   });
 
-  it('dos registros temporales (verify/request-code con isNewUser) sin teléfono no chocan', async () => {
-    jest
+  it('request-code con isNewUser y un email desconocido: 404 y no crea fila; register/owner con ese email funciona (2.19)', async () => {
+    const send = jest
       .spyOn(app.get(EmailService), 'sendVerificationCode')
       .mockResolvedValue(true);
-    for (const email of pendingEmails) {
-      const res = await http
-        .post('/api/auth/verify/request-code')
-        .send({ email, isNewUser: true });
-      expect(res.status).toBe(201);
-    }
-    const rows = await ds.getRepository(User).find({
-      where: { email: In(pendingEmails) },
+    const [email] = pendingEmails;
+
+    const early = await http
+      .post('/api/auth/verify/request-code')
+      .send({ email, isNewUser: true });
+    expect(early.status).toBe(404);
+    expect(await ds.getRepository(User).count({ where: { email } })).toBe(0);
+    expect(send).not.toHaveBeenCalled();
+
+    // Flujo de la app: registrar y DESPUÉS pedir el código.
+    const phone = `3${Date.now().toString().slice(-9)}`;
+    const register = await http.post('/api/auth/register/owner').send({
+      name: 'Pendiente',
+      lastname: 'Prueba',
+      email,
+      phone,
+      password: 'Secreta1!',
     });
-    expect(rows).toHaveLength(2);
-    expect(rows.every((u) => u.phone === null)).toBe(true);
+    expect(register.status).toBe(201);
+    const code = await http
+      .post('/api/auth/verify/request-code')
+      .send({ email, isNewUser: true });
+    expect(code.status).toBe(201);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('el alta por Google crea la fila de suscripción trial como el registro por email (2.19)', async () => {
+    const rows = await ds.query(
+      `SELECT u.email, s.status, s.trial_appointments_used AS used,
+              s.trial_appointments_limit AS lim
+         FROM users u JOIN subscriptions s ON s.tenant_id = u.id
+        WHERE u.email = ANY($1) ORDER BY u.email`,
+      [[...googleEmails, pendingEmails[0]]],
+    );
+    expect(rows).toEqual(
+      [...googleEmails, pendingEmails[0]].sort().map((email) => ({
+        email,
+        status: 'trial',
+        used: 0,
+        lim: 20,
+      })),
+    );
   });
 });
