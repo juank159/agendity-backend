@@ -38,6 +38,10 @@ import {
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const STRANGER_ID = '55555555-5555-4555-8555-555555555555';
 const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
+/** Las filas de prueba viven en [1990, 1995): pasado lejano, fuera de otros specs. */
+const PAST_BASE = Date.UTC(1990, 0, 1, 15);
+const PAST_LIMIT = Date.UTC(1995, 0, 1);
 
 /** Ningún envío real: CallMeBot y axios fallan si se llaman. */
 function forbidRealSends(app: INestApplication, sent: string[]) {
@@ -151,7 +155,11 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
   let employeeToken: string;
   let client: Client;
   let service: Service;
-  /** Instante de las citas de prueba: 1990 + N días (cada corrida usa otro día). */
+  /**
+   * Instante de las citas de prueba: el día siguiente a la última fila de
+   * corridas anteriores (1 día por corrida; antes avanzaba 1 día por FILA y
+   * a las ~60 corridas sobre la misma copia salía de 1990).
+   */
   let T: number;
   const sent: string[] = [];
   const ids: Record<string, string> = {};
@@ -211,10 +219,17 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
       .getRepository(Service)
       .findOneOrFail({ where: { ownerId: owner.id }, order: { id: 'ASC' } });
 
-    const [{ n }] = await ds.query(
-      `SELECT count(*)::int AS n FROM appointments WHERE "date" < '1995-01-01'`,
+    const [{ last }] = await ds.query(
+      `SELECT max("date") AS last FROM appointments WHERE "date" < $1`,
+      [new Date(PAST_LIMIT)],
     );
-    T = Date.UTC(1990, 0, 1, 15) + n * 24 * 3_600_000;
+    T = last
+      ? PAST_BASE +
+        (Math.floor((new Date(last).getTime() - PAST_BASE) / DAY) + 1) * DAY
+      : PAST_BASE;
+    if (T + DAY >= PAST_LIMIT) {
+      throw new Error('La copia agotó los días de prueba de 1990-1994');
+    }
     const days3 = 3 * 24 * 60 * MINUTE;
 
     // Ahora = T − 50 min.
@@ -494,17 +509,17 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
     expect(moved.body.date).not.toBe(newDate.toISOString());
     expect((await reminderOf()).reminder_sent).toBe(true);
 
-    // Vuelve a 1990 (por SQL: la API ya no mueve al pasado) para el resto del spec.
+    // Vuelve a su fecha original (por SQL: la API ya no mueve al pasado) para el resto del spec.
     await ds.query('UPDATE appointments SET date = $2 WHERE id = $1', [
       id,
       originalDate,
     ]);
   });
 
-  it('las filas de prueba quedan en 1990 (no afectan a otros specs)', async () => {
+  it('las filas de prueba quedan antes de 1995 (no afectan a otros specs)', async () => {
     const rows = await ds.getRepository(Appointment).find({
       where: { id: In(Object.values(ids)) },
     });
-    expect(rows.every((r) => r.date.getUTCFullYear() === 1990)).toBe(true);
+    expect(rows.every((r) => r.date.getTime() < PAST_LIMIT)).toBe(true);
   });
 });
