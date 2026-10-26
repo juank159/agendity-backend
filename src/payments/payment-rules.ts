@@ -8,6 +8,10 @@ import { ErrorCode } from 'src/common/constants/error-codes';
  */
 
 /** Importe (number o string decimal de Postgres) → centavos enteros. */
+/** Texto de "la cita ya tiene un pago COMPLETED" (`PAYMENT_ALREADY_EXISTS`, 2.23). */
+export const PAYMENT_ALREADY_EXISTS_MESSAGE =
+  'Ya existe un pago completado para esta cita';
+
 export function toCents(value: number | string | null | undefined): number {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? Math.round(n * 100) : NaN;

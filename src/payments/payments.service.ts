@@ -20,6 +20,7 @@ import {
   assertPaymentAmount,
   fromCents,
   netAmountSql,
+  PAYMENT_ALREADY_EXISTS_MESSAGE,
 } from './payment-rules';
 import { statusAfterPayment } from '../appointments/appointment-status';
 import {
@@ -86,10 +87,11 @@ export class PaymentsService {
     });
 
     if (existingPayment) {
-      // Texto y HTTP 400 de siempre (D-11).
+      // 409 directo (2.23): la app (payments, 4.02) decide por `code` y por
+      // tipo de failure, no por el 400 ni por el texto, que se conserva.
       throw new BusinessException(
-        ErrorCode.BAD_REQUEST,
-        'Ya existe un pago completado para esta cita',
+        ErrorCode.PAYMENT_ALREADY_EXISTS,
+        PAYMENT_ALREADY_EXISTS_MESSAGE,
       );
     }
   }

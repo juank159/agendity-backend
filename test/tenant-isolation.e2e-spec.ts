@@ -21,7 +21,11 @@ import { Schedule } from '../src/schedules/entities/schedule.entity';
 import { UserService } from '../src/user-services/entities/user-service.entity';
 import { Notification } from '../src/notifications/entities/notification.entity';
 import { SubscriptionsService } from '../src/subscriptions/services/subscriptions.service';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import {
   allowFictitiousAccounts,
   findDevOwnerAndEmployee,
@@ -121,7 +125,7 @@ describe('Aislamiento por tenant (e2e)', () => {
     });
     userService = await ds.getRepository(UserService).findOne({ where: {} });
     notification = await ds.getRepository(Notification).findOne({ where: {} });
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => blockWrites());
 

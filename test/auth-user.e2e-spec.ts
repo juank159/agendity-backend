@@ -9,7 +9,11 @@
 import { JwtService } from '@nestjs/jwt';
 import { DataSource } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
 const UNKNOWN_ID = '00000000-0000-4000-8000-0000000002d1';
@@ -44,7 +48,7 @@ describe('AuthUser y tenant (e2e)', () => {
     ({ app, http, close } = await createE2EApp());
     ({ owner, employee } = await findDevOwnerAndEmployee(app.get(DataSource)));
     jwt = new JwtService({ secret: process.env.SECRET_KEY_JWT });
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     await close();

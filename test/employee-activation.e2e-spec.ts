@@ -14,7 +14,11 @@ import { Service } from '../src/services/entities/service.entity';
 import { Schedule } from '../src/schedules/entities/schedule.entity';
 import { UserService } from '../src/user-services/entities/user-service.entity';
 import { EmailService } from '../src/email/email.service';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
   WRITABLE_DB,
@@ -82,7 +86,7 @@ describeWritable(
         .findOneOrFail({ where: { ownerId: owner.id } });
       await resetTrialQuota(ds, owner.id, { limit: 1000 });
       day = await firstFreeWeek(ds);
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     // El empleado creado se queda (activo) en la copia: `findDevOwnerAndEmployee`
     // elige siempre el más antiguo. Borrarlo (soft-delete) dejaría horarios sin

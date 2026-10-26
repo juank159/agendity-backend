@@ -32,6 +32,14 @@ const { AppModule } = require('../../src/app.module');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { setupApp } = require('../../src/config/app.setup');
 
+/**
+ * Timeout de los `beforeAll` que arrancan la app (2.23). En reposo tarda
+ * ~150 ms, pero con la máquina cargada (al salir de hibernar, otros procesos)
+ * se midieron más de 5 s: el timeout por defecto de jest (5 s, pensado para
+ * cada test) hacía fallar todo el spec de forma intermitente.
+ */
+export const E2E_BOOT_TIMEOUT_MS = 60_000;
+
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
 export type E2EMethod = (typeof HTTP_METHODS)[number];
 export type E2EHttp = Record<E2EMethod, (path: string) => request.Test>;

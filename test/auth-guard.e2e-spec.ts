@@ -10,7 +10,11 @@ import { DiscoveryModule, DiscoveryService, Reflector } from '@nestjs/core';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { JwtService } from '@nestjs/jwt';
 import { IS_PUBLIC_KEY } from '../src/common/decorators/public.decorator';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { allowFictitiousAccounts, signToken } from './utils/dev-fixtures';
 import { AppointmentReminderService } from '../src/appointments/appointment-reminder.service';
 
@@ -76,7 +80,7 @@ describe('Guard JWT global (e2e)', () => {
     }
 
     jwt = new JwtService({ secret: process.env.SECRET_KEY_JWT });
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     await close?.();

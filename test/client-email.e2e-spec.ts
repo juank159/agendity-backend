@@ -6,7 +6,11 @@
 import { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
   WRITABLE_DB,
@@ -34,7 +38,7 @@ describeWritable(
       await assertWritableDatabase(ds);
       ({ owner } = await findDevOwnerAndEmployee(ds));
       ownerToken = signToken(owner, ['Owner']);
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     afterAll(async () => close?.());
 

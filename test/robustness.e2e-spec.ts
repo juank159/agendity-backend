@@ -10,7 +10,11 @@ import { INestApplication } from '@nestjs/common';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
 import { Client } from '../src/clients/entities/client.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
   WRITABLE_DB,
@@ -35,7 +39,7 @@ describe('Robustez 2.17 (e2e, solo lectura)', () => {
     employee = dev.employee as User;
     ownerId = dev.owner.id;
     ownerToken = signToken(dev.owner, ['Owner']);
-  });
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     writes.length = 0;
@@ -166,7 +170,7 @@ describeWritable(
         `DELETE FROM schedules WHERE "userId" = $1 AND day_of_week = 6`,
         [employee.id],
       );
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     afterAll(async () => {
       jest.restoreAllMocks();

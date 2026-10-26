@@ -14,7 +14,11 @@ import { SubscriptionPlan } from '../src/subscriptions/entities/subscription-pla
 import { SubscriptionsService } from '../src/subscriptions/services/subscriptions.service';
 import { WompiService } from '../src/subscriptions/services/wompi.service';
 import { toCents } from '../src/payments/payment-rules';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
   WRITABLE_DB,
@@ -67,7 +71,7 @@ describeWritable(
         subscription: { id: sub.id },
       });
       await resetTrialQuota(ds, owner.id, { used: 5 });
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     afterAll(async () => {
       jest.restoreAllMocks();

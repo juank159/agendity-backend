@@ -22,7 +22,11 @@ import { Notification } from '../src/notifications/entities/notification.entity'
 import { AppointmentReminderService } from '../src/appointments/appointment-reminder.service';
 import { WhatsappService } from '../src/whatsapp/whatsapp.service';
 import { AppointmentStatus } from '../src/common/enums/status.enum';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import {
   allowFictitiousAccounts,
   findDevOwnerAndEmployee,
@@ -70,7 +74,7 @@ describe('Recordatorios 2.09a (e2e, solo lectura)', () => {
     ({ app, http, close } = await createE2EApp());
     ({ employee } = await findDevOwnerAndEmployee(app.get(DataSource)));
     allowFictitiousAccounts(app, [STRANGER_ID]);
-  });
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     writes.length = 0;
@@ -266,7 +270,7 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
       bookedAt: T - days3,
       professional: employee,
     });
-  });
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     sent.length = 0;

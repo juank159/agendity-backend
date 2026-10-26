@@ -145,12 +145,13 @@ describe('PaymentsService.create (2.06)', () => {
     expect(txPayments.save).not.toHaveBeenCalled();
   });
 
-  it('ya hay un pago COMPLETED (leído dentro de la transacción): 400 con el texto de siempre', async () => {
+  it('ya hay un pago COMPLETED (leído dentro de la transacción): 409 PAYMENT_ALREADY_EXISTS con el texto de siempre', async () => {
     const { service, stored, txPayments } = build();
     stored.existing = { id: 'otro', status: PaymentStatus.COMPLETED };
     const res = await codeOf(service.create(dto(100), TENANT));
     expect(res).toMatchObject({
-      status: 400,
+      status: 409,
+      code: 'PAYMENT_ALREADY_EXISTS',
       message: 'Ya existe un pago completado para esta cita',
     });
     expect(txPayments.findOne).toHaveBeenCalledWith({

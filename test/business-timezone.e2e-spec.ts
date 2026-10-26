@@ -12,7 +12,11 @@ import {
   parseBusinessDate,
   toBusinessIso,
 } from '../src/common/utils/date.util';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
@@ -41,7 +45,7 @@ describe('Fechas y zona del negocio (e2e, 2.05)', () => {
     ds = app.get(DataSource);
     ({ owner } = await findDevOwnerAndEmployee(ds));
     ownerToken = signToken(owner, ['Owner']);
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     const blocked = () => {

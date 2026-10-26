@@ -18,7 +18,11 @@ import { Payment } from '../src/payments/entities/payment.entity';
 import { Appointment } from '../src/appointments/entities/appointment.entity';
 import { PaymentsService } from '../src/payments/payments.service';
 import { AppointmentsService } from '../src/appointments/appointments.service';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
 import {
@@ -49,7 +53,7 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
     );
     ownerToken = signToken(owner, ['Owner']);
     employeeToken = employee ? signToken(employee, ['Employee']) : null;
-  });
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     const block = () => {
@@ -183,7 +187,7 @@ describeWritable(
       // en la copia (cada corrida crea las suyas, sin cruzarse con las previas).
       await resetTrialQuota(ds, owner.id, { limit: 1000 });
       day = await firstFreeWeek(ds);
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     afterAll(async () => close?.());
 
@@ -228,9 +232,16 @@ describeWritable(
       expect((await pay(id, total + 1)).status).toBe(400); // supera el total
       expect((await pay(id, total)).status).toBe(201);
       expect(await statusOf(id)).toEqual(['CONFIRMED', 'COMPLETED']);
-      expect((await pay(id, total)).body.message).toBe(
+      const duplicate = await pay(id, total);
+      expect([
+        duplicate.status,
+        duplicate.body.code,
+        duplicate.body.message,
+      ]).toEqual([
+        409,
+        'PAYMENT_ALREADY_EXISTS',
         'Ya existe un pago completado para esta cita',
-      );
+      ]);
 
       const done = await http
         .patch(`/api/appointments/${id}/complete`)

@@ -14,7 +14,11 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { PostgresQueryRunner } from 'typeorm/driver/postgres/PostgresQueryRunner';
 import { Subscription } from '../src/subscriptions/entities/subscription.entity';
 import { User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import {
   allowFictitiousAccounts,
   findDevOwnerAndEmployee,
@@ -94,7 +98,7 @@ describe('Suscripciones por tenant (e2e, solo lectura)', () => {
       where: { tenant_id: owner.id },
       order: { created_at: 'DESC' },
     });
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     const blocked = () => {

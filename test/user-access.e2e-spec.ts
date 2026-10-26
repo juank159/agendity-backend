@@ -12,7 +12,11 @@
 import { INestApplication } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import {
   allowFictitiousAccounts,
   findDevOwnerAndEmployee,
@@ -51,7 +55,7 @@ describe('Acceso a usuarios por Owner (e2e)', () => {
       .getRepository(User)
       .exist({ where: { id: STRANGER_ID }, withDeleted: true });
     if (exists) throw new Error('STRANGER_ID existe en la BD: cambiarlo');
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   afterEach(() => {
     jest.restoreAllMocks();

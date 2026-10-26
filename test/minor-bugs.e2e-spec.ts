@@ -14,7 +14,11 @@ import { User } from '../src/users/entities/user.entity';
 import { Client } from '../src/clients/entities/client.entity';
 import { Service } from '../src/services/entities/service.entity';
 import { Notification } from '../src/notifications/entities/notification.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import {
   allowFictitiousAccounts,
   findDevOwnerAndEmployee,
@@ -55,7 +59,7 @@ describe('Bugs menores 2.08 (e2e, solo lectura)', () => {
     service = await ds
       .getRepository(Service)
       .findOne({ where: { ownerId: owner.id } });
-  });
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     writes.length = 0;
@@ -227,7 +231,7 @@ describeWritable(
       // Semanas propias a futuro (2.21), después de la última cita o bloqueo
       // de la copia (no chocan con corridas anteriores). `nextMonday` suma 1.
       week = (await firstFreeWeek(ds)) - 1;
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     afterAll(async () => {
       jest.restoreAllMocks();

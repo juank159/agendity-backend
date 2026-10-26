@@ -9,7 +9,11 @@ import { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { CategoriesService } from '../src/categories/categories.service';
 import { User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
 function expectContract(
@@ -36,7 +40,7 @@ describe('Formato de errores (e2e)', () => {
     ({ app, http, close } = await createE2EApp());
     ({ owner } = await findDevOwnerAndEmployee(app.get(DataSource)));
     ownerToken = signToken(owner, ['Owner']);
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   afterEach(() => jest.restoreAllMocks());
   afterAll(async () => close?.());

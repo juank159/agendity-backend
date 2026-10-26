@@ -13,7 +13,11 @@ import { AuthService } from '../src/auth/auth.service';
 import { MAX_CODE_ATTEMPTS } from '../src/auth/verification-attempts.service';
 import { AUTH_RATE_LIMITS } from '../src/common/decorators/rate-limit.decorator';
 import { User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 
 const FAKE_ID = '22222222-2222-4222-8222-222222222222';
 
@@ -26,7 +30,7 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
   beforeAll(async () => {
     ({ app, http, close } = await createE2EApp());
     authService = app.get(AuthService);
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   afterEach(() => {
     jest.restoreAllMocks();

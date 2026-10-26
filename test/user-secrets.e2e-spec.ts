@@ -11,7 +11,11 @@ import { instanceToPlain } from 'class-transformer';
 import { DataSource } from 'typeorm';
 import { Schedule } from '../src/schedules/entities/schedule.entity';
 import { USER_SECRET_FIELDS, User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
 const SECRET_KEYS = new Set<string>(USER_SECRET_FIELDS);
@@ -46,7 +50,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
     ds = app.get(DataSource);
     ({ owner, employee } = await findDevOwnerAndEmployee(ds));
     ownerToken = sign(owner, ['Owner']);
-  }, 60000);
+  }, E2E_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     jest.restoreAllMocks();

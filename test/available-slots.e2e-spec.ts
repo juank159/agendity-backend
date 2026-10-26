@@ -14,7 +14,11 @@ import { User } from '../src/users/entities/user.entity';
 import { Client } from '../src/clients/entities/client.entity';
 import { Service } from '../src/services/entities/service.entity';
 import { toBusinessIso } from '../src/common/utils/date.util';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
   WRITABLE_DB,
@@ -76,7 +80,7 @@ describe('Huecos libres 2.14 (e2e, solo lectura)', () => {
     ownerToken = signToken(owner, ['Owner']);
     employeeToken = signToken(employee, ['Employee']);
     service = await devService30(ds, owner.id);
-  });
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     writes.length = 0;
@@ -272,7 +276,7 @@ describeWritable(
       // de la copia (no choca con corridas anteriores).
       const week = await firstFreeWeek(ds);
       day = new Date(futureMonday(week)).toISOString().slice(0, 10);
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     afterAll(async () => {
       jest.restoreAllMocks();

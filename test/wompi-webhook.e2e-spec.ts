@@ -24,7 +24,11 @@ import { SubscriptionsService } from '../src/subscriptions/services/subscription
 import { WompiService } from '../src/subscriptions/services/wompi.service';
 import { toCents } from '../src/payments/payment-rules';
 import { User } from '../src/users/entities/user.entity';
-import { E2EHttp, createE2EApp } from './utils/create-e2e-app';
+import {
+  E2EHttp,
+  createE2EApp,
+  E2E_BOOT_TIMEOUT_MS,
+} from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 import {
   WRITABLE_DB,
@@ -104,7 +108,7 @@ describe('Webhook de Wompi (e2e, solo lectura)', () => {
 
   beforeAll(async () => {
     ({ http, close } = await startApp());
-  });
+  }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
     sql = [];
@@ -307,7 +311,7 @@ describeWritable(
         .delete({ subscription: { id: subscriptionId } });
       await resetTrialQuota(ds, owner.id, { used: 5 });
       await subscribe();
-    });
+    }, E2E_BOOT_TIMEOUT_MS);
 
     afterAll(async () => {
       jest.restoreAllMocks();
