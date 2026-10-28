@@ -49,6 +49,38 @@ function formatterFor(timeZone: string): Intl.DateTimeFormat {
   return formatter;
 }
 
+/**
+ * Nombre de zona IANA (`Area/Lugar` o `UTC`). Excluye offsets sueltos
+ * (`-05:00`, `+0300`): versiones nuevas de V8 los aceptan en `Intl`, pero no
+ * son zonas (no saben de horario de verano) (6.01).
+ */
+const TIME_ZONE_NAME = /^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+)*$/;
+
+/**
+ * Zona IANA válida para un negocio, con su nombre canónico de `Intl`
+ * (`america/bogota` → `America/Bogota`, `Etc/UTC` → `UTC`), o `null` si no es
+ * una zona IANA que conozca Node (6.01, D-15). Sin librerías: `Intl` de Node.
+ */
+export function normalizeTimeZone(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.trim();
+  if (name.length === 0 || name.length > 64 || !TIME_ZONE_NAME.test(name)) {
+    return null;
+  }
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: name,
+    }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+/** ¿Es `value` una zona IANA válida? (ver `normalizeTimeZone`). */
+export function isValidTimeZone(value: unknown): value is string {
+  return normalizeTimeZone(value) !== null;
+}
+
 /** Zona IANA del negocio: `BUSINESS_TIMEZONE` o `America/Bogota`. Lanza si no es válida. */
 export function businessTimeZone(): string {
   const timeZone =

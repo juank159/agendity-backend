@@ -20,7 +20,8 @@ import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import { EmailService } from 'src/email/email.service';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
-import { CreateAuthDto, LoginAuthDto } from './dto';
+import { TenantSettingsService } from 'src/settings/tenant-settings.service';
+import { LoginAuthDto, RegisterOwnerDto } from './dto';
 import { assertAccountCanLogin } from './account-access';
 import { JwtPayload, tenantOf } from './interfaces';
 import { VerificationAttemptsService } from './verification-attempts.service';
@@ -54,6 +55,7 @@ export class AuthService {
     private readonly subscriptionsService: SubscriptionsService,
     private readonly dataSource: DataSource,
     private readonly verificationAttempts: VerificationAttemptsService,
+    private readonly tenantSettings: TenantSettingsService,
   ) {
     // Solo se usa para verificar ID tokens: la audiencia va en cada llamada.
     this.googleClient = new OAuth2Client();
@@ -103,9 +105,13 @@ export class AuthService {
    * la misma transacción (sin Owner sin suscripción ni suscripción huérfana).
    * `data` trae ya la contraseña con hash; el rol siempre es Owner (los
    * `roles` que traiga el DTO se ignoran, como antes).
+   * 6.01: en la misma transacción, su configuración (`business_settings`) con
+   * la zona que manda la app (la del dispositivo) o, si no llega o no es
+   * válida, `BUSINESS_TIMEZONE`.
    */
   private async createOwnerAccount(
     data: Omit<Partial<User>, 'roles'>,
+    timezone?: unknown,
   ): Promise<User> {
     const ownerRole = await findRole(this.roleRepository, 'Owner');
     const id = uuid();
@@ -115,22 +121,24 @@ export class AuthService {
         users.create({ ...data, id, tenant_id: id, roles: [ownerRole] }),
       );
       await this.subscriptionsService.createTrialSubscription(id, manager);
+      await this.tenantSettings.createForTenant(id, timezone, manager);
       return owner;
     });
   }
 
-  async createOwner(createAuthDto: CreateAuthDto) {
+  async createOwner(createAuthDto: RegisterOwnerDto) {
     await assertEmailAndPhoneAvailable(
       this.userRepository,
       createAuthDto.email,
       createAuthDto.phone,
     );
 
-    const { password, ...userData } = createAuthDto;
-    const newUser = await this.createOwnerAccount({
-      ...userData,
-      password: await hashPassword(password),
-    });
+    // `timezone` va a la configuración del negocio, no a `users`.
+    const { password, timezone, ...userData } = createAuthDto;
+    const newUser = await this.createOwnerAccount(
+      { ...userData, password: await hashPassword(password) },
+      timezone,
+    );
 
     return {
       user: toUserResponse(newUser),
@@ -166,6 +174,8 @@ export class AuthService {
    * la app, sin secretos (parte de `toUserResponse`). `tenantId` = id del Owner
    * (Owner: el suyo; Employee: el de su owner). El acceso ya lo validó
    * `JwtStrategy` en esta misma petición; si la fila desapareció, 404.
+   * 6.01: incluye la zona horaria del negocio (`timezone`, cacheada) para que
+   * la app la tenga en la sesión sin otra petición.
    */
   async me(userId: string): Promise<SessionUser> {
     const user = await this.userRepository.findOne({
@@ -176,6 +186,7 @@ export class AuthService {
       throw new NotFoundException('Usuario no encontrado');
     }
     const data = toUserResponse(user);
+    const tenantId = tenantOf(user);
     return {
       id: data.id,
       name: data.name,
@@ -184,7 +195,8 @@ export class AuthService {
       phone: data.phone,
       image: data.image ?? null,
       roles: data.roles,
-      tenantId: tenantOf(user),
+      tenantId,
+      timezone: await this.tenantSettings.getTimezone(tenantId),
       isActive: data.isActive,
       is_email_verified: data.is_email_verified,
     };
@@ -222,7 +234,8 @@ export class AuthService {
     return payload;
   }
 
-  async googleLogin(token: string) {
+  /** `timezone` (opcional, 6.01): zona del dispositivo; solo se usa en un alta nueva. */
+  async googleLogin(token: string, timezone?: unknown) {
     const payload = await this.verifyGoogleToken(token);
     try {
       const { email, name } = payload;
@@ -242,15 +255,18 @@ export class AuthService {
         const [firstName, ...lastNameParts] = (name ?? '').split(' ');
         const lastName = lastNameParts.join(' ');
 
-        user = await this.createOwnerAccount({
-          email,
-          name: firstName || '',
-          lastname: lastName || '',
-          phone: null, // Sin teléfono: único pero opcional (2.10)
-          password: await hashPassword(uuid()), // Contraseña aleatoria
-          is_google_account: true,
-          is_email_verified: true, // Los emails de Google ya están verificados
-        });
+        user = await this.createOwnerAccount(
+          {
+            email,
+            name: firstName || '',
+            lastname: lastName || '',
+            phone: null, // Sin teléfono: único pero opcional (2.10)
+            password: await hashPassword(uuid()), // Contraseña aleatoria
+            is_google_account: true,
+            is_email_verified: true, // Los emails de Google ya están verificados
+          },
+          timezone,
+        );
       }
 
       return {
@@ -411,6 +427,8 @@ export interface SessionUser {
   image: string | null;
   roles: { name: string }[];
   tenantId: string;
+  /** Zona IANA del negocio (6.01). */
+  timezone: string;
   isActive: boolean;
   is_email_verified: boolean;
 }

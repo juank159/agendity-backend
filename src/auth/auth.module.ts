@@ -11,6 +11,7 @@ import { JwtStrategy } from './jwt/jwt.strategy';
 import { RolesModule } from 'src/roles/roles.module';
 import { EmailModule } from 'src/email/email.module';
 import { SubscriptionsModule } from 'src/subscriptions/subscriptions.module';
+import { SettingsModule } from 'src/settings/settings.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { SubscriptionsModule } from 'src/subscriptions/subscriptions.module';
     ConfigModule,
     TypeOrmModule.forFeature([User]),
     SubscriptionsModule,
+    SettingsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

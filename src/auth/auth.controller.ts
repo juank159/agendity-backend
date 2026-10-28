@@ -10,7 +10,7 @@ import {
   Query,
 } from '@nestjs/common';
 
-import { CreateAuthDto, LoginAuthDto } from './dto';
+import { LoginAuthDto, RegisterOwnerDto } from './dto';
 import { AuthService } from './auth.service';
 import { EmployeesService } from './employees.service';
 import { JwtRoles } from './jwt/jwt.role';
@@ -37,8 +37,8 @@ export class AuthController {
   @Public()
   @RateLimit(AUTH_RATE_LIMITS.registerOwner)
   @Post('register/owner')
-  registerOwner(@Body() createAuthDto: CreateAuthDto) {
-    return this.authService.createOwner(createAuthDto);
+  registerOwner(@Body() registerOwnerDto: RegisterOwnerDto) {
+    return this.authService.createOwner(registerOwnerDto);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -109,8 +109,12 @@ export class AuthController {
   @RateLimit(AUTH_RATE_LIMITS.google)
   @Post('google')
   @HttpCode(200)
-  googleLogin(@Body('token') token: string) {
-    return this.authService.googleLogin(token);
+  googleLogin(
+    @Body('token') token: string,
+    // Zona del dispositivo (6.01): solo cuenta si es un alta nueva.
+    @Body('timezone') timezone?: string,
+  ) {
+    return this.authService.googleLogin(token, timezone);
   }
 
   @Public()

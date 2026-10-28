@@ -10,6 +10,8 @@ import {
   formatBusinessLongDate,
   formatBusinessTime,
   isValidDate,
+  isValidTimeZone,
+  normalizeTimeZone,
   parseBusinessDate,
   startOfBusinessDay,
   toBusinessIso,
@@ -260,5 +262,37 @@ describe('parseBusinessRangeEnd (fin exclusivo de un rango, 2.34)', () => {
     expect(
       Number.isNaN(parseBusinessRangeEnd('2026-02-31', TZ).getTime()),
     ).toBe(true);
+  });
+});
+
+describe('normalizeTimeZone / isValidTimeZone (zona por tenant, 6.01)', () => {
+  it.each([
+    ['America/Bogota', 'America/Bogota'],
+    ['America/Caracas', 'America/Caracas'],
+    ['Europe/Madrid', 'Europe/Madrid'],
+    ['  america/bogota ', 'America/Bogota'],
+    ['UTC', 'UTC'],
+    ['Etc/UTC', 'UTC'],
+  ])('%p → %p', (input, canonical) => {
+    expect(normalizeTimeZone(input)).toBe(canonical);
+    expect(isValidTimeZone(input)).toBe(true);
+  });
+
+  it.each([
+    ['Mars/Phobos'],
+    ['Bogota'],
+    ['-05:00'],
+    ['+0300'],
+    [''],
+    ['America/New York'],
+    ['../etc/passwd'],
+    ['x'.repeat(65)],
+    [undefined],
+    [null],
+    [-5],
+    [{}],
+  ])('%p no es una zona IANA', (input) => {
+    expect(normalizeTimeZone(input)).toBeNull();
+    expect(isValidTimeZone(input)).toBe(false);
   });
 });

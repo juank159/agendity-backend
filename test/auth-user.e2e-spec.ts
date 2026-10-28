@@ -100,6 +100,7 @@ describe('AuthUser y tenant (e2e)', () => {
       'phone',
       'roles',
       'tenantId',
+      'timezone', // 6.01: zona del negocio
     ];
     const asOwner = await http
       .get('/api/auth/me')
@@ -112,6 +113,10 @@ describe('AuthUser y tenant (e2e)', () => {
       tenantId: owner.id,
       is_email_verified: owner.is_email_verified,
     });
+    const settings = await http
+      .get('/api/settings')
+      .set(auth(signToken(owner, ['Owner'])));
+    expect(asOwner.body.timezone).toBe(settings.body.timezone);
     expect(asOwner.body.roles).toEqual(
       expect.arrayContaining([{ name: 'Owner' }]),
     );
@@ -125,6 +130,7 @@ describe('AuthUser y tenant (e2e)', () => {
     expect(asEmployee.body).toMatchObject({
       id: employee.id,
       tenantId: owner.id,
+      timezone: asOwner.body.timezone, // la del negocio de su owner
     });
   });
 
