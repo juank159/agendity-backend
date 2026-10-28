@@ -15,6 +15,7 @@ import {
   E2EHttp,
   createE2EApp,
   E2E_BOOT_TIMEOUT_MS,
+  E2E_ROUTE_SCAN_TIMEOUT_MS,
 } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
@@ -117,45 +118,49 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
     expect(res.status).toBe(401);
   });
 
-  it('las lecturas del Owner no contienen secretos', async () => {
-    const paths = [
-      '/api/appointments',
-      '/api/schedules/user/{owner}',
-      '/api/auth/employees?includeDeleted=true',
-      '/api/auth/employees/active',
-      '/api/auth/employees/deleted',
-      '/api/users',
-      '/api/users/{owner}',
-      '/api/users/{owner}/services',
-      '/api/services',
-      '/api/categories',
-      '/api/clients/all',
-    ];
-    if (employee) {
-      paths.push(
-        '/api/schedules/user/{employee}',
-        '/api/auth/employee/{employee}',
-        '/api/users/{employee}/services',
-      );
-    }
-
-    const failures: string[] = [];
-    for (const template of paths) {
-      const url = template
-        .replace('{owner}', owner.id)
-        .replace('{employee}', employee?.id ?? '');
-      const res = await http
-        .get(url)
-        .set('Authorization', `Bearer ${ownerToken}`);
-      if (res.status !== 200) {
-        failures.push(`${url} -> ${res.status}`);
-        continue;
+  it(
+    'las lecturas del Owner no contienen secretos',
+    async () => {
+      const paths = [
+        '/api/appointments',
+        '/api/schedules/user/{owner}',
+        '/api/auth/employees?includeDeleted=true',
+        '/api/auth/employees/active',
+        '/api/auth/employees/deleted',
+        '/api/users',
+        '/api/users/{owner}',
+        '/api/users/{owner}/services',
+        '/api/services',
+        '/api/categories',
+        '/api/clients/all',
+      ];
+      if (employee) {
+        paths.push(
+          '/api/schedules/user/{employee}',
+          '/api/auth/employee/{employee}',
+          '/api/users/{employee}/services',
+        );
       }
-      const leaks = findSecretKeys(res.body);
-      if (leaks.length) failures.push(`${url} -> ${leaks.join(', ')}`);
-    }
-    expect(failures).toEqual([]);
-  });
+
+      const failures: string[] = [];
+      for (const template of paths) {
+        const url = template
+          .replace('{owner}', owner.id)
+          .replace('{employee}', employee?.id ?? '');
+        const res = await http
+          .get(url)
+          .set('Authorization', `Bearer ${ownerToken}`);
+        if (res.status !== 200) {
+          failures.push(`${url} -> ${res.status}`);
+          continue;
+        }
+        const leaks = findSecretKeys(res.body);
+        if (leaks.length) failures.push(`${url} -> ${leaks.join(', ')}`);
+      }
+      expect(failures).toEqual([]);
+    },
+    E2E_ROUTE_SCAN_TIMEOUT_MS,
+  );
 
   it('GET /schedules (Admin) devuelve el usuario de cada horario sin secretos', async () => {
     const res = await http

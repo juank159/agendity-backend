@@ -14,6 +14,7 @@ import {
   E2EHttp,
   createE2EApp,
   E2E_BOOT_TIMEOUT_MS,
+  E2E_ROUTE_SCAN_TIMEOUT_MS,
 } from './utils/create-e2e-app';
 import { allowFictitiousAccounts, signToken } from './utils/dev-fixtures';
 import { AppointmentReminderService } from '../src/appointments/appointment-reminder.service';
@@ -197,38 +198,46 @@ describe('Guard JWT global (e2e)', () => {
     check.mockRestore();
   });
 
-  it('toda ruta no pública responde 401 sin token', async () => {
-    const failures: string[] = [];
-    for (const route of routes) {
-      if (PUBLIC_ROUTES.has(route.key)) continue;
-      const res = await http[route.method](route.url);
-      if (res.status !== 401) failures.push(`${route.key} -> ${res.status}`);
-    }
-    expect(failures).toEqual([]);
-    // Rutas comprobadas, para que el resultado sea visible en la salida del test.
-    console.info(
-      `Rutas: ${routes.length} · protegidas comprobadas: ${
-        routes.filter((r) => !PUBLIC_ROUTES.has(r.key)).length
-      }`,
-    );
-  });
-
-  it('toda ruta no pública responde 401 con un token inválido', async () => {
-    const failures: string[] = [];
-    const forged = jwt.sign(
-      { id: FAKE_UUID, roles: ['Admin', 'Owner', 'Employee'] },
-      { secret: 'no-es-el-secreto' },
-    );
-    for (const route of routes) {
-      if (PUBLIC_ROUTES.has(route.key)) continue;
-      const res = await http[route.method](route.url).set(
-        'Authorization',
-        `Bearer ${forged}`,
+  it(
+    'toda ruta no pública responde 401 sin token',
+    async () => {
+      const failures: string[] = [];
+      for (const route of routes) {
+        if (PUBLIC_ROUTES.has(route.key)) continue;
+        const res = await http[route.method](route.url);
+        if (res.status !== 401) failures.push(`${route.key} -> ${res.status}`);
+      }
+      expect(failures).toEqual([]);
+      // Rutas comprobadas, para que el resultado sea visible en la salida del test.
+      console.info(
+        `Rutas: ${routes.length} · protegidas comprobadas: ${
+          routes.filter((r) => !PUBLIC_ROUTES.has(r.key)).length
+        }`,
       );
-      if (res.status !== 401) failures.push(`${route.key} -> ${res.status}`);
-    }
-    expect(failures).toEqual([]);
-  });
+    },
+    E2E_ROUTE_SCAN_TIMEOUT_MS,
+  );
+
+  it(
+    'toda ruta no pública responde 401 con un token inválido',
+    async () => {
+      const failures: string[] = [];
+      const forged = jwt.sign(
+        { id: FAKE_UUID, roles: ['Admin', 'Owner', 'Employee'] },
+        { secret: 'no-es-el-secreto' },
+      );
+      for (const route of routes) {
+        if (PUBLIC_ROUTES.has(route.key)) continue;
+        const res = await http[route.method](route.url).set(
+          'Authorization',
+          `Bearer ${forged}`,
+        );
+        if (res.status !== 401) failures.push(`${route.key} -> ${res.status}`);
+      }
+      expect(failures).toEqual([]);
+    },
+    E2E_ROUTE_SCAN_TIMEOUT_MS,
+  );
 
   it('el guard de roles global responde 403 si falta el rol', async () => {
     const ownerToken = signToken(

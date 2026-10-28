@@ -51,7 +51,7 @@ export async function resetTrialQuota(
  * Fechas de citas y bloqueos de prueba (2.21: solo se agenda a futuro).
  * Base: lunes 2100-01-04 00:00 UTC. Cada spec pide su primera semana libre
  * (después de toda cita o bloqueo de la copia) y avanza desde ahí: no choca
- * con corridas anteriores ni con otros specs (`--runInBand`).
+ * con corridas anteriores ni con otros specs (un solo worker: `--maxWorkers=1`).
  */
 export const FUTURE_BASE_MONDAY = Date.UTC(2100, 0, 4);
 export const WEEK_MS = 7 * 24 * 3_600_000;

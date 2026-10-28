@@ -40,6 +40,15 @@ const { setupApp } = require('../../src/config/app.setup');
  */
 export const E2E_BOOT_TIMEOUT_MS = 60_000;
 
+/**
+ * Timeout de los tests que recorren MUCHAS rutas en un solo `it` (2.27): el
+ * barrido de las ~130 rutas de `auth-guard` (dos veces) y las 14 lecturas de
+ * `user-secrets`. Su coste crece con el número de rutas, no con un fallo: con
+ * la máquina cargada llegaron a 5,3 s, por encima de los 5 s de jest. El resto
+ * de tests sigue con los 5 s por defecto.
+ */
+export const E2E_ROUTE_SCAN_TIMEOUT_MS = 30_000;
+
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
 export type E2EMethod = (typeof HTTP_METHODS)[number];
 export type E2EHttp = Record<E2EMethod, (path: string) => request.Test>;
