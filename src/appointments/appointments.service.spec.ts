@@ -7,12 +7,19 @@ import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { AppointmentStatus } from 'src/common/enums/status.enum';
 import { AppointmentServiceLine } from './entities/appointment-service-line.entity';
 
+const BOGOTA = 'America/Bogota';
+
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const EMPLOYEE = '0f2ac72d-a104-4782-81c0-1178c7503c54';
 const CLIENT = 'c0000000-0000-4000-8000-000000000001';
 const SERVICE = 'c0000000-0000-4000-8000-000000000002';
 
 function build() {
+  // Zona de cada negocio (6.02): Bogotá salvo que el test diga otra.
+  const zones: Record<string, string> = {};
+  const tenantSettings = {
+    getTimezone: jest.fn(async (tenantId: string) => zones[tenantId] ?? BOGOTA),
+  };
   const repo = {
     find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn(),
@@ -20,13 +27,11 @@ function build() {
   };
   const clients = { findOne: jest.fn().mockResolvedValue({ id: CLIENT }) };
   const users = {
-    findTenantMember: jest
-      .fn()
-      .mockResolvedValue({
-        id: EMPLOYEE,
-        isActive: true,
-        is_email_verified: true,
-      }),
+    findTenantMember: jest.fn().mockResolvedValue({
+      id: EMPLOYEE,
+      isActive: true,
+      is_email_verified: true,
+    }),
   };
   const services = {
     findOne: jest
@@ -110,9 +115,12 @@ function build() {
     events as any,
     subscriptions as any,
     dataSource as any,
+    tenantSettings as any,
   );
   return {
     service,
+    zones,
+    tenantSettings,
     repo,
     clients,
     users,
@@ -905,11 +913,11 @@ describe('AppointmentsService.assertNoAppointmentOverlap (bloqueos, 2.08)', () =
 
 describe('AppointmentsService.findAvailableSlots (huecos libres, 2.14)', () => {
   // 2030-01-07 es lunes; día del negocio (Bogotá).
-  const day = new Date('2030-01-07T00:00:00-05:00');
+  const day = '2030-01-07';
   const at = (hhmm: string) => new Date(`2030-01-07T${hhmm}:00-05:00`);
   const query = {
     professionalId: EMPLOYEE,
-    day,
+    date: day,
     serviceIds: [SERVICE],
     stepMinutes: 30,
   };
@@ -944,14 +952,14 @@ describe('AppointmentsService.findAvailableSlots (huecos libres, 2.14)', () => {
       TENANT,
       ['CANCELLED'],
       new Date('2030-01-08T00:30:00-05:00'),
-      day,
+      new Date(`${day}T00:00:00-05:00`),
       null,
     ]);
     const [[, blockParams]] = queriesWith(manager, 'FROM time_block');
     expect(blockParams).toEqual([
       EMPLOYEE,
       new Date('2030-01-08T00:30:00-05:00'),
-      day,
+      new Date(`${day}T00:00:00-05:00`),
       null,
     ]);
   });
@@ -1080,7 +1088,7 @@ describe('AppointmentsService: solo a futuro (2.21)', () => {
     const slots = await service.findAvailableSlots(
       {
         professionalId: EMPLOYEE,
-        day: new Date('2000-01-03T00:00:00-05:00'),
+        date: '2000-01-03',
         serviceIds: [SERVICE],
         stepMinutes: 30,
       },
@@ -1207,5 +1215,113 @@ describe('AppointmentsService: precio de cada servicio guardado en la cita (2.29
     );
     expect(txRepo.save.mock.calls[0][0]).not.toHaveProperty('total_price');
     expect(lineRepo.find).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppointmentsService: zona horaria de CADA negocio (6.02, D-15)', () => {
+  // Dos negocios: Bogotá (UTC-5) y Caracas (UTC-4).
+  const CARACAS_TENANT = 'c0000000-0000-4000-8000-0000000000cc';
+  const CARACAS = 'America/Caracas';
+  const twoTenants = () => {
+    const built = build();
+    built.zones[CARACAS_TENANT] = CARACAS;
+    return built;
+  };
+
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('una cita "a las 08:00" (sin offset) es las 08:00 de SU negocio: instantes distintos', async () => {
+    const { service, txRepo } = twoTenants();
+    const at8 = { ...dto, date: '2030-01-07T08:00:00' };
+    await service.create(at8, TENANT);
+    await service.create(at8, CARACAS_TENANT);
+    const [bogota, caracas] = txRepo.save.mock.calls.map(([a]) => a);
+    expect(bogota).toMatchObject({ ownerId: TENANT });
+    expect(bogota.date.toISOString()).toBe('2030-01-07T13:00:00.000Z');
+    expect(caracas).toMatchObject({ ownerId: CARACAS_TENANT });
+    expect(caracas.date.toISOString()).toBe('2030-01-07T12:00:00.000Z');
+    // Con offset explícito, el instante manda en los dos.
+    await service.create(
+      { ...dto, date: '2030-01-07T08:00:00-05:00' },
+      CARACAS_TENANT,
+    );
+    expect(txRepo.save.mock.calls[2][0].date.toISOString()).toBe(
+      '2030-01-07T13:00:00.000Z',
+    );
+  });
+
+  it('el horario del profesional (09:00-11:00, lunes) se aplica en la zona de su negocio', async () => {
+    const { service, db } = twoTenants();
+    db.schedules = [
+      {
+        day_of_week: 1,
+        start_time: '09:00:00',
+        end_time: '11:00:00',
+        is_available: true,
+      },
+    ];
+    // 13:30Z = 08:30 en Bogotá (fuera) y 09:30 en Caracas (dentro).
+    const at = { ...dto, date: '2030-01-07T13:30:00Z' };
+    const error = await service.create(at, TENANT).catch((e) => e);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.SLOT_UNAVAILABLE,
+    });
+    await expect(service.create(at, CARACAS_TENANT)).resolves.toBeDefined();
+  });
+
+  it('horas libres del mismo día y el mismo horario: cada negocio en su zona', async () => {
+    const { service, db } = twoTenants();
+    db.schedules = [
+      {
+        day_of_week: 1,
+        start_time: '09:00:00',
+        end_time: '10:00:00',
+        is_available: true,
+      },
+    ];
+    const query = {
+      professionalId: EMPLOYEE,
+      date: '2030-01-07',
+      serviceIds: [SERVICE],
+      stepMinutes: 30,
+    };
+    const iso = (dates: Date[]) => dates.map((d) => d.toISOString());
+    expect(iso(await service.findAvailableSlots(query, TENANT))).toEqual([
+      '2030-01-07T14:00:00.000Z', // 09:00 Bogotá
+      '2030-01-07T14:30:00.000Z',
+    ]);
+    expect(
+      iso(await service.findAvailableSlots(query, CARACAS_TENANT)),
+    ).toEqual([
+      '2030-01-07T13:00:00.000Z', // 09:00 Caracas
+      '2030-01-07T13:30:00.000Z',
+    ]);
+  });
+
+  it('"solo a futuro": a las 12:30Z, las 08:00 ya pasaron en Caracas pero no en Bogotá', async () => {
+    jest.useFakeTimers({
+      now: new Date('2030-01-07T12:30:00Z'),
+      doNotFake: ['nextTick', 'setImmediate'],
+    });
+    const { service } = twoTenants();
+    const at8 = { ...dto, date: '2030-01-07T08:00:00' };
+    const error = await service.create(at8, CARACAS_TENANT).catch((e) => e);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.APPOINTMENT_IN_PAST,
+    });
+    await expect(service.create(at8, TENANT)).resolves.toBeDefined();
+  });
+
+  it('fecha imposible: 400 sin tocar la suscripción', async () => {
+    const { service, subscriptions } = twoTenants();
+    const error = await service
+      .create({ ...dto, date: '2030-02-31T08:00:00' }, CARACAS_TENANT)
+      .catch((e) => e);
+    expect(error.getStatus()).toBe(400);
+    expect(subscriptions.consumeAppointmentQuota).not.toHaveBeenCalled();
   });
 });

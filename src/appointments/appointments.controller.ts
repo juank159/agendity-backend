@@ -7,7 +7,6 @@ import {
   Param,
   Delete,
   ParseUUIDPipe,
-  BadRequestException,
   Query,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
@@ -16,8 +15,6 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { AvailableSlotsQueryDto } from './dto/available-slots-query.dto';
 import { SLOT_STEP_MINUTES } from './appointment-slot';
-import { BusinessException } from '../common/exceptions/business.exception';
-import { ErrorCode } from '../common/constants/error-codes';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
@@ -25,8 +22,7 @@ import { JwtRoles } from '../auth/jwt/jwt.role';
 import { AppointmentReminderService } from './appointment-reminder.service';
 import { AuthUser } from '../auth/interfaces';
 import { appointmentScopeOf } from './appointment-scope';
-import { isValidDate, parseBusinessDate } from '../common/utils/date.util';
-import { ParseDatePipe } from '../common/pipes/parse-date.pipe';
+import { QueryDate } from '../common/decorators/query-date.decorator';
 
 @Controller('appointments')
 export class AppointmentsController {
@@ -42,10 +38,6 @@ export class AppointmentsController {
     @Body() createAppointmentDto: CreateAppointmentDto,
     @CurrentUser() user: AuthUser,
   ) {
-    // ISO 8601 con offset, o sin offset = hora del negocio (date.util)
-    if (!isValidDate(parseBusinessDate(createAppointmentDto.date))) {
-      throw new BadRequestException('Invalid date format');
-    }
     // Employee: solo para sí mismo (alcance con professionalId = su id, 2.15).
     return this.appointmentsService.create(
       createAppointmentDto,
@@ -99,9 +91,8 @@ export class AppointmentsController {
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async findAll(
     @CurrentUser() user: AuthUser,
-    @Query('startDate', new ParseDatePipe({ optional: true })) startDate?: Date,
-    @Query('endDate', new ParseDatePipe({ optional: true, rangeEnd: true }))
-    endDate?: Date,
+    @QueryDate('startDate', { optional: true }) startDate?: Date,
+    @QueryDate('endDate', { optional: true, rangeEnd: true }) endDate?: Date,
   ) {
     return this.appointmentsService.findAll(
       appointmentScopeOf(user),
@@ -130,7 +121,7 @@ export class AppointmentsController {
   }
 
   /**
-   * Inicios libres (ISO con el offset del negocio) de un profesional en un día
+   * Inicios libres (ISO con el offset de la zona del tenant) de un profesional en un día
    * del negocio para los servicios pedidos (2.14). Misma regla que al agendar.
    * Owner: cualquier profesional del negocio; Employee: solo su agenda (403).
    */
@@ -140,14 +131,11 @@ export class AppointmentsController {
     @Query() query: AvailableSlotsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const day = parseBusinessDate(query.date);
-    if (!isValidDate(day)) {
-      throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Fecha inválida');
-    }
+    // El día se interpreta en la zona del tenant, en el service (6.02).
     return this.appointmentsService.findAvailableSlots(
       {
         professionalId: query.professional_id,
-        day,
+        date: query.date,
         serviceIds: query.service_ids,
         stepMinutes: query.step ?? SLOT_STEP_MINUTES.default,
       },

@@ -2,8 +2,9 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import {
   businessJsonReplacer,
-  businessTimeZone,
+  defaultBusinessTimeZone,
 } from '../common/utils/date.util';
+import { requestTimeZoneMiddleware } from '../common/context/request-time-zone';
 
 /**
  * Configuración HTTP común de la app (prefijo, validación, fechas y Swagger).
@@ -12,9 +13,13 @@ import {
 export function setupApp(app: INestApplication): OpenAPIObject {
   app.setGlobalPrefix('api');
 
-  // Falla al arrancar si BUSINESS_TIMEZONE no es una zona IANA válida.
-  businessTimeZone();
-  // Fechas de las respuestas: ISO con el offset del negocio (ARQUITECTURA §3).
+  // Falla al arrancar si BUSINESS_TIMEZONE (zona por defecto de los negocios
+  // nuevos y de respaldo, 6.02) no es una zona IANA válida.
+  defaultBusinessTimeZone();
+  // Fechas de las respuestas: ISO con el offset de la zona del tenant que pide
+  // (6.02, ARQUITECTURA §3). El middleware abre el contexto de la petición y
+  // `TenantTimeZoneInterceptor` fija la zona; sin sesión, UTC.
+  app.use(requestTimeZoneMiddleware);
   app.getHttpAdapter().getInstance().set('json replacer', businessJsonReplacer);
 
   app.useGlobalPipes(

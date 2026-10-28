@@ -13,6 +13,8 @@ import { toWhatsappPhone, whatsappLink } from '../whatsapp/whatsapp-phone';
 import { BusinessException } from '../common/exceptions/business.exception';
 import { NotFoundException } from '@nestjs/common';
 
+const BOGOTA = 'America/Bogota';
+
 /** Instantes explícitos con offset: los tests no dependen de la zona del proceso (correr también con TZ=UTC). */
 const at = (iso: string) => new Date(iso);
 const START = at('2026-10-21T08:00:00.000-05:00');
@@ -160,7 +162,7 @@ describe('textos en la zona del negocio', () => {
   } as any;
 
   it('al cliente: saludo con su nombre, día y hora de Bogotá', () => {
-    const message = reminderMessage(appointment);
+    const message = reminderMessage(appointment, BOGOTA);
     expect(message).toContain('Hola Ana,');
     expect(message).toContain('*Corte, Barba*');
     expect(message).toContain('*miércoles 21 de octubre*');
@@ -168,12 +170,39 @@ describe('textos en la zona del negocio', () => {
   });
 
   it('al profesional: avisa si aún no se envió el WhatsApp al cliente', () => {
-    expect(staffReminderMessage(appointment)).toContain('Ana Pérez');
-    expect(staffReminderMessage(appointment)).toContain('8:00 AM');
-    expect(staffReminderMessage(appointment)).toContain('Aún no');
+    expect(staffReminderMessage(appointment, BOGOTA)).toContain('Ana Pérez');
+    expect(staffReminderMessage(appointment, BOGOTA)).toContain('8:00 AM');
+    expect(staffReminderMessage(appointment, BOGOTA)).toContain('Aún no');
     expect(
-      staffReminderMessage({ ...appointment, reminderSent: true }),
+      staffReminderMessage({ ...appointment, reminderSent: true }, BOGOTA),
     ).not.toContain('Aún no');
+  });
+});
+
+describe('textos de recordatorio en la zona de CADA negocio (6.02)', () => {
+  // La misma cita (13:00Z) es a las 8:00 en Bogotá y a las 9:00 en Caracas.
+  const appointment = {
+    date: new Date('2026-10-21T13:00:00Z'),
+    serviceLines: [],
+    client: { id: 'c1', name: 'Ana', lastname: 'Pérez' },
+    reminderSent: true,
+  } as any;
+
+  it('Bogotá 8:00 AM, Caracas 9:00 AM; y el día cambia con la zona', () => {
+    expect(reminderMessage(appointment, BOGOTA)).toContain('*8:00 AM*');
+    expect(reminderMessage(appointment, 'America/Caracas')).toContain(
+      '*9:00 AM*',
+    );
+    const lateNight = {
+      ...appointment,
+      date: new Date('2026-10-22T04:30:00Z'),
+    };
+    expect(staffReminderMessage(lateNight, BOGOTA)).toContain(
+      'el miércoles 21 de octubre a las 11:30 PM',
+    );
+    expect(staffReminderMessage(lateNight, 'America/Caracas')).toContain(
+      'el jueves 22 de octubre a las 12:30 AM',
+    );
   });
 });
 
@@ -225,6 +254,7 @@ describe('AppointmentReminderService.processDueReminders', () => {
   let saved: any[];
   let qbWheres: string[];
   let service: AppointmentReminderService;
+  let tenantSettings: { getTimezone: jest.Mock };
   const env = { ...process.env };
 
   beforeEach(() => {
@@ -255,6 +285,7 @@ describe('AppointmentReminderService.processDueReminders', () => {
       query: jest.fn().mockResolvedValue([due, notYet]),
       findOne: jest.fn(),
     };
+    tenantSettings = { getTimezone: jest.fn(async () => BOGOTA) };
     whatsapp = {
       sendToOwner: jest.fn().mockResolvedValue({ success: true }),
       sendWhatsAppMessage: jest.fn(() => {
@@ -265,6 +296,7 @@ describe('AppointmentReminderService.processDueReminders', () => {
       repo as any,
       dataSource,
       whatsapp as any,
+      tenantSettings as any,
     );
     delete process.env.REMINDER_OWNER_WHATSAPP;
   });
@@ -289,6 +321,18 @@ describe('AppointmentReminderService.processDueReminders', () => {
     expect(whatsapp.sendWhatsAppMessage).not.toHaveBeenCalled();
   });
 
+  it('cada cita usa la zona de SU negocio (owner_id del candidato, 6.02)', async () => {
+    repo.query.mockResolvedValue([{ ...due, ownerId: 'tenant-caracas' }]);
+    tenantSettings.getTimezone.mockImplementation(async (tenantId: string) =>
+      tenantId === 'tenant-caracas' ? 'America/Caracas' : BOGOTA,
+    );
+    await service.processDueReminders(NOW);
+    expect(tenantSettings.getTimezone).toHaveBeenCalledWith('tenant-caracas');
+    const [sql] = repo.query.mock.calls[0];
+    expect(sql).toContain('a.owner_id AS "ownerId"');
+    expect(saved).toHaveLength(1);
+  });
+
   it('consulta PENDING y CONFIRMED de la próxima hora, sin las ya procesadas para su fecha', async () => {
     await service.processDueReminders(NOW);
     const [sql, params] = repo.query.mock.calls[0];
@@ -297,7 +341,8 @@ describe('AppointmentReminderService.processDueReminders', () => {
     expect((params[2] as Date).getTime() - NOW.getTime()).toBe(60 * 60_000);
     expect(sql).toContain('auto_reminder_for IS DISTINCT FROM a."date"');
     expect(sql).toContain('a.send_reminder');
-    expect(sql).not.toContain('owner_id');
+    // Todos los negocios (sin filtro de tenant); el owner_id solo se lee para la zona (6.02).
+    expect(sql).not.toContain('a.owner_id = $4');
   });
 
   it('el UPDATE que reclama la cita es condicional (estado, fecha y no procesada)', async () => {
@@ -374,6 +419,7 @@ describe('AppointmentReminderService.prepareManualReminder', () => {
       repo as any,
       {} as any,
       {} as any,
+      { getTimezone: jest.fn(async () => BOGOTA) } as any,
     );
     return { repo, service };
   };

@@ -332,7 +332,7 @@ describe('Aislamiento por tenant (e2e)', () => {
           ],
           [
             'GET time-blocks of user',
-            // Las fechas son obligatorias en la práctica: ParseDatePipe rechaza la ausencia (bug previo).
+            // Las fechas son obligatorias en la práctica: `@QueryDate` (antes ParseDatePipe) rechaza la ausencia (bug previo).
             () =>
               http
                 .get(

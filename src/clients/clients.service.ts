@@ -15,6 +15,7 @@ import { ClientFindOptions } from './interfaces/client-find-options.interface';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { PaginationDto, PaginationResult } from './dto/pagination.dto';
 import { parseBusinessDate } from '../common/utils/date.util';
+import { TenantSettingsService } from 'src/settings/tenant-settings.service';
 import { BusinessException } from '../common/exceptions/business.exception';
 import { ErrorCode } from '../common/constants/error-codes';
 
@@ -25,7 +26,23 @@ export class ClientsService {
   constructor(
     @InjectRepository(Client)
     private readonly clientRepository: Repository<Client>,
+    private readonly tenantSettings: TenantSettingsService,
   ) {}
+
+  /**
+   * Cumpleaños del DTO → `Date`: sin offset o solo fecha = ese día en la zona
+   * del negocio (6.02), nunca una cadena directa a Postgres. Vacío → `null`.
+   */
+  private async birthdayOf(
+    value: string | null | undefined,
+    tenantId: string,
+  ): Promise<Date | null> {
+    if (!value) return null;
+    return parseBusinessDate(
+      value,
+      await this.tenantSettings.getTimezone(tenantId),
+    );
+  }
 
   /**
    * Las `HttpException` y los errores de BD (`QueryFailedError`) salen tal cual
@@ -135,9 +152,7 @@ export class ClientsService {
         ownerId: tenantId,
         showNotes: createClientDto.showNotes ?? false, // Valor por defecto para nuevos campos
         notes: createClientDto.notes ?? null,
-        birthday: createClientDto.birthday
-          ? parseBusinessDate(createClientDto.birthday)
-          : null,
+        birthday: await this.birthdayOf(createClientDto.birthday, tenantId),
         isFromDevice: false,
         isActive: true,
       } as Client);
@@ -358,7 +373,7 @@ export class ClientsService {
       isFromDevice: true,
       showNotes: dto.showNotes ?? false,
       notes: dto.notes ?? null,
-      birthday: dto.birthday ? parseBusinessDate(dto.birthday) : null,
+      birthday: await this.birthdayOf(dto.birthday, tenantId),
       isActive: true,
     });
     return manager.save(Client, client);
@@ -436,7 +451,12 @@ export class ClientsService {
         ...updateClientDto,
         // Fecha sin offset = día del negocio (nunca una cadena directa a Postgres)
         ...(updateClientDto.birthday
-          ? { birthday: parseBusinessDate(updateClientDto.birthday) }
+          ? {
+              birthday: await this.birthdayOf(
+                updateClientDto.birthday,
+                tenantId,
+              ),
+            }
           : {}),
         // Asegurarse de que la imagen se actualice
         image: updateClientDto.image || currentClient.image,

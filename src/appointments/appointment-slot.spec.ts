@@ -16,6 +16,8 @@ import {
   timeToMinutes,
 } from './appointment-slot';
 
+const BOGOTA = 'America/Bogota';
+
 // Instantes explícitos en Bogotá (zona del negocio por defecto): el resultado
 // no depende de la zona del proceso (los tests corren también con TZ=UTC).
 const monday = (hhmm: string) => new Date(`2099-01-05T${hhmm}:00-05:00`);
@@ -64,15 +66,15 @@ describe('appointment-slot (reglas puras de 2.04)', () => {
   });
 
   it('día ISO: lunes = 1, domingo = 7 (como schedules.day_of_week)', () => {
-    expect(isoWeekday(monday('10:00'))).toBe(1);
-    expect(isoWeekday(new Date('2099-01-04T10:00:00-05:00'))).toBe(7);
+    expect(isoWeekday(monday('10:00'), BOGOTA)).toBe(1);
+    expect(isoWeekday(new Date('2099-01-04T10:00:00-05:00'), BOGOTA)).toBe(7);
     expect(timeToMinutes('09:30')).toBe(570);
     expect(timeToMinutes('18:00:00')).toBe(1080);
   });
 
   describe('horario del profesional', () => {
     const fits = (from: string, to: string, s = weekdays()) =>
-      fitsSchedule(monday(from), monday(to), s);
+      fitsSchedule(monday(from), monday(to), s, BOGOTA);
 
     it('sin horario configurado no restringe', () => {
       expect(fits('03:00', '04:00', [])).toBe(true);
@@ -92,7 +94,7 @@ describe('appointment-slot (reglas puras de 2.04)', () => {
     it('día sin franja (domingo) o franja marcada no disponible: no cabe', () => {
       const sunday = new Date('2099-01-04T10:00:00-05:00');
       expect(
-        fitsSchedule(sunday, appointmentEnd(sunday, [{}]), weekdays()),
+        fitsSchedule(sunday, appointmentEnd(sunday, [{}]), weekdays(), BOGOTA),
       ).toBe(false);
       const off = weekdays().map((s) => ({ ...s, is_available: false }));
       expect(fits('10:00', '11:00', off)).toBe(false);
@@ -129,7 +131,12 @@ describe('appointment-slot (reglas puras de 2.04)', () => {
       ];
       const start = monday('23:30');
       expect(
-        fitsSchedule(start, appointmentEnd(start, [{ duration: 60 }]), allDay),
+        fitsSchedule(
+          start,
+          appointmentEnd(start, [{ duration: 60 }]),
+          allDay,
+          BOGOTA,
+        ),
       ).toBe(false);
     });
   });
@@ -149,6 +156,7 @@ describe('freeSlotStarts (huecos libres de un día, 2.14)', () => {
     stepMinutes: 30,
     schedules: weekdays('09:00', '12:00'),
     busy: [],
+    timeZone: BOGOTA,
   };
 
   it('dentro del horario y sin pasar del cierre (cita de 60 min, paso 30)', () => {
@@ -200,7 +208,7 @@ describe('freeSlotStarts (huecos libres de un día, 2.14)', () => {
     for (let t = dayStart.getTime(); t < nextDayStart.getTime(); t += 900_000) {
       const slot = { start: new Date(t), end: new Date(t + 3_600_000) };
       const allowed =
-        fitsSchedule(slot.start, slot.end, base.schedules) &&
+        fitsSchedule(slot.start, slot.end, base.schedules, BOGOTA) &&
         !busy.some((b) => intervalsOverlap(slot, b));
       expect([slot.start.toISOString(), free.has(t)]).toEqual([
         slot.start.toISOString(),
@@ -254,6 +262,7 @@ describe('solo a futuro (2.21)', () => {
       durationMinutes: 30,
       stepMinutes: 30,
       schedules: weekdays('09:00', '12:00'),
+      timeZone: BOGOTA,
       busy: [],
       now,
     });

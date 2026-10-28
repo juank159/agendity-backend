@@ -19,6 +19,8 @@ import {
 } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
+const BOGOTA = 'America/Bogota';
+
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 
 /** Todas las cadenas con forma de fecha-hora ISO de un JSON. */
@@ -115,7 +117,7 @@ describe('Fechas y zona del negocio (e2e, 2.05)', () => {
         'CREATE TEMPORARY TABLE tz_probe_205 (d timestamptz NOT NULL)',
       );
       // Lo que llega de la app hoy: hora local sin offset.
-      const start = parseBusinessDate('2026-10-21T08:00:00.000');
+      const start = parseBusinessDate('2026-10-21T08:00:00.000', BOGOTA);
       await runner.query('INSERT INTO tz_probe_205 (d) VALUES ($1)', [start]);
       const [row] = await runner.query(
         `SELECT d, (d AT TIME ZONE 'UTC')::text AS utc,
@@ -125,7 +127,9 @@ describe('Fechas y zona del negocio (e2e, 2.05)', () => {
       expect(row.utc).toBe('2026-10-21 13:00:00');
       expect(row.bogota).toBe('2026-10-21 08:00:00');
       expect(row.d).toBeInstanceOf(Date);
-      expect(toBusinessIso(row.d)).toBe('2026-10-21T08:00:00.000-05:00');
+      expect(toBusinessIso(row.d, BOGOTA)).toBe(
+        '2026-10-21T08:00:00.000-05:00',
+      );
     } finally {
       await runner.query('DROP TABLE IF EXISTS tz_probe_205');
       await runner.release();

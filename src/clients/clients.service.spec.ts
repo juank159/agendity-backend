@@ -1,6 +1,8 @@
 import { QueryFailedError } from 'typeorm';
 import { ClientsService } from './clients.service';
 
+const BOGOTA = 'America/Bogota';
+
 describe('ClientsService: errores de BD (2.08)', () => {
   it('un QueryFailedError (p. ej. 22P02 por id no UUID) llega tal cual al filtro global, no como 500', async () => {
     const badUuid = Object.assign(new QueryFailedError('q', [], new Error()), {
@@ -15,7 +17,10 @@ describe('ClientsService: errores de BD (2.08)', () => {
       }),
     };
     const repo = { createQueryBuilder: jest.fn(() => qb) };
-    const service = new ClientsService(repo as any);
+    const service = new ClientsService(
+      repo as any,
+      { getTimezone: jest.fn(async () => BOGOTA) } as any,
+    );
     await expect(service.findOne('no-uuid', 'tenant')).rejects.toBe(badUuid);
   });
 });
@@ -30,7 +35,13 @@ describe('ClientsService: duplicados con su code (2.30)', () => {
       create: jest.fn((x) => x),
       save: jest.fn(async (x) => x),
     };
-    return { service: new ClientsService(repo as any), repo };
+    return {
+      service: new ClientsService(
+        repo as any,
+        { getTimezone: jest.fn(async () => BOGOTA) } as any,
+      ),
+      repo,
+    };
   };
 
   const errorOf = async (promise: Promise<unknown>) =>

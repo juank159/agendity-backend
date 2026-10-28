@@ -1,11 +1,7 @@
 import { AppointmentStatus } from 'src/common/enums/status.enum';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
-import {
-  businessMinutesOfDay,
-  businessTimeZone,
-  zonedParts,
-} from 'src/common/utils/date.util';
+import { businessMinutesOfDay, zonedParts } from 'src/common/utils/date.util';
 
 /**
  * Reglas puras del hueco de una cita (2.04). ÚNICO sitio donde se calcula la
@@ -15,8 +11,8 @@ import {
  *
  * Zona horaria (2.05): `appointments.date` y `time_block.*` son `timestamptz`
  * (instantes). El horario del profesional (`schedules`: día y horas de pared)
- * se compara en la zona del negocio (`BUSINESS_TIMEZONE`), nunca con los
- * getters locales del proceso.
+ * se compara en la zona del negocio (la del tenant, 6.02: siempre explícita),
+ * nunca con los getters locales del proceso.
  */
 
 /** Minutos que se cuentan por un servicio sin duración (regla vigente). */
@@ -71,10 +67,7 @@ export interface ScheduleWindow {
 }
 
 /** Día ISO de la semana en el negocio (1 = lunes … 7 = domingo), como `schedules.day_of_week`. */
-export function isoWeekday(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): number {
+export function isoWeekday(date: Date, timeZone: string): number {
   return zonedParts(date, timeZone).weekday;
 }
 
@@ -97,7 +90,7 @@ export function fitsSchedule(
   start: Date,
   end: Date,
   schedules: ScheduleWindow[],
-  timeZone: string = businessTimeZone(),
+  timeZone: string,
 ): boolean {
   if (!schedules?.length) return true;
 
@@ -197,12 +190,13 @@ export function freeSlotStarts(options: {
   stepMinutes: number;
   schedules: ScheduleWindow[];
   busy: SlotInterval[];
-  timeZone?: string;
+  /** Zona del tenant (6.02): día y horario del profesional. */
+  timeZone: string;
   /** Inicios anteriores a `now` no se ofrecen (2.21, `startsInPast`). */
   now?: Date;
 }): Date[] {
-  const { dayStart, nextDayStart, durationMinutes, stepMinutes } = options;
-  const timeZone = options.timeZone ?? businessTimeZone();
+  const { dayStart, nextDayStart, durationMinutes, stepMinutes, timeZone } =
+    options;
   if (!(stepMinutes > 0)) return [];
   const starts: Date[] = [];
   for (

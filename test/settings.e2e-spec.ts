@@ -13,7 +13,7 @@ import { randomUUID } from 'crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
 import { TenantSettingsService } from '../src/settings/tenant-settings.service';
-import { businessTimeZone } from '../src/common/utils/date.util';
+import { defaultBusinessTimeZone } from '../src/common/utils/date.util';
 import {
   E2EHttp,
   createE2EApp,
@@ -184,7 +184,7 @@ describeWritable(
       ds = app.get(DataSource);
       await assertWritableDatabase(ds);
       ({ owner, employee } = await findDevOwnerAndEmployee(ds));
-      original = (await zoneOf(owner.id)) ?? businessTimeZone();
+      original = (await zoneOf(owner.id)) ?? defaultBusinessTimeZone();
     }, E2E_BOOT_TIMEOUT_MS);
 
     afterEach(() => jest.restoreAllMocks());
@@ -236,11 +236,11 @@ describeWritable(
           { timezone: 'America/Caracas' },
           'America/Caracas',
         ],
-        [`tz2-${run}@example.com`, {}, businessTimeZone()],
+        [`tz2-${run}@example.com`, {}, defaultBusinessTimeZone()],
         [
           `tz3-${run}@example.com`,
           { timezone: 'Mars/Phobos' },
-          businessTimeZone(),
+          defaultBusinessTimeZone(),
         ],
       ];
       let n = 0;

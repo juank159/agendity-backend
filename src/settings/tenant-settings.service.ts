@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import {
-  businessTimeZone,
+  defaultBusinessTimeZone,
   normalizeTimeZone,
 } from 'src/common/utils/date.util';
 import { BusinessSettings } from './entities/business-settings.entity';
@@ -47,10 +47,10 @@ export class TenantSettingsService {
     const timezone = normalizeTimeZone(requested);
     if (requested != null && requested !== '' && !timezone) {
       this.logger.warn(
-        `Zona horaria inválida en el alta; se usa ${businessTimeZone()}`,
+        `Zona horaria inválida en el alta; se usa ${defaultBusinessTimeZone()}`,
       );
     }
-    return timezone ?? businessTimeZone();
+    return timezone ?? defaultBusinessTimeZone();
   }
 
   /**
@@ -125,13 +125,13 @@ export class TenantSettingsService {
     tenantId: string,
     row: BusinessSettings | null,
   ): string {
-    if (!row) return businessTimeZone();
+    if (!row) return defaultBusinessTimeZone();
     const timezone = normalizeTimeZone(row.timezone);
     if (!timezone) {
       this.logger.warn(
-        `Zona horaria guardada inválida para el negocio ${tenantId}; se usa ${businessTimeZone()}`,
+        `Zona horaria guardada inválida para el negocio ${tenantId}; se usa ${defaultBusinessTimeZone()}`,
       );
-      return businessTimeZone();
+      return defaultBusinessTimeZone();
     }
     return timezone;
   }

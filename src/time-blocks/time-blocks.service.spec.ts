@@ -3,6 +3,8 @@ import { TimeBlocksService } from './time-blocks.service';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
 
+const BOGOTA = 'America/Bogota';
+
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const PRO = '0f2ac72d-a104-4782-81c0-1178c7503c54';
 
@@ -48,6 +50,7 @@ function build() {
     users as any,
     appointments as any,
     dataSource as any,
+    { getTimezone: jest.fn(async () => BOGOTA) } as any,
   );
   return { service, repo, users, appointments, manager, txRepo, db, order };
 }

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   InternalServerErrorException,
@@ -65,9 +66,11 @@ import { User } from 'src/users/entities/user.entity';
 import { canBeScheduled } from 'src/users/user-access';
 import {
   endOfBusinessDay,
+  isValidDate,
   parseBusinessDate,
   startOfBusinessDay,
 } from 'src/common/utils/date.util';
+import { TenantSettingsService } from 'src/settings/tenant-settings.service';
 
 @Injectable()
 export class AppointmentsService {
@@ -82,7 +85,27 @@ export class AppointmentsService {
     private readonly eventEmitter: EventEmitter2,
     private readonly subscriptionsService: SubscriptionsService,
     private readonly dataSource: DataSource,
+    private readonly tenantSettings: TenantSettingsService,
   ) {}
+
+  /**
+   * Fecha de una cita que llega al API, en la zona del tenant (6.02): con
+   * offset = ese instante; sin offset = hora de pared del negocio. Inválida →
+   * 400 (antes lo comprobaba el controller con la zona global).
+   */
+  private async parseAppointmentDate(
+    value: string,
+    tenantId: string,
+  ): Promise<Date> {
+    const date = parseBusinessDate(
+      value,
+      await this.tenantSettings.getTimezone(tenantId),
+    );
+    if (!isValidDate(date)) {
+      throw new BadRequestException('Invalid date format');
+    }
+    return date;
+  }
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
     console.error(
@@ -143,7 +166,7 @@ export class AppointmentsService {
         'Solo puedes agendar citas para ti',
       );
       // Regla del usuario (2.21): solo a futuro, antes de leer o consumir nada.
-      const start = parseBusinessDate(date);
+      const start = await this.parseAppointmentDate(date, tenantId);
       assertStartNotInPast(start);
 
       const [client, professional] = await Promise.all([
@@ -256,7 +279,8 @@ export class AppointmentsService {
   async findAvailableSlots(
     query: {
       professionalId: string;
-      day: Date;
+      /** Día del negocio (`YYYY-MM-DD`, o un instante), en la zona del tenant (6.02). */
+      date: string;
       serviceIds: string[];
       stepMinutes: number;
     },
@@ -280,8 +304,15 @@ export class AppointmentsService {
     const services = await this.loadTenantServices(serviceIds, tenantId);
     const durationMinutes = appointmentDurationMinutes(services);
 
-    const dayStart = startOfBusinessDay(query.day);
-    const nextDayStart = new Date(endOfBusinessDay(query.day).getTime() + 1);
+    const timeZone = await this.tenantSettings.getTimezone(tenantId);
+    const day = parseBusinessDate(query.date, timeZone);
+    if (!isValidDate(day)) {
+      throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Fecha inválida');
+    }
+    const dayStart = startOfBusinessDay(day, timeZone);
+    const nextDayStart = new Date(
+      endOfBusinessDay(day, timeZone).getTime() + 1,
+    );
     const manager = this.dataSource.manager;
     // Ocupación hasta el fin del último candidato (puede pasar de medianoche).
     const range = {
@@ -303,6 +334,7 @@ export class AppointmentsService {
       stepMinutes,
       schedules,
       busy: [...blocks, ...appointments],
+      timeZone,
       now: new Date(), // horas ya pasadas de hoy, fuera (2.21)
     });
   }
@@ -364,7 +396,9 @@ export class AppointmentsService {
     await this.lockProfessionalSlot(manager, professionalId);
 
     const schedules = await this.loadSchedules(manager, professionalId);
-    if (!fitsSchedule(start, end, schedules)) {
+    // Horario del profesional en la zona de SU negocio (6.02).
+    const timeZone = await this.tenantSettings.getTimezone(tenantId);
+    if (!fitsSchedule(start, end, schedules, timeZone)) {
       this.slotUnavailable('fuera del horario del profesional');
     }
 
@@ -536,7 +570,10 @@ export class AppointmentsService {
       const updateData: Partial<Appointment> & { id: string } = { id };
 
       if (updateAppointmentDto.date)
-        updateData.date = parseBusinessDate(updateAppointmentDto.date);
+        updateData.date = await this.parseAppointmentDate(
+          updateAppointmentDto.date,
+          tenantId,
+        );
       if (updateAppointmentDto.notes !== undefined)
         updateData.notes = updateAppointmentDto.notes;
 

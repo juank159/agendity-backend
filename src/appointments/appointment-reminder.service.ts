@@ -13,6 +13,7 @@ import {
   formatBusinessLongDate,
   formatBusinessTime,
 } from '../common/utils/date.util';
+import { TenantSettingsService } from '../settings/tenant-settings.service';
 import { BusinessException } from '../common/exceptions/business.exception';
 import { ErrorCode } from '../common/constants/error-codes';
 import {
@@ -130,30 +131,38 @@ function clientFullName(client?: { name?: string; lastname?: string }): string {
   return [client?.name, client?.lastname].filter(Boolean).join(' ').trim();
 }
 
-/** Texto del recordatorio AL CLIENTE, con día y hora en la zona del negocio. */
-export function reminderMessage(appointment: ReminderAppointment): string {
+/** Texto del recordatorio AL CLIENTE, con día y hora en la zona del negocio de la cita (6.02). */
+export function reminderMessage(
+  appointment: ReminderAppointment,
+  timeZone: string,
+): string {
   const appointmentDate = new Date(appointment.date);
-  const dateStr = formatBusinessLongDate(appointmentDate);
-  const timeStr = formatBusinessTime(appointmentDate);
+  const dateStr = formatBusinessLongDate(appointmentDate, timeZone);
+  const timeStr = formatBusinessTime(appointmentDate, timeZone);
   const greeting = appointment.client?.name
     ? `👋 Hola ${appointment.client.name},`
     : '👋 Hola,';
   return `${greeting} te recordamos tu cita para *${serviceNames(appointment)}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual.`;
 }
 
-/** Texto de la notificación interna (profesional) y del aviso opcional al Owner. */
-export function staffReminderMessage(appointment: Appointment): string {
+/** Texto de la notificación interna (profesional) y del aviso opcional al Owner, en la zona del negocio (6.02). */
+export function staffReminderMessage(
+  appointment: Appointment,
+  timeZone: string,
+): string {
   const date = new Date(appointment.date);
   const client = clientFullName(appointment.client) || 'tu cliente';
   const pending = appointment.reminderSent
     ? ''
     : ' Aún no se le ha enviado el recordatorio por WhatsApp.';
-  return `Cita con ${client} (${serviceNames(appointment)}) el ${formatBusinessLongDate(date)} a las ${formatBusinessTime(date)}.${pending}`;
+  return `Cita con ${client} (${serviceNames(appointment)}) el ${formatBusinessLongDate(date, timeZone)} a las ${formatBusinessTime(date, timeZone)}.${pending}`;
 }
 
 /** Cita candidata leída por el cron (SQL crudo). */
 interface ReminderCandidate {
   id: string;
+  /** Negocio de la cita: su zona da el día y la hora de los textos (6.02). */
+  ownerId: string;
   date: Date;
   createdAt: Date;
 }
@@ -185,6 +194,7 @@ export class AppointmentReminderService {
     private readonly appointmentsRepository: Repository<Appointment>,
     private readonly dataSource: DataSource,
     private readonly whatsappService: WhatsappService,
+    private readonly tenantSettings: TenantSettingsService,
   ) {}
 
   /** Cada minuto. Sustituye a los `CronJob` en memoria y a la limpieza cada 6 h. */
@@ -222,12 +232,18 @@ export class AppointmentReminderService {
     for (const candidate of candidates) {
       if (!isReminderDue(candidate, now)) continue;
       try {
+        // Cada cita, en la zona de SU negocio (6.02): el cron recorre todos.
+        const timeZone = await this.tenantSettings.getTimezone(
+          candidate.ownerId,
+        );
         const appointment = await this.dataSource.transaction((manager) =>
-          this.claimAndNotify(manager, candidate),
+          this.claimAndNotify(manager, candidate, timeZone),
         );
         if (!appointment) continue;
         processed.push(appointment.id);
-        if (ownerWhatsappEnabled()) await this.notifyOwnerSafely(appointment);
+        if (ownerWhatsappEnabled()) {
+          await this.notifyOwnerSafely(appointment, timeZone);
+        }
       } catch (error) {
         this.logger.error(
           `Error en el recordatorio de la cita ${candidate.id}: ${error.message}`,
@@ -255,7 +271,8 @@ export class AppointmentReminderService {
       tenantFilter = 'AND a.owner_id = $4';
     }
     return this.appointmentsRepository.query(
-      `SELECT a.id, a."date" AS "date", a.created_at AS "createdAt"
+      `SELECT a.id, a.owner_id AS "ownerId", a."date" AS "date",
+              a.created_at AS "createdAt"
          FROM appointments a
         WHERE a.status::text = ANY($1::text[])
           AND a.send_reminder
@@ -276,6 +293,7 @@ export class AppointmentReminderService {
   private async claimAndNotify(
     manager: EntityManager,
     candidate: ReminderCandidate,
+    timeZone: string,
   ): Promise<Appointment | null> {
     const claim = await manager
       .createQueryBuilder()
@@ -305,7 +323,7 @@ export class AppointmentReminderService {
         receiver_type: ReceiverType.USER,
         type: NotificationType.APPOINTMENT_REMINDER,
         title: 'Recordatorio de cita',
-        message: staffReminderMessage(appointment),
+        message: staffReminderMessage(appointment, timeZone),
         metadata: {
           appointment_id: appointment.id,
           client_id: appointment.client?.id ?? null,
@@ -318,11 +336,14 @@ export class AppointmentReminderService {
   }
 
   /** Aviso opcional al Owner por CallMeBot, fuera de la transacción y sin romper la pasada. */
-  private async notifyOwnerSafely(appointment: Appointment): Promise<void> {
+  private async notifyOwnerSafely(
+    appointment: Appointment,
+    timeZone: string,
+  ): Promise<void> {
     try {
       const result = await this.whatsappService.sendToOwner(
         appointment.ownerId,
-        `🔔 ${staffReminderMessage(appointment)}`,
+        `🔔 ${staffReminderMessage(appointment, timeZone)}`,
       );
       if (!result?.success) {
         this.logger.warn(
@@ -375,7 +396,10 @@ export class AppointmentReminderService {
       );
     }
 
-    const message = reminderMessage(appointment);
+    const message = reminderMessage(
+      appointment,
+      await this.tenantSettings.getTimezone(scope.tenantId),
+    );
     return {
       appointmentId: appointment.id,
       clientId: appointment.client.id,

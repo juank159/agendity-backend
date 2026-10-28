@@ -1,3 +1,4 @@
+import { SettingsModule } from 'src/settings/settings.module';
 import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentStatsService } from './payment-stats.service';
@@ -15,6 +16,7 @@ import { CustomPaymentMethodsService } from './custom-payment-methods.service';
     TypeOrmModule.forFeature([Payment, CustomPaymentMethod]),
     AppointmentsModule,
     NotificationsModule,
+    SettingsModule,
   ],
   controllers: [PaymentsController, CustomPaymentMethodsController],
   providers: [

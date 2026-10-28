@@ -7,6 +7,8 @@ import {
   TRIAL_APPOINTMENTS_LIMIT,
 } from './subscription-state';
 
+const BOGOTA = 'America/Bogota';
+
 const NOW = new Date('2026-10-22T12:00:00');
 const PAST = new Date('2025-11-05T16:49:28');
 const FUTURE = new Date('2027-01-01T00:00:00');
@@ -181,31 +183,56 @@ describe('Duración del plan (duration_months)', () => {
   it('el fin del periodo sale de duration_months, no del nombre', () => {
     const start = bogota('2026-10-22T10:00:00');
     expect(
-      planPeriodEnd(start, { duration_months: 6, name: 'Mensual' } as any),
+      planPeriodEnd(
+        start,
+        { duration_months: 6, name: 'Mensual' } as any,
+        BOGOTA,
+      ),
     ).toEqual(bogota('2027-04-22T10:00:00'));
     expect(
-      planPeriodEnd(start, { duration_months: 1, name: 'Anual' } as any),
+      planPeriodEnd(
+        start,
+        { duration_months: 1, name: 'Anual' } as any,
+        BOGOTA,
+      ),
     ).toEqual(bogota('2026-11-22T10:00:00'));
-    expect(planPeriodEnd(start, { duration_months: 12 } as any)).toEqual(
-      bogota('2027-10-22T10:00:00'),
+    expect(
+      planPeriodEnd(start, { duration_months: 12 } as any, BOGOTA),
+    ).toEqual(bogota('2027-10-22T10:00:00'));
+  });
+
+  it('en la zona de cada negocio (6.02): 31 de enero 23:30 en Caracas = 1 de febrero en Bogotá', () => {
+    // 2026-02-01T03:30Z: en Caracas (UTC-4) es 31 de enero 23:30; en Bogotá,
+    // 31 de enero 22:30. Un mes después: fin de febrero en los dos, cada
+    // uno a su hora de pared.
+    const start = new Date('2026-02-01T03:30:00Z');
+    expect(
+      planPeriodEnd(start, { duration_months: 1 } as any, 'America/Caracas'),
+    ).toEqual(new Date('2026-02-28T23:30:00-04:00'));
+    expect(planPeriodEnd(start, { duration_months: 1 } as any, BOGOTA)).toEqual(
+      new Date('2026-02-28T22:30:00-05:00'),
     );
   });
 
   it('una duración inválida cuenta como 1 mes', () => {
     const start = bogota('2026-10-22T10:00:00');
     for (const d of [0, -3, 1.5, null, undefined]) {
-      expect(planPeriodEnd(start, { duration_months: d } as any)).toEqual(
-        bogota('2026-11-22T10:00:00'),
-      );
+      expect(
+        planPeriodEnd(start, { duration_months: d } as any, BOGOTA),
+      ).toEqual(bogota('2026-11-22T10:00:00'));
     }
   });
 
   it('suma meses en el calendario del negocio, no en UTC', () => {
     // 30 de enero a las 21:00 en Bogotá ya es 31 de enero en UTC.
     expect(
-      planPeriodEnd(bogota('2026-01-30T21:00:00'), {
-        duration_months: 1,
-      } as any),
+      planPeriodEnd(
+        bogota('2026-01-30T21:00:00'),
+        {
+          duration_months: 1,
+        } as any,
+        BOGOTA,
+      ),
     ).toEqual(bogota('2026-02-28T21:00:00'));
   });
 });

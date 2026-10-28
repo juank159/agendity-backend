@@ -1,3 +1,4 @@
+import { SettingsModule } from 'src/settings/settings.module';
 import { Module } from '@nestjs/common';
 import { TimeBlocksService } from './time-blocks.service';
 import { TimeBlocksController } from './time-blocks.controller';
@@ -10,10 +11,11 @@ import { TimeBlock } from './entities/time-block.entity';
   imports: [
     TypeOrmModule.forFeature([TimeBlock]),
     UsersModule,
-    AppointmentsModule
+    AppointmentsModule,
+    SettingsModule,
   ],
   controllers: [TimeBlocksController],
   providers: [TimeBlocksService],
-  exports: [TimeBlocksService]
+  exports: [TimeBlocksService],
 })
 export class TimeBlocksModule {}

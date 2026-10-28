@@ -6,7 +6,6 @@ import {
   Patch,
   Param,
   Delete,
-  Query,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import {
@@ -23,7 +22,7 @@ import { UpdateTimeBlockDto } from './dto/update-time-block.dto';
 import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { ParseDatePipe } from '../common/pipes/parse-date.pipe';
+import { QueryDate } from '../common/decorators/query-date.decorator';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
 
 @ApiTags('Bloques de Tiempo')
@@ -77,8 +76,8 @@ export class TimeBlocksController {
   findByUser(
     @Tenant() tenantId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Query('startDate', new ParseDatePipe({ optional: true })) startDate?: Date,
-    @Query('endDate', new ParseDatePipe({ optional: true })) endDate?: Date,
+    @QueryDate('startDate', { optional: true }) startDate?: Date,
+    @QueryDate('endDate', { optional: true }) endDate?: Date,
   ) {
     return this.timeBlocksService.findByUser(
       userId,

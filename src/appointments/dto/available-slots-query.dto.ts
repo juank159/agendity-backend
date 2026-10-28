@@ -30,7 +30,8 @@ export class AvailableSlotsQueryDto {
 
   @ApiProperty({
     example: '2026-10-26',
-    description: 'Día en la zona del negocio (BUSINESS_TIMEZONE), YYYY-MM-DD',
+    description:
+      'Día en la zona del negocio (la configurada en /settings), YYYY-MM-DD',
   })
   @Matches(/^\d{4}-\d{2}-\d{2}$/, {
     message: 'date debe tener el formato YYYY-MM-DD',

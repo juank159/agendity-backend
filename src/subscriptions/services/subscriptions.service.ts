@@ -36,7 +36,7 @@ import {
   paidPlanLimit,
   planPeriodEnd,
 } from '../subscription-state';
-import { businessTimeZone } from '../../common/utils/date.util';
+import { TenantSettingsService } from '../../settings/tenant-settings.service';
 import { toCents } from 'src/payments/payment-rules';
 import {
   AttemptOutcome,
@@ -109,6 +109,8 @@ export class SubscriptionsService {
     private readonly wompiService: WompiService,
 
     private readonly configService: ConfigService,
+
+    private readonly tenantSettings: TenantSettingsService,
   ) {}
 
   // Métodos para gestionar planes de suscripción
@@ -374,10 +376,13 @@ export class SubscriptionsService {
   /**
    * Persiste el vencimiento: `active` con la fecha de fin pasada → `expired`.
    * Las lecturas ya lo calculan al vuelo (`effectiveStatus`); esto solo deja la
-   * fila coherente para consultas por `status`. Idempotente. Corre a las
-   * 03:00 del negocio (`BUSINESS_TIMEZONE`).
+   * fila coherente para consultas por `status`. Idempotente.
+   * 6.02 (D-15): corre a las 03:00 UTC para TODOS los negocios. Compara
+   * instantes (`subscription_end_date < now`), así que el resultado no depende
+   * de ninguna zona; la hora solo decide cuándo se escribe, y ningún negocio
+   * depende de ella (las lecturas ya calculan el vencimiento al vuelo).
    */
-  @Cron('0 3 * * *', { timeZone: businessTimeZone() })
+  @Cron('0 3 * * *', { timeZone: 'UTC' })
   async expireOverdueSubscriptions(now: Date = new Date()): Promise<number> {
     const result = await this.subscriptionRepository.update(
       {
@@ -793,7 +798,11 @@ export class SubscriptionsService {
         status: SubscriptionStatus.ACTIVE,
         plan: { id: plan.id },
         subscription_start_date: now,
-        subscription_end_date: planPeriodEnd(now, plan),
+        subscription_end_date: planPeriodEnd(
+          now,
+          plan,
+          await this.tenantSettings.getTimezone(subscription.tenant_id),
+        ),
       },
     );
   }

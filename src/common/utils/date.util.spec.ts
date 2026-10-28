@@ -1,10 +1,11 @@
+import { runWithRequestTimeZone } from '../context/request-time-zone';
 import {
   parseBusinessRangeEnd,
   addBusinessMonths,
   businessDateKey,
   businessJsonReplacer,
   businessMinutesOfDay,
-  businessTimeZone,
+  defaultBusinessTimeZone,
   DEFAULT_BUSINESS_TIMEZONE,
   endOfBusinessDay,
   formatBusinessLongDate,
@@ -19,6 +20,8 @@ import {
   zoneOffsetMinutes,
 } from './date.util';
 
+const BOGOTA = 'America/Bogota';
+
 // Estos tests no dependen de la zona del proceso: se corren con la zona local
 // y con `TZ=UTC` (ver la entrega de 2.05). Todo instante esperado va en UTC (Z).
 const iso = (d: Date) => d.toISOString();
@@ -30,18 +33,18 @@ describe('date.util (zona del negocio, 2.05)', () => {
     else process.env.BUSINESS_TIMEZONE = saved;
   });
 
-  describe('businessTimeZone', () => {
+  describe('defaultBusinessTimeZone (solo negocios nuevos y respaldo, 6.02)', () => {
     it('por defecto es America/Bogota', () => {
       delete process.env.BUSINESS_TIMEZONE;
       expect(DEFAULT_BUSINESS_TIMEZONE).toBe('America/Bogota');
-      expect(businessTimeZone()).toBe('America/Bogota');
+      expect(defaultBusinessTimeZone()).toBe('America/Bogota');
     });
 
     it('se puede configurar y una zona inválida falla con un mensaje claro', () => {
       process.env.BUSINESS_TIMEZONE = 'Europe/Madrid';
-      expect(businessTimeZone()).toBe('Europe/Madrid');
+      expect(defaultBusinessTimeZone()).toBe('Europe/Madrid');
       process.env.BUSINESS_TIMEZONE = 'Marte/Olympus';
-      expect(() => businessTimeZone()).toThrow(
+      expect(() => defaultBusinessTimeZone()).toThrow(
         'BUSINESS_TIMEZONE inválida: "Marte/Olympus"',
       );
     });
@@ -49,45 +52,45 @@ describe('date.util (zona del negocio, 2.05)', () => {
 
   describe('parseBusinessDate', () => {
     it('sin offset (lo que manda hoy la app): hora de Bogotá, no la del servidor', () => {
-      expect(iso(parseBusinessDate('2026-10-21T08:00:00.000'))).toBe(
+      expect(iso(parseBusinessDate('2026-10-21T08:00:00.000', BOGOTA))).toBe(
         '2026-10-21T13:00:00.000Z',
       );
-      expect(iso(parseBusinessDate('2026-10-21T08:00'))).toBe(
+      expect(iso(parseBusinessDate('2026-10-21T08:00', BOGOTA))).toBe(
         '2026-10-21T13:00:00.000Z',
       );
-      expect(iso(parseBusinessDate('2026-10-21 08:00:00'))).toBe(
+      expect(iso(parseBusinessDate('2026-10-21 08:00:00', BOGOTA))).toBe(
         '2026-10-21T13:00:00.000Z',
       );
       // Dart manda microsegundos: se truncan a milisegundos.
-      expect(iso(parseBusinessDate('2026-10-21T08:00:00.123456'))).toBe(
+      expect(iso(parseBusinessDate('2026-10-21T08:00:00.123456', BOGOTA))).toBe(
         '2026-10-21T13:00:00.123Z',
       );
     });
 
     it('con offset: se respeta tal cual', () => {
-      expect(iso(parseBusinessDate('2026-10-21T13:00:00.000Z'))).toBe(
+      expect(iso(parseBusinessDate('2026-10-21T13:00:00.000Z', BOGOTA))).toBe(
         '2026-10-21T13:00:00.000Z',
       );
-      expect(iso(parseBusinessDate('2026-10-21T08:00:00-05:00'))).toBe(
+      expect(iso(parseBusinessDate('2026-10-21T08:00:00-05:00', BOGOTA))).toBe(
         '2026-10-21T13:00:00.000Z',
       );
-      expect(iso(parseBusinessDate('2026-10-21T15:00:00.000+0200'))).toBe(
-        '2026-10-21T13:00:00.000Z',
-      );
-      expect(iso(parseBusinessDate('2026-10-21T13:00:00+00'))).toBe(
+      expect(
+        iso(parseBusinessDate('2026-10-21T15:00:00.000+0200', BOGOTA)),
+      ).toBe('2026-10-21T13:00:00.000Z');
+      expect(iso(parseBusinessDate('2026-10-21T13:00:00+00', BOGOTA))).toBe(
         '2026-10-21T13:00:00.000Z',
       );
     });
 
     it('solo fecha: 00:00 de ese día en Bogotá (05:00 UTC), no medianoche UTC', () => {
-      expect(iso(parseBusinessDate('2026-10-21'))).toBe(
+      expect(iso(parseBusinessDate('2026-10-21', BOGOTA))).toBe(
         '2026-10-21T05:00:00.000Z',
       );
     });
 
     it('un Date se devuelve igual; formatos raros o fechas imposibles → Invalid Date', () => {
       const d = new Date('2026-10-21T13:00:00Z');
-      expect(parseBusinessDate(d)).toBe(d);
+      expect(parseBusinessDate(d, BOGOTA)).toBe(d);
       for (const bad of [
         '',
         'mañana',
@@ -99,9 +102,9 @@ describe('date.util (zona del negocio, 2.05)', () => {
         '2026-10-21T08:00:00+25:00',
         'Tue Oct 21 2026',
       ]) {
-        expect(isValidDate(parseBusinessDate(bad))).toBe(false);
+        expect(isValidDate(parseBusinessDate(bad, BOGOTA))).toBe(false);
       }
-      expect(isValidDate(parseBusinessDate('2028-02-29'))).toBe(true);
+      expect(isValidDate(parseBusinessDate('2028-02-29', BOGOTA))).toBe(true);
     });
 
     it('acepta otra zona del negocio (y su horario de verano)', () => {
@@ -117,10 +120,12 @@ describe('date.util (zona del negocio, 2.05)', () => {
 
   describe('salida y partes en la zona del negocio', () => {
     it('toBusinessIso: ISO con el offset de Bogotá', () => {
-      expect(toBusinessIso(new Date('2026-10-21T13:00:00Z'))).toBe(
+      expect(toBusinessIso(new Date('2026-10-21T13:00:00Z'), BOGOTA)).toBe(
         '2026-10-21T08:00:00.000-05:00',
       );
-      expect(zoneOffsetMinutes(new Date('2026-10-21T13:00:00Z'))).toBe(-300);
+      expect(zoneOffsetMinutes(new Date('2026-10-21T13:00:00Z'), BOGOTA)).toBe(
+        -300,
+      );
       expect(
         toBusinessIso(new Date('2026-07-01T08:00:00.5Z'), 'Europe/Madrid'),
       ).toBe('2026-07-01T10:00:00.500+02:00');
@@ -131,14 +136,16 @@ describe('date.util (zona del negocio, 2.05)', () => {
 
     it('toBusinessIso y parseBusinessDate son inversas', () => {
       const d = new Date('2026-03-08T07:30:15.250Z');
-      expect(parseBusinessDate(toBusinessIso(d)).getTime()).toBe(d.getTime());
+      expect(
+        parseBusinessDate(toBusinessIso(d, BOGOTA), BOGOTA).getTime(),
+      ).toBe(d.getTime());
     });
 
     it('cambio de día: las 21:00 en Bogotá ya son el día siguiente en UTC', () => {
-      const night = parseBusinessDate('2026-10-21T21:00:00');
+      const night = parseBusinessDate('2026-10-21T21:00:00', BOGOTA);
       expect(iso(night)).toBe('2026-10-22T02:00:00.000Z');
-      expect(businessDateKey(night)).toBe('2026-10-21');
-      expect(zonedParts(night)).toMatchObject({
+      expect(businessDateKey(night, BOGOTA)).toBe('2026-10-21');
+      expect(zonedParts(night, BOGOTA)).toMatchObject({
         year: 2026,
         month: 10,
         day: 21,
@@ -150,26 +157,26 @@ describe('date.util (zona del negocio, 2.05)', () => {
     it('medianoche en Bogotá frente a medianoche UTC', () => {
       const utcMidnight = new Date('2026-10-22T00:00:00Z');
       // 00:00 UTC del 22 = 19:00 del 21 en Bogotá
-      expect(businessDateKey(utcMidnight)).toBe('2026-10-21');
-      expect(iso(startOfBusinessDay(utcMidnight))).toBe(
+      expect(businessDateKey(utcMidnight, BOGOTA)).toBe('2026-10-21');
+      expect(iso(startOfBusinessDay(utcMidnight, BOGOTA))).toBe(
         '2026-10-21T05:00:00.000Z',
       );
-      expect(iso(endOfBusinessDay(utcMidnight))).toBe(
+      expect(iso(endOfBusinessDay(utcMidnight, BOGOTA))).toBe(
         '2026-10-22T04:59:59.999Z',
       );
       // 00:30 en Bogotá del 22 = 05:30 UTC del 22
-      const justAfter = parseBusinessDate('2026-10-22T00:30:00');
-      expect(businessDateKey(justAfter)).toBe('2026-10-22');
-      expect(iso(startOfBusinessDay(justAfter))).toBe(
+      const justAfter = parseBusinessDate('2026-10-22T00:30:00', BOGOTA);
+      expect(businessDateKey(justAfter, BOGOTA)).toBe('2026-10-22');
+      expect(iso(startOfBusinessDay(justAfter, BOGOTA))).toBe(
         '2026-10-22T05:00:00.000Z',
       );
-      expect(businessMinutesOfDay(justAfter)).toBe(30);
+      expect(businessMinutesOfDay(justAfter, BOGOTA)).toBe(30);
     });
 
     it('fin de mes y de año en Bogotá', () => {
-      const newYearsEve = parseBusinessDate('2026-12-31T22:00:00');
-      expect(businessDateKey(newYearsEve)).toBe('2026-12-31');
-      expect(iso(endOfBusinessDay(newYearsEve))).toBe(
+      const newYearsEve = parseBusinessDate('2026-12-31T22:00:00', BOGOTA);
+      expect(businessDateKey(newYearsEve, BOGOTA)).toBe('2026-12-31');
+      expect(iso(endOfBusinessDay(newYearsEve, BOGOTA))).toBe(
         '2027-01-01T04:59:59.999Z',
       );
     });
@@ -179,44 +186,44 @@ describe('date.util (zona del negocio, 2.05)', () => {
     const bogota = (wall: string) => new Date(`${wall}-05:00`);
 
     it('suma meses sin desbordar el fin de mes y conserva la hora', () => {
-      expect(addBusinessMonths(bogota('2026-01-31T00:00:00'), 1)).toEqual(
-        bogota('2026-02-28T00:00:00'),
-      );
-      expect(addBusinessMonths(bogota('2028-01-31T00:00:00'), 1)).toEqual(
-        bogota('2028-02-29T00:00:00'),
-      );
-      expect(addBusinessMonths(bogota('2026-08-31T10:30:00'), 6)).toEqual(
-        bogota('2027-02-28T10:30:00'),
-      );
-      expect(addBusinessMonths(bogota('2026-05-15T00:00:00'), 12)).toEqual(
-        bogota('2027-05-15T00:00:00'),
-      );
+      expect(
+        addBusinessMonths(bogota('2026-01-31T00:00:00'), 1, BOGOTA),
+      ).toEqual(bogota('2026-02-28T00:00:00'));
+      expect(
+        addBusinessMonths(bogota('2028-01-31T00:00:00'), 1, BOGOTA),
+      ).toEqual(bogota('2028-02-29T00:00:00'));
+      expect(
+        addBusinessMonths(bogota('2026-08-31T10:30:00'), 6, BOGOTA),
+      ).toEqual(bogota('2027-02-28T10:30:00'));
+      expect(
+        addBusinessMonths(bogota('2026-05-15T00:00:00'), 12, BOGOTA),
+      ).toEqual(bogota('2027-05-15T00:00:00'));
     });
 
     it('usa el calendario de Bogotá aunque en UTC ya sea otro día', () => {
       // 30 de enero 21:00 en Bogotá = 31 de enero 02:00 UTC
-      expect(addBusinessMonths(bogota('2026-01-30T21:00:00'), 1)).toEqual(
-        bogota('2026-02-28T21:00:00'),
-      );
+      expect(
+        addBusinessMonths(bogota('2026-01-30T21:00:00'), 1, BOGOTA),
+      ).toEqual(bogota('2026-02-28T21:00:00'));
     });
   });
 
   describe('textos', () => {
     it('fecha larga y hora en la zona del negocio', () => {
       const d = new Date('2026-10-21T13:00:00Z');
-      expect(formatBusinessLongDate(d)).toBe('miércoles 21 de octubre');
-      expect(formatBusinessTime(d)).toBe('8:00 AM');
-      expect(formatBusinessTime(new Date('2026-10-21T05:05:00Z'))).toBe(
+      expect(formatBusinessLongDate(d, BOGOTA)).toBe('miércoles 21 de octubre');
+      expect(formatBusinessTime(d, BOGOTA)).toBe('8:00 AM');
+      expect(formatBusinessTime(new Date('2026-10-21T05:05:00Z'), BOGOTA)).toBe(
         '12:05 AM',
       );
-      expect(formatBusinessTime(new Date('2026-10-21T20:30:00Z'))).toBe(
+      expect(formatBusinessTime(new Date('2026-10-21T20:30:00Z'), BOGOTA)).toBe(
         '3:30 PM',
       );
     });
   });
 
   describe('businessJsonReplacer (respuestas HTTP)', () => {
-    it('todo Date sale con el offset del negocio; el resto no cambia', () => {
+    it('todo Date sale con el offset de la zona del tenant de la petición; el resto no cambia', () => {
       const body = {
         date: new Date('2026-10-21T13:00:00Z'),
         nested: [{ created_at: new Date('2026-10-22T02:00:00Z') }],
@@ -225,14 +232,33 @@ describe('date.util (zona del negocio, 2.05)', () => {
         n: 1,
         empty: null,
       };
-      expect(JSON.parse(JSON.stringify(body, businessJsonReplacer))).toEqual({
+      const json = (timeZone: string | undefined) =>
+        JSON.parse(
+          runWithRequestTimeZone(timeZone, () =>
+            JSON.stringify(body, businessJsonReplacer),
+          ),
+        );
+      const rest = { invalid: null, text: '2026-10-21', n: 1, empty: null };
+      // Con la zona del tenant de la petición (6.02): su offset.
+      expect(json('America/Bogota')).toEqual({
         date: '2026-10-21T08:00:00.000-05:00',
         nested: [{ created_at: '2026-10-21T21:00:00.000-05:00' }],
-        invalid: null,
-        text: '2026-10-21',
-        n: 1,
-        empty: null,
+        ...rest,
       });
+      expect(json('America/Caracas')).toEqual({
+        date: '2026-10-21T09:00:00.000-04:00',
+        nested: [{ created_at: '2026-10-21T22:00:00.000-04:00' }],
+        ...rest,
+      });
+      // Sin tenant (rutas públicas o fuera de una petición): UTC.
+      expect(json(undefined)).toEqual({
+        date: '2026-10-21T13:00:00.000Z',
+        nested: [{ created_at: '2026-10-22T02:00:00.000Z' }],
+        ...rest,
+      });
+      expect(JSON.parse(JSON.stringify(body, businessJsonReplacer))).toEqual(
+        json(undefined),
+      );
     });
   });
 });

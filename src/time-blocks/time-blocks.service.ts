@@ -27,6 +27,7 @@ import {
 } from './constants/time-block.constants';
 import { TimeBlockResponseDto } from './dto/time-block.response.dto';
 import { isValidDate, parseBusinessDate } from '../common/utils/date.util';
+import { TenantSettingsService } from 'src/settings/tenant-settings.service';
 
 /**
  * Los bloques no tienen `owner_id`: pertenecen al profesional (`user`), y el
@@ -40,6 +41,7 @@ export class TimeBlocksService {
     private readonly usersService: UsersService,
     private readonly appointmentsService: AppointmentsService,
     private readonly dataSource: DataSource,
+    private readonly tenantSettings: TenantSettingsService,
   ) {}
 
   /** `where` de bloques del negocio (OR: del Owner o de sus empleados). */
@@ -113,9 +115,9 @@ export class TimeBlocksService {
     }
   }
 
-  /** Cadena ISO del DTO → `Date` (sin offset = hora del negocio). */
-  private toDate(value: string): Date {
-    const date = parseBusinessDate(value);
+  /** Cadena ISO del DTO → `Date` (sin offset = hora de pared en la zona del tenant, 6.02). */
+  private toDate(value: string, timeZone: string): Date {
+    const date = parseBusinessDate(value, timeZone);
     if (!isValidDate(date)) {
       throw new BadRequestException('Fecha inválida');
     }
@@ -171,8 +173,9 @@ export class TimeBlocksService {
     tenantId: string,
   ): Promise<TimeBlockResponseDto> {
     const { user_id, appointment_id, notes } = createTimeBlockDto;
-    const start = this.toDate(createTimeBlockDto.start_datetime);
-    const end = this.toDate(createTimeBlockDto.end_datetime);
+    const timeZone = await this.tenantSettings.getTimezone(tenantId);
+    const start = this.toDate(createTimeBlockDto.start_datetime, timeZone);
+    const end = this.toDate(createTimeBlockDto.end_datetime, timeZone);
     TimeBlock.validateDateRange(start, end);
 
     // Profesional y cita deben ser del negocio (si no, 404)
@@ -223,8 +226,15 @@ export class TimeBlocksService {
         tenantId,
       );
     }
-    if (start_datetime) timeBlock.start_datetime = this.toDate(start_datetime);
-    if (end_datetime) timeBlock.end_datetime = this.toDate(end_datetime);
+    if (start_datetime || end_datetime) {
+      const timeZone = await this.tenantSettings.getTimezone(tenantId);
+      if (start_datetime) {
+        timeBlock.start_datetime = this.toDate(start_datetime, timeZone);
+      }
+      if (end_datetime) {
+        timeBlock.end_datetime = this.toDate(end_datetime, timeZone);
+      }
+    }
     if (notes !== undefined) timeBlock.notes = notes;
 
     // Cualquier cambio de hueco (inicio, fin o profesional, aunque llegue solo

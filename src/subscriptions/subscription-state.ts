@@ -198,16 +198,18 @@ export function appointmentAllowance(
 
 /**
  * Fin del periodo pagado: `start + plan.duration_months` en el calendario del
- * negocio (antes se deducía del nombre del plan). Una duración inválida cuenta
- * como 1 mes.
+ * negocio, en SU zona (6.02; antes se deducía del nombre del plan). Una
+ * duración inválida cuenta como 1 mes.
  */
 export function planPeriodEnd(
   start: Date,
   plan: Pick<SubscriptionPlan, 'duration_months'>,
+  timeZone: string,
 ): Date {
   const months = Number(plan.duration_months);
   return addBusinessMonths(
     start,
     Number.isInteger(months) && months >= 1 ? months : 1,
+    timeZone,
   );
 }

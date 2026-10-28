@@ -16,10 +16,10 @@ import {
 import { ProfessionalStats } from './interfaces/professional-stats.interface';
 import { ClientStats } from './interfaces/client-stats.interface';
 import {
-  businessTimeZone,
   endOfBusinessDay,
   startOfBusinessDay,
 } from '../common/utils/date.util';
+import { TenantSettingsService } from '../settings/tenant-settings.service';
 
 /**
  * Estadísticas de ingresos (5.05: separadas de `PaymentsService`, que solo
@@ -35,7 +35,26 @@ export class PaymentStatsService {
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepository: Repository<Payment>,
+    private readonly tenantSettings: TenantSettingsService,
   ) {}
+
+  /**
+   * Días completos del negocio en SU zona (6.02): [00:00 del inicio, fin del
+   * día de `endDate`]. `startDate`/`endDate` ya llegan interpretados en esa
+   * zona (`@QueryDate`).
+   */
+  private async businessDays(
+    tenantId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<{ start: Date; end: Date; timeZone: string }> {
+    const timeZone = await this.tenantSettings.getTimezone(tenantId);
+    return {
+      start: startOfBusinessDay(startDate, timeZone),
+      end: endOfBusinessDay(endDate, timeZone),
+      timeZone,
+    };
+  }
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
     rethrowPaymentError(this.logger, error, options);
@@ -114,9 +133,10 @@ export class PaymentStatsService {
     tenantId: string,
   ): Promise<PaymentStats> {
     try {
-      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
-      startDate = startOfBusinessDay(startDate);
-      const adjustedEndDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      const adjustedEndDate = days.end;
 
       // Una sola consulta agregada en la BD (2.26: antes cargaba y registraba
       // en el log TODOS los pagos del negocio en cada llamada).
@@ -157,9 +177,10 @@ export class PaymentStatsService {
     tenantId: string,
   ): Promise<any> {
     try {
-      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
-      startDate = startOfBusinessDay(startDate);
-      const adjustedEndDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      const adjustedEndDate = days.end;
 
       // Totales del profesional en el periodo (2.26: sin las consultas de
       // diagnóstico ni la misma suma repetida en SQL nativo).
@@ -223,7 +244,7 @@ export class PaymentStatsService {
             professionalId,
             startDate.toISOString(),
             adjustedEndDate.toISOString(),
-            businessTimeZone(),
+            days.timeZone,
           ],
         );
       } catch (dailyError) {
@@ -277,9 +298,10 @@ export class PaymentStatsService {
     tenantId: string,
   ): Promise<PaymentMethodStats[]> {
     try {
-      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
-      startDate = startOfBusinessDay(startDate);
-      const adjustedEndDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      const adjustedEndDate = days.end;
 
       // Métodos estándar y propios (2.28: antes solo los estándar, y los
       // porcentajes no sumaban 100). Un pago con método propio cuenta como
@@ -342,9 +364,10 @@ export class PaymentStatsService {
     tenantId: string,
   ): Promise<PaymentComparisonStats> {
     try {
-      // Días completos del negocio: [00:00 del inicio, 23:59:59.999 del fin]
-      startDate = startOfBusinessDay(startDate);
-      const adjustedEndDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      const adjustedEndDate = days.end;
       const periodDuration = adjustedEndDate.getTime() - startDate.getTime();
 
       // Período anterior: misma duración y termina justo antes del actual
@@ -432,9 +455,10 @@ export class PaymentStatsService {
     tenantId: string,
   ): Promise<ServiceStats[]> {
     try {
-      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
-      startDate = startOfBusinessDay(startDate);
-      const adjustedEndDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      const adjustedEndDate = days.end;
 
       // 2.28: ingreso neto real por servicio (antes, precio de lista × nº de
       // pagos: con varios pagos por cita se contaba varias veces y los
@@ -478,9 +502,10 @@ export class PaymentStatsService {
     tenantId: string,
   ): Promise<ProfessionalStats[]> {
     try {
-      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
-      startDate = startOfBusinessDay(startDate);
-      const adjustedEndDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      const adjustedEndDate = days.end;
 
       // Primero obtenemos el total general para calcular porcentajes
       const totalStats = await this.getPaymentStats(
@@ -557,9 +582,10 @@ export class PaymentStatsService {
     limit: number = 10,
   ): Promise<ClientStats[]> {
     try {
-      // Días completos del negocio (BUSINESS_TIMEZONE)
-      startDate = startOfBusinessDay(startDate);
-      endDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      endDate = days.end;
 
       // Consulta para obtener estadísticas básicas por cliente
       const clientsQuery = await this.paymentRepository
@@ -633,9 +659,10 @@ export class PaymentStatsService {
     limit: number = 5,
   ): Promise<any[]> {
     try {
-      // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
-      startDate = startOfBusinessDay(startDate);
-      const adjustedEndDate = endOfBusinessDay(endDate);
+      // Días completos del negocio, en la zona del tenant (6.02)
+      const days = await this.businessDays(tenantId, startDate, endDate);
+      startDate = days.start;
+      const adjustedEndDate = days.end;
 
       // Consulta SQL nativa simplificada
       const entityManager = this.paymentRepository.manager;

@@ -29,6 +29,8 @@ import {
   futureMonday,
 } from './utils/writable-db';
 
+const BOGOTA = 'America/Bogota';
+
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-05:00$/;
 /** Lunes lejano sin citas en la BD de desarrollo. */
@@ -180,7 +182,7 @@ describe('Huecos libres 2.14 (e2e, solo lectura)', () => {
 
   it('hoy: no ofrece horas pasadas (2.21)', async () => {
     const now = Date.now();
-    const today = toBusinessIso(new Date(now)).slice(0, 10);
+    const today = toBusinessIso(new Date(now), BOGOTA).slice(0, 10);
     const res = await http
       .get(
         `/api/appointments/available-slots?professional_id=${owner.id}` +

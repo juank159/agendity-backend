@@ -2,6 +2,8 @@ import { NotFoundException } from '@nestjs/common';
 import { SubscriptionsService } from './subscriptions.service';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 
+const BOGOTA = 'America/Bogota';
+
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const PENDING_ATTEMPT = {
   id: 'att-1',
@@ -49,6 +51,7 @@ function build(found: any = null) {
     payments as any,
     wompi as any,
     { get: jest.fn() } as any,
+    { getTimezone: jest.fn(async () => BOGOTA) } as any,
   );
   return { service, subscriptions, plans, payments, wompi };
 }

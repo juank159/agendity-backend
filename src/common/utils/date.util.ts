@@ -1,30 +1,28 @@
-import { config } from 'dotenv';
+import { requestTimeZone } from '../context/request-time-zone';
 
 /**
- * Fechas y zona horaria del negocio (2.05). ÚNICO sitio que sabe de zonas.
+ * Fechas y zona horaria (2.05; por tenant desde 6.02, D-15). ÚNICO sitio que
+ * sabe de zonas.
  *
  * Reglas:
  * - En la BD todo es `timestamptz` (un instante). En el código, un `Date` es un
  *   instante: nunca leer sus getters locales (`getHours`, `getDay`, `setHours`…),
  *   porque dependen de la zona del proceso Node. Para "qué hora/día es en el
  *   negocio" usar `zonedParts`, `startOfBusinessDay`, etc.
- * - Entrada: `parseBusinessDate`. Un ISO **con** offset (`Z`, `-05:00`) se
- *   respeta; un ISO **sin** offset (lo que manda hoy la app con
- *   `toLocal().toIso8601String()`) es hora de `BUSINESS_TIMEZONE`, nunca la del
- *   servidor. Una fecha sola (`2026-10-21`) es las 00:00 de ese día en el negocio.
- * - Salida: los `Date` de las respuestas HTTP salen como ISO con el offset del
- *   negocio (`2026-10-21T08:00:00.000-05:00`) por `businessJsonReplacer`
- *   (registrado en `config/app.setup.ts`).
+ * - **Toda función recibe la zona explícita** (la del tenant:
+ *   `TenantSettingsService.getTimezone(tenantId)`). No hay zona implícita: dos
+ *   negocios en zonas distintas nunca se cruzan.
+ * - Entrada: `parseBusinessDate(valor, zona)`. Un ISO **con** offset (`Z`,
+ *   `-05:00`) se respeta; **sin** offset es hora de pared en la zona del
+ *   negocio; una fecha sola (`2026-10-21`) es las 00:00 de ese día allí.
+ * - Salida: los `Date` de las respuestas HTTP salen como ISO con el offset de
+ *   la zona del tenant que pide (`businessJsonReplacer` + `requestTimeZone`);
+ *   sin tenant (rutas públicas), en UTC (`Z`).
  * - Nunca pasar a TypeORM/pg una cadena sin offset para una columna de fecha:
  *   Postgres la interpretaría con la zona de la sesión. Pasar siempre un `Date`.
  *
  * Usa `Intl` (ICU completo de Node), sin librerías de zonas.
  */
-
-// Los `@Cron(..., { timeZone })` leen la zona al importar sus clases, antes de
-// que `ConfigModule.forRoot` cargue el `.env` (mismo patrón que
-// `config/data.postgres.source.ts`). `config()` no pisa variables ya definidas.
-config();
 
 export const DEFAULT_BUSINESS_TIMEZONE = 'America/Bogota';
 
@@ -81,8 +79,14 @@ export function isValidTimeZone(value: unknown): value is string {
   return normalizeTimeZone(value) !== null;
 }
 
-/** Zona IANA del negocio: `BUSINESS_TIMEZONE` o `America/Bogota`. Lanza si no es válida. */
-export function businessTimeZone(): string {
+/**
+ * Zona por defecto: `BUSINESS_TIMEZONE` o `America/Bogota`. Lanza si no es
+ * válida. Desde 6.02 (D-15) SOLO sirve como zona de un negocio nuevo (alta sin
+ * zona del dispositivo) y de respaldo (`TenantSettingsService` sin fila). La
+ * lógica de negocio usa siempre la zona del tenant
+ * (`TenantSettingsService.getTimezone`).
+ */
+export function defaultBusinessTimeZone(): string {
   const timeZone =
     process.env.BUSINESS_TIMEZONE?.trim() || DEFAULT_BUSINESS_TIMEZONE;
   try {
@@ -113,10 +117,7 @@ export function isValidDate(value: unknown): value is Date {
 }
 
 /** Minutos que la zona está por delante de UTC en ese instante (Bogotá: -300). */
-export function zoneOffsetMinutes(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): number {
+export function zoneOffsetMinutes(date: Date, timeZone: string): number {
   const parts: Record<string, number> = {};
   for (const { type, value } of formatterFor(timeZone).formatToParts(date)) {
     if (type !== 'literal') parts[type] = Number(value);
@@ -142,10 +143,7 @@ function utcMillis(p: WallClock): number {
 }
 
 /** Fecha y hora del instante en la zona (por defecto, la del negocio). */
-export function zonedParts(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): ZonedDateTime {
+export function zonedParts(date: Date, timeZone: string): ZonedDateTime {
   const shifted = new Date(
     date.getTime() + zoneOffsetMinutes(date, timeZone) * 60_000,
   );
@@ -166,10 +164,7 @@ export function zonedParts(
  * Instante de una hora de pared en la zona. Normaliza desbordes (día 32 = día
  * 1 del mes siguiente), como `Date.UTC`.
  */
-export function fromZonedParts(
-  wall: WallClock,
-  timeZone: string = businessTimeZone(),
-): Date {
+export function fromZonedParts(wall: WallClock, timeZone: string): Date {
   const wallAsUtc = utcMillis(wall);
   const first = zoneOffsetMinutes(new Date(wallAsUtc), timeZone);
   let time = wallAsUtc - first * 60_000;
@@ -195,7 +190,7 @@ function daysInMonth(year: number, month: number): number {
  */
 export function parseBusinessDate(
   value: string | Date,
-  timeZone: string = businessTimeZone(),
+  timeZone: string,
 ): Date {
   if (value instanceof Date) return value;
   const match = ISO_PATTERN.exec(String(value ?? '').trim());
@@ -239,10 +234,7 @@ export function parseBusinessDate(
 const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
 /** ISO 8601 con el offset de la zona: `2026-10-21T08:00:00.000-05:00`. */
-export function toBusinessIso(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): string {
+export function toBusinessIso(date: Date, timeZone: string): string {
   const offset = zoneOffsetMinutes(date, timeZone);
   const p = zonedParts(date, timeZone);
   const sign = offset < 0 ? '-' : '+';
@@ -255,19 +247,13 @@ export function toBusinessIso(
 }
 
 /** Día del negocio como `YYYY-MM-DD`. */
-export function businessDateKey(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): string {
+export function businessDateKey(date: Date, timeZone: string): string {
   const p = zonedParts(date, timeZone);
   return `${pad(p.year, 4)}-${pad(p.month)}-${pad(p.day)}`;
 }
 
 /** 00:00:00.000 del día del negocio en que cae el instante. */
-export function startOfBusinessDay(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): Date {
+export function startOfBusinessDay(date: Date, timeZone: string): Date {
   const { year, month, day } = zonedParts(date, timeZone);
   return fromZonedParts({ year, month, day }, timeZone);
 }
@@ -278,10 +264,7 @@ export function startOfBusinessDay(
  * (`2026-10-21`) incluye ese día entero: devuelve las 00:00 del día siguiente
  * del negocio. Inválido → `Invalid Date`, como `parseBusinessDate`.
  */
-export function parseBusinessRangeEnd(
-  value: string,
-  timeZone: string = businessTimeZone(),
-): Date {
+export function parseBusinessRangeEnd(value: string, timeZone: string): Date {
   const date = parseBusinessDate(value, timeZone);
   if (!isValidDate(date) || !DATE_ONLY_PATTERN.test(String(value).trim())) {
     return date;
@@ -293,10 +276,7 @@ export function parseBusinessRangeEnd(
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Último milisegundo (23:59:59.999) del día del negocio en que cae el instante. */
-export function endOfBusinessDay(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): Date {
+export function endOfBusinessDay(date: Date, timeZone: string): Date {
   const { year, month, day } = zonedParts(date, timeZone);
   return new Date(
     fromZonedParts({ year, month, day: day + 1 }, timeZone).getTime() - 1,
@@ -304,10 +284,7 @@ export function endOfBusinessDay(
 }
 
 /** Minutos desde las 00:00 del negocio (08:30 → 510). */
-export function businessMinutesOfDay(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): number {
+export function businessMinutesOfDay(date: Date, timeZone: string): number {
   const p = zonedParts(date, timeZone);
   return p.hour * 60 + p.minute + p.second / 60 + p.millisecond / 60_000;
 }
@@ -319,7 +296,7 @@ export function businessMinutesOfDay(
 export function addBusinessMonths(
   date: Date,
   months: number,
-  timeZone: string = businessTimeZone(),
+  timeZone: string,
 ): Date {
   const p = zonedParts(date, timeZone);
   const index = p.month - 1 + months;
@@ -356,27 +333,23 @@ const MONTHS_ES = [
 ];
 
 /** `martes 21 de octubre`, en la zona del negocio (textos de recordatorios). */
-export function formatBusinessLongDate(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): string {
+export function formatBusinessLongDate(date: Date, timeZone: string): string {
   const p = zonedParts(date, timeZone);
   return `${WEEKDAYS_ES[p.weekday - 1]} ${p.day} de ${MONTHS_ES[p.month - 1]}`;
 }
 
 /** `8:00 AM` / `3:30 PM`, en la zona del negocio (textos de recordatorios). */
-export function formatBusinessTime(
-  date: Date,
-  timeZone: string = businessTimeZone(),
-): string {
+export function formatBusinessTime(date: Date, timeZone: string): string {
   const { hour, minute } = zonedParts(date, timeZone);
   return `${hour % 12 || 12}:${pad(minute)} ${hour < 12 ? 'AM' : 'PM'}`;
 }
 
 /**
- * `replacer` de JSON para las respuestas HTTP: todo `Date` sale como ISO con el
- * offset del negocio (`toBusinessIso`); un `Date` inválido, como `null` (igual
- * que `JSON.stringify`). Se registra en `config/app.setup.ts`.
+ * `replacer` de JSON para las respuestas HTTP (registrado en
+ * `config/app.setup.ts`): todo `Date` sale como ISO con el offset de la zona
+ * del tenant de la petición (`requestTimeZone()`, que fija
+ * `TenantTimeZoneInterceptor`); sin tenant (rutas públicas), en UTC con `Z`.
+ * Un `Date` inválido sale como `null` (igual que `JSON.stringify`).
  */
 export function businessJsonReplacer(
   this: Record<string, unknown>,
@@ -384,6 +357,8 @@ export function businessJsonReplacer(
   value: unknown,
 ): unknown {
   const raw = this?.[key];
-  if (raw instanceof Date) return isValidDate(raw) ? toBusinessIso(raw) : null;
-  return value;
+  if (!(raw instanceof Date)) return value;
+  if (!isValidDate(raw)) return null;
+  const timeZone = requestTimeZone();
+  return timeZone ? toBusinessIso(raw, timeZone) : raw.toISOString();
 }

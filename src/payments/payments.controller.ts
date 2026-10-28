@@ -18,7 +18,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Tenant, tenantIdFrom } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
-import { ParseDatePipe } from 'src/common/pipes/parse-date.pipe';
+import { QueryDate } from 'src/common/decorators/query-date.decorator';
 import { AuthUser, isOnlyEmployee } from '../auth/interfaces';
 
 @Controller('payments')
@@ -56,8 +56,8 @@ export class PaymentsController {
   @Get('stats')
   @hasRoles(JwtRoles.Owner)
   getStats(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Tenant() tenantId: string,
   ) {
     return this.paymentStatsService.getPaymentStats(
@@ -70,8 +70,8 @@ export class PaymentsController {
   @Get('employee-stats')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   async getEmployeeStats(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Query('professionalId') professionalId: string,
     @CurrentUser() user: AuthUser,
   ) {
@@ -126,8 +126,8 @@ export class PaymentsController {
   @Get('stats/by-method')
   @hasRoles(JwtRoles.Owner)
   getStatsByMethod(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Tenant() tenantId: string,
   ) {
     return this.paymentStatsService.getPaymentStatsByMethod(
@@ -140,8 +140,8 @@ export class PaymentsController {
   @Get('stats/comparison')
   @hasRoles(JwtRoles.Owner)
   getStatsComparison(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Tenant() tenantId: string,
   ) {
     return this.paymentStatsService.getPaymentStatsComparison(
@@ -154,8 +154,8 @@ export class PaymentsController {
   @Get('stats/by-service')
   @hasRoles(JwtRoles.Owner)
   getStatsByService(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Tenant() tenantId: string,
   ) {
     return this.paymentStatsService.getPaymentStatsByService(
@@ -168,8 +168,8 @@ export class PaymentsController {
   @Get('stats/by-professional')
   @hasRoles(JwtRoles.Owner)
   getStatsByProfessional(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Tenant() tenantId: string,
   ) {
     return this.paymentStatsService.getPaymentStatsByProfessional(
@@ -182,8 +182,8 @@ export class PaymentsController {
   @Get('stats/by-client')
   @hasRoles(JwtRoles.Owner)
   getStatsByClient(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Tenant() tenantId: string,
   ) {
@@ -198,8 +198,8 @@ export class PaymentsController {
   @Get('stats/top-clients')
   @hasRoles(JwtRoles.Owner)
   getTopClients(
-    @Query('startDate', ParseDatePipe) startDate: Date,
-    @Query('endDate', ParseDatePipe) endDate: Date,
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
     @Query('limit', new DefaultValuePipe(5), ParseIntPipe) limit: number,
     @Tenant() tenantId: string,
   ) {

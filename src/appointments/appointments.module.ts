@@ -11,6 +11,7 @@ import { AppointmentReminderService } from './appointment-reminder.service';
 import { WhatsappModule } from 'src/whatsapp/whatsapp.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SubscriptionsModule } from 'src/subscriptions/subscriptions.module';
+import { SettingsModule } from 'src/settings/settings.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { SubscriptionsModule } from 'src/subscriptions/subscriptions.module';
     ClientsModule,
     UsersModule,
     SubscriptionsModule,
+    SettingsModule,
     ServicesModule,
     WhatsappModule,
     ScheduleModule.forRoot(),

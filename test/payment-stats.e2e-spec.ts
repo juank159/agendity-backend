@@ -143,11 +143,9 @@ describeWritable(
     let week: number;
 
     const auth = () => ({ Authorization: `Bearer ${token}` });
-    const day = new Date();
-    const ymd = new Intl.DateTimeFormat('en-CA', {
-      timeZone: process.env.BUSINESS_TIMEZONE || 'America/Bogota',
-    }).format(day);
-    const range = `startDate=${ymd}&endDate=${ymd}`;
+    // "Hoy" en la zona del negocio del Owner (6.02: la de su configuración).
+    let ymd: string;
+    let range: string;
 
     beforeAll(async () => {
       ({ app, http, close } = await createE2EApp());
@@ -156,6 +154,11 @@ describeWritable(
       jest.spyOn(app.get(EventEmitter2), 'emit').mockImplementation(() => true);
       ({ owner } = await findDevOwnerAndEmployee(ds));
       token = signToken(owner, ['Owner']);
+      const { timezone } = (await http.get('/api/settings').set(auth())).body;
+      ymd = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+      }).format(new Date());
+      range = `startDate=${ymd}&endDate=${ymd}`;
       client = await ds
         .getRepository(Client)
         .findOneOrFail({ where: { ownerId: owner.id } });

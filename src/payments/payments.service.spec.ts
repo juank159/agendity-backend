@@ -9,6 +9,8 @@ import {
 import { PaymentsService } from './payments.service';
 import { PaymentStatsService } from './payment-stats.service';
 
+const BOGOTA = 'America/Bogota';
+
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const APPOINTMENT = 'a0000000-0000-4000-8000-000000000001';
 const PAYMENT = 'p0000000-0000-4000-8000-000000000001';
@@ -367,7 +369,10 @@ describe('PaymentStatsService (estadísticas, 2.28; separadas en 5.05)', () => {
       },
     };
     return {
-      service: new PaymentStatsService(paymentRepo as any),
+      service: new PaymentStatsService(
+        paymentRepo as any,
+        { getTimezone: jest.fn(async () => BOGOTA) } as any,
+      ),
       paymentRepo,
     };
   };

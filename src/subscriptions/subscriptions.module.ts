@@ -12,11 +12,13 @@ import { SubscriptionsController } from './controllers/subscriptions.controller'
 import { WompiWebhookController } from './controllers/wompi-webhook.controller';
 import { DemoPaymentModule } from './demo-payment.module';
 import { SubscriptionsService } from './services/subscriptions.service';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([SubscriptionPlan, Subscription, PaymentHistory]),
     ConfigModule,
+    SettingsModule,
     // La página de pago simulada solo existe en desarrollo.
     // `registerWhen` espera a `ConfigModule.forRoot()` (en AppModule) y, por defecto,
     // lanza un error no capturado si tarda más de 5 s. En un arranque en frío con
