@@ -174,7 +174,7 @@ describeWritable(
       expect(toggle.body.code).toBe('EMAIL_NOT_VERIFIED');
 
       const res = await book();
-      expect(res.status).toBe(400); // HTTP legado (D-11)
+      expect(res.status).toBe(409); // §3 (2.34; antes 400, D-11)
       expect(res.body.code).toBe('PROFESSIONAL_INACTIVE');
       expect((await employeeRow()).isActive).toBe(false);
     });

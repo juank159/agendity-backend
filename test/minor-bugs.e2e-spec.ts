@@ -122,6 +122,23 @@ describe('Bugs menores 2.08 (e2e, solo lectura)', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('GET /appointments: startDate/endDate opcionales; inválida o invertida → 400 BAD_REQUEST (2.34)', async () => {
+    const past = await http
+      .get('/api/appointments?startDate=1980-01-01&endDate=1980-01-02')
+      .set(auth(ownerToken));
+    expect([past.status, past.body]).toEqual([200, []]);
+
+    const bad = await http
+      .get('/api/appointments?startDate=nada')
+      .set(auth(ownerToken));
+    expect([bad.status, bad.body.code]).toEqual([400, 'BAD_REQUEST']);
+
+    const inverted = await http
+      .get('/api/appointments?startDate=2030-01-03&endDate=2030-01-01')
+      .set(auth(ownerToken));
+    expect([inverted.status, inverted.body.code]).toEqual([400, 'BAD_REQUEST']);
+  });
+
   it('POST /time-blocks valida las fechas como cadenas ISO (rango invertido → 400 de la regla, no del DTO)', async () => {
     const res = await http.post('/api/time-blocks').set(auth(ownerToken)).send({
       user_id: owner.id,
@@ -291,7 +308,7 @@ describeWritable(
       expect(appt.status).toBe(201);
 
       const over = await postBlock(plus(start, 10), plus(start, 20));
-      expect([over.status, over.body.code]).toEqual([400, 'SLOT_UNAVAILABLE']);
+      expect([over.status, over.body.code]).toEqual([409, 'SLOT_UNAVAILABLE']);
       expect(over.body.message).toBe('Horario no disponible');
 
       // Mover un bloqueo existente encima de la cita también se rechaza.
@@ -302,7 +319,7 @@ describeWritable(
         .set(auth(ownerToken))
         .send({ start_datetime: plus(start, 5).toISOString() });
       expect([moved.status, moved.body.code]).toEqual([
-        400,
+        409,
         'SLOT_UNAVAILABLE',
       ]);
 
@@ -352,6 +369,58 @@ describeWritable(
           .delete(`/api/schedules/${created.body.id}`)
           .set(auth(ownerToken));
         expect(removed.status).toBe(200);
+      }
+    });
+
+    it('GET /appointments filtra por [startDate, endDate); endDate solo fecha incluye el día; el Employee solo ve las suyas (2.34)', async () => {
+      const morning = nextMonday(10);
+      const afternoon = plus(morning, 5 * 60); // 15:00 del mismo día
+      const ids: string[] = [];
+      for (const date of [morning, afternoon]) {
+        const res = await http
+          .post('/api/appointments')
+          .set(auth(ownerToken))
+          .send({
+            client_id: client.id,
+            professional_id: owner.id,
+            service_ids: [service.id],
+            date: date.toISOString(),
+          });
+        expect(res.status).toBe(201);
+        ids.push(res.body.id);
+      }
+      const list = async (query: string, token = ownerToken) => {
+        const res = await http
+          .get(`/api/appointments?${query}`)
+          .set(auth(token));
+        expect(res.status).toBe(200);
+        return res.body.map((a: { id: string }) => a.id);
+      };
+
+      // Fin exclusivo: la de las 15:00 queda fuera.
+      expect(
+        await list(
+          `startDate=${encodeURIComponent(morning.toISOString())}&endDate=${encodeURIComponent(afternoon.toISOString())}`,
+        ),
+      ).toEqual([ids[0]]);
+      // Solo fecha (día del negocio): las dos, en orden.
+      const day = morning.toISOString().slice(0, 10);
+      expect(await list(`startDate=${day}&endDate=${day}`)).toEqual(ids);
+      // Solo inicio: desde las 15:00 (incluida).
+      expect(
+        await list(`startDate=${encodeURIComponent(afternoon.toISOString())}`),
+      ).toContain(ids[1]);
+      expect(
+        await list(`startDate=${encodeURIComponent(afternoon.toISOString())}`),
+      ).not.toContain(ids[0]);
+      // Sin ningún extremo: todas las del alcance (como antes).
+      expect(await list('')).toEqual(expect.arrayContaining(ids));
+      // Employee: mismo rango, sin las citas de otro profesional.
+      if (employee) {
+        const employeeToken = signToken(employee, ['Employee']);
+        expect(
+          await list(`startDate=${day}&endDate=${day}`, employeeToken),
+        ).toEqual([]);
       }
     });
 

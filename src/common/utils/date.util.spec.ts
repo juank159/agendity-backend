@@ -1,4 +1,5 @@
 import {
+  parseBusinessRangeEnd,
   addBusinessMonths,
   businessDateKey,
   businessJsonReplacer,
@@ -231,5 +232,33 @@ describe('date.util (zona del negocio, 2.05)', () => {
         empty: null,
       });
     });
+  });
+});
+
+describe('parseBusinessRangeEnd (fin exclusivo de un rango, 2.34)', () => {
+  const TZ = 'America/Bogota';
+  it('solo fecha: 00:00 del día siguiente del negocio (incluye el día)', () => {
+    expect(parseBusinessRangeEnd('2026-10-21', TZ).toISOString()).toBe(
+      '2026-10-22T05:00:00.000Z',
+    );
+    expect(parseBusinessRangeEnd('2026-12-31', TZ).toISOString()).toBe(
+      '2027-01-01T05:00:00.000Z',
+    );
+  });
+  it('instante con o sin offset: tal cual', () => {
+    expect(
+      parseBusinessRangeEnd('2026-10-21T08:00:00-05:00', TZ).toISOString(),
+    ).toBe('2026-10-21T13:00:00.000Z');
+    expect(parseBusinessRangeEnd('2026-10-21T08:00', TZ).toISOString()).toBe(
+      '2026-10-21T13:00:00.000Z',
+    );
+  });
+  it('inválida: Invalid Date', () => {
+    expect(Number.isNaN(parseBusinessRangeEnd('nada', TZ).getTime())).toBe(
+      true,
+    );
+    expect(
+      Number.isNaN(parseBusinessRangeEnd('2026-02-31', TZ).getTime()),
+    ).toBe(true);
   });
 });

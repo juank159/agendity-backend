@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ThrottlerException } from '@nestjs/throttler';
 import { EntityNotFoundError, QueryFailedError } from 'typeorm';
-import { ErrorCode, LEGACY_STATUS } from '../constants/error-codes';
+import { ErrorCode } from '../constants/error-codes';
 import { BusinessException } from '../exceptions/business.exception';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
@@ -37,17 +37,16 @@ describe('AllExceptionsFilter (formato §3)', () => {
     });
   });
 
-  it('BusinessException conserva code, texto y HTTP (incluido el legado)', () => {
+  it('BusinessException conserva code, texto y HTTP (el del §3 desde 2.34)', () => {
     expect(
       filter.toBody(
         new BusinessException(
           ErrorCode.SLOT_UNAVAILABLE,
           'Horario no disponible',
-          LEGACY_STATUS.SLOT_UNAVAILABLE,
         ),
       ),
     ).toEqual({
-      statusCode: 400,
+      statusCode: 409,
       code: 'SLOT_UNAVAILABLE',
       message: 'Horario no disponible',
     });

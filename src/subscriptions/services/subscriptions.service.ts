@@ -21,7 +21,7 @@ import { CreateSubscriptionPlanDto } from '../dto/create-subscription-plan.dto';
 import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
 import { ConfigService } from '@nestjs/config';
-import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
+import { ErrorCode } from 'src/common/constants/error-codes';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { Appointment } from 'src/appointments/entities/appointment.entity';
 import {
@@ -284,7 +284,7 @@ export class SubscriptionsService {
    * Consume una cita del cupo del negocio. Debe llamarse DENTRO de la
    * transacción que crea la cita: si la creación falla, el rollback devuelve
    * la cita al cupo. Si no se puede crear, lanza `TRIAL_LIMIT_REACHED` o
-   * `SUBSCRIPTION_INACTIVE` (HTTP legado 400, D-11).
+   * `SUBSCRIPTION_INACTIVE` (402 desde 2.34; antes 400, D-11).
    *
    * Concurrencia: un advisory lock por negocio serializa los consumos (también
    * cuando aún no hay fila y hay que crearla) y la fila se bloquea con
@@ -368,7 +368,6 @@ export class SubscriptionsService {
     throw new BusinessException(
       code,
       allowance.message || SUBSCRIPTION_MESSAGES.inactive,
-      LEGACY_STATUS[code],
     );
   }
 

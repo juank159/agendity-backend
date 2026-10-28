@@ -60,21 +60,6 @@ export const ERROR_CODE_STATUS: Record<ErrorCode, HttpStatus> = {
   INTERNAL_ERROR: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 
-/**
- * Compatibilidad temporal con la app actual, que decide por el HTTP y por el texto
- * (no por `code`). Estos errores conservan su HTTP de siempre hasta que Flutter
- * migre la feature correspondiente al `ErrorMapper` por `code` (4.05, 4.07, 4.09).
- * Después se quita el `status` explícito y se usa el del §3.
- */
-export const LEGACY_STATUS = {
-  /** appointments_controller.dart comprueba `statusCode == 400` para el diálogo de suscripción. */
-  SLOT_UNAVAILABLE: HttpStatus.BAD_REQUEST,
-  /** Mismo camino de error que el resto de fallos al crear/editar una cita en la app. */
-  PROFESSIONAL_INACTIVE: HttpStatus.BAD_REQUEST,
-  TRIAL_LIMIT_REACHED: HttpStatus.BAD_REQUEST,
-  SUBSCRIPTION_INACTIVE: HttpStatus.BAD_REQUEST,
-} as const;
-
 export function isErrorCode(value: unknown): value is ErrorCode {
   return (
     typeof value === 'string' &&

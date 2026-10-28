@@ -240,6 +240,26 @@ export function startOfBusinessDay(
   return fromZonedParts({ year, month, day }, timeZone);
 }
 
+/**
+ * Fin EXCLUSIVO de un rango `[inicio, fin)` recibido como texto (2.34). Un
+ * instante (con o sin offset y con hora) se usa tal cual; solo fecha
+ * (`2026-10-21`) incluye ese día entero: devuelve las 00:00 del día siguiente
+ * del negocio. Inválido → `Invalid Date`, como `parseBusinessDate`.
+ */
+export function parseBusinessRangeEnd(
+  value: string,
+  timeZone: string = businessTimeZone(),
+): Date {
+  const date = parseBusinessDate(value, timeZone);
+  if (!isValidDate(date) || !DATE_ONLY_PATTERN.test(String(value).trim())) {
+    return date;
+  }
+  const { year, month, day } = zonedParts(date, timeZone);
+  return fromZonedParts({ year, month, day: day + 1 }, timeZone);
+}
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
 /** Último milisegundo (23:59:59.999) del día del negocio en que cae el instante. */
 export function endOfBusinessDay(
   date: Date,

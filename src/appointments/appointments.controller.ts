@@ -26,6 +26,7 @@ import { AppointmentReminderService } from './appointment-reminder.service';
 import { AuthUser } from '../auth/interfaces';
 import { appointmentScopeOf } from './appointment-scope';
 import { isValidDate, parseBusinessDate } from '../common/utils/date.util';
+import { ParseDatePipe } from '../common/pipes/parse-date.pipe';
 
 @Controller('appointments')
 export class AppointmentsController {
@@ -90,13 +91,23 @@ export class AppointmentsController {
   /**
    * Citas del negocio. Un Employee (que no es Owner) solo ve las suyas
    * (`professionalId = su id`); el Owner ve todas las del negocio.
-   * Los query `startDate`/`endDate` que manda la app se ignoran (como antes:
-   * el filtro por fechas nunca se implementó en esta ruta).
+   * `startDate`/`endDate` opcionales (2.34): citas que empiezan en
+   * `[startDate, endDate)`. ISO con offset = ese instante; sin offset = hora
+   * del negocio; `endDate` solo fecha incluye ese día entero.
    */
   @Get()
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
-  async findAll(@CurrentUser() user: AuthUser) {
-    return this.appointmentsService.findAll(appointmentScopeOf(user));
+  async findAll(
+    @CurrentUser() user: AuthUser,
+    @Query('startDate', new ParseDatePipe({ optional: true })) startDate?: Date,
+    @Query('endDate', new ParseDatePipe({ optional: true, rangeEnd: true }))
+    endDate?: Date,
+  ) {
+    return this.appointmentsService.findAll(
+      appointmentScopeOf(user),
+      startDate,
+      endDate,
+    );
   }
 
   // Las rutas estáticas van ANTES de ':id' (si no, ':id' + ParseUUIDPipe las captura con 400).
@@ -171,7 +182,10 @@ export class AppointmentsController {
     );
   }
 
-  /** Completa la cita (solo desde CONFIRMED). Mismo alcance que cancelar. */
+  /**
+   * Completa la cita desde PENDING (sin pagar, 2.15) o CONFIRMED; COMPLETED
+   * es un no-op y CANCELLED, 409. Mismo alcance que cancelar.
+   */
   @Patch(':id/complete')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
   complete(

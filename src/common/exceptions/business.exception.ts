@@ -5,7 +5,7 @@ import { ERROR_CODE_STATUS, ErrorCode } from '../constants/error-codes';
  * Error de negocio con `code` estable (ARQUITECTURA.md §3).
  * El filtro global lo serializa como `{ statusCode, code, message }`.
  *
- * @param status HTTP explícito solo para compatibilidad (ver `LEGACY_STATUS`);
+ * @param status HTTP explícito (excepcional; desde 2.34 ningún código usa HTTP legado);
  *               por defecto, el del catálogo.
  */
 export class BusinessException extends HttpException {

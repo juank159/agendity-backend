@@ -299,7 +299,7 @@ describeWritable(
         const res = await book(time);
         expect([time, res.status, res.body.code]).toEqual([
           time,
-          400,
+          409,
           'SLOT_UNAVAILABLE',
         ]);
       }
@@ -334,7 +334,7 @@ describeWritable(
       expect(slots).toContain('16:00');
       expect(await listSlots(employeeToken)).toEqual(slots);
       const res = await book('15:30');
-      expect([res.status, res.body.code]).toEqual([400, 'SLOT_UNAVAILABLE']);
+      expect([res.status, res.body.code]).toEqual([409, 'SLOT_UNAVAILABLE']);
     });
   },
 );

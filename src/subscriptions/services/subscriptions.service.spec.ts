@@ -217,14 +217,14 @@ describe('SubscriptionsService.consumeAppointmentQuota (2.03)', () => {
     ]);
   });
 
-  it('trial agotado: TRIAL_LIMIT_REACHED con HTTP 400 (D-11) y sin UPDATE', async () => {
+  it('trial agotado: TRIAL_LIMIT_REACHED con HTTP 402 (2.34) y sin UPDATE', async () => {
     const { service } = build();
     const { manager, log } = fakeManager(trial(20));
     const error = await service
       .consumeAppointmentQuota(TENANT, manager, NOW)
       .catch((e) => e);
     expect(error).toBeInstanceOf(BusinessException);
-    expect(error.getStatus()).toBe(400);
+    expect(error.getStatus()).toBe(402);
     expect(error.getResponse()).toMatchObject({
       code: 'TRIAL_LIMIT_REACHED',
       message:
@@ -296,7 +296,7 @@ describe('SubscriptionsService.consumeAppointmentQuota (2.03)', () => {
     expect(where.created_at.value).toEqual(start);
   });
 
-  it('activa vencida: SUBSCRIPTION_INACTIVE (400) sin escribir', async () => {
+  it('activa vencida: SUBSCRIPTION_INACTIVE (402, 2.34) sin escribir', async () => {
     const { service } = build();
     const { manager, log } = fakeManager({
       id: 's',
@@ -307,7 +307,7 @@ describe('SubscriptionsService.consumeAppointmentQuota (2.03)', () => {
     const error = await service
       .consumeAppointmentQuota(TENANT, manager, NOW)
       .catch((e) => e);
-    expect(error.getStatus()).toBe(400);
+    expect(error.getStatus()).toBe(402);
     expect(error.getResponse()).toMatchObject({
       code: 'SUBSCRIPTION_INACTIVE',
       message: 'Tu suscripción ha expirado. Por favor, renueva tu plan.',

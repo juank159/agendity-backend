@@ -8,8 +8,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Repository,
-  Between,
+  And,
   FindOptionsWhere,
+  LessThan,
+  MoreThanOrEqual,
   DataSource,
   EntityManager,
   QueryFailedError,
@@ -29,7 +31,7 @@ import { ServicesService } from '../services/services.service';
 import { RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { BusinessException } from 'src/common/exceptions/business.exception';
-import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
+import { ErrorCode } from 'src/common/constants/error-codes';
 import {
   AppointmentPaymentStatus,
   AppointmentStatus,
@@ -176,7 +178,7 @@ export class AppointmentsService {
 
       const savedAppointment = await this.dataSource.transaction(
         async (manager) => {
-          // Lanza TRIAL_LIMIT_REACHED / SUBSCRIPTION_INACTIVE (HTTP 400 legado).
+          // Lanza TRIAL_LIMIT_REACHED / SUBSCRIPTION_INACTIVE (402 desde 2.34).
           // Orden de locks: negocio (cupo) → profesional (hueco). `update` solo
           // toma el del profesional, así que no hay ciclo (sin deadlock).
           await this.subscriptionsService.consumeAppointmentQuota(
@@ -317,7 +319,6 @@ export class AppointmentsService {
       throw new BusinessException(
         ErrorCode.PROFESSIONAL_INACTIVE,
         'El profesional no está activo y no puede recibir citas',
-        LEGACY_STATUS.PROFESSIONAL_INACTIVE,
       );
     }
   }
@@ -334,7 +335,7 @@ export class AppointmentsService {
    *    propia (`excludeAppointmentId`, al editar).
    * Intervalos semiabiertos [inicio, fin): una cita puede empezar justo cuando
    * termina otra. Cualquier fallo → `SLOT_UNAVAILABLE` "Horario no disponible"
-   * (la app muestra su diálogo comparando ese texto; HTTP 400 legado, D-11).
+   * (409; la app decide por `code`; hasta 2.34 salía con 400, D-11).
    */
   async assertSlotAvailable(
     manager: EntityManager,
@@ -485,7 +486,7 @@ export class AppointmentsService {
    * profesional, salvo la cita a la que el bloqueo está ligado
    * (`excludeAppointmentId`). Toma el mismo lock que las citas: llamar DENTRO de
    * la transacción que guarda el bloqueo. Falla con el mismo error que una cita
-   * (`SLOT_UNAVAILABLE` "Horario no disponible", HTTP 400 legado).
+   * (`SLOT_UNAVAILABLE` "Horario no disponible", 409).
    */
   async assertNoAppointmentOverlap(
     manager: EntityManager,
@@ -511,7 +512,6 @@ export class AppointmentsService {
     throw new BusinessException(
       ErrorCode.SLOT_UNAVAILABLE,
       'Horario no disponible',
-      LEGACY_STATUS.SLOT_UNAVAILABLE,
     );
   }
 
@@ -784,15 +784,30 @@ export class AppointmentsService {
    * Citas visibles para el alcance (todas las del negocio para el Owner; las
    * suyas para el Employee), opcionalmente entre dos fechas.
    */
+  /**
+   * Citas del alcance que EMPIEZAN en `[startDate, endDate)` (2.34). Cada
+   * extremo es opcional; sin ninguno, todas las del alcance (como antes).
+   * Inicio posterior al fin → 400 `BAD_REQUEST` (como una fecha inválida).
+   */
   async findAll(
     scope: AppointmentScope,
     startDate?: Date,
     endDate?: Date,
   ): Promise<Appointment[]> {
+    if (startDate && endDate && startDate.getTime() > endDate.getTime()) {
+      throw new BusinessException(
+        ErrorCode.BAD_REQUEST,
+        'startDate no puede ser posterior a endDate',
+      );
+    }
     try {
       const where: FindOptionsWhere<Appointment> = this.scopeWhere(scope);
       if (startDate && endDate) {
-        where.date = Between(startDate, endDate);
+        where.date = And(MoreThanOrEqual(startDate), LessThan(endDate));
+      } else if (startDate) {
+        where.date = MoreThanOrEqual(startDate);
+      } else if (endDate) {
+        where.date = LessThan(endDate);
       }
 
       return await this.appointmentRepository.find({

@@ -266,10 +266,10 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
 
   const expectSlotUnavailable = (error: any) => {
     expect(error).toBeInstanceOf(BusinessException);
-    expect(error.getStatus()).toBe(400); // HTTP legado (D-11)
+    expect(error.getStatus()).toBe(409); // §3 (2.34; antes 400, D-11)
     expect(error.getResponse()).toMatchObject({
       code: 'SLOT_UNAVAILABLE',
-      message: 'Horario no disponible', // la app compara este texto
+      message: 'Horario no disponible',
     });
   };
 
@@ -362,7 +362,7 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
     const { service, users, subscriptions, txRepo } = build();
     users.findTenantMember.mockResolvedValue({ id: EMPLOYEE, isActive: false });
     const error = await service.create(dto, TENANT).catch((e) => e);
-    expect(error.getStatus()).toBe(400);
+    expect(error.getStatus()).toBe(409); // §3 (2.34)
     expect(error.getResponse()).toMatchObject({
       code: 'PROFESSIONAL_INACTIVE',
     });
