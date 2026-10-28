@@ -3,6 +3,7 @@
  * `E2E_WRITABLE_DB=<copia> DB_NAME=<copia>` y las migraciones aplicadas en la copia.
  * - 2.20: el email del cliente es opcional (columna nullable, `ClientEmailNullable`).
  * - 2.30: los duplicados salen con `DUPLICATE_PHONE`/`DUPLICATE_EMAIL`.
+ * - 2.31: la migración `ClientFakeEmailToNull` dejó en null los emails de relleno.
  * - 2.32: el Employee crea y edita clientes, pero no los borra (solo el Owner).
  */
 import { INestApplication } from '@nestjs/common';
@@ -54,6 +55,14 @@ describeWritable(
         expect(res.status).toBe(201);
         expect(res.body.email).toBeNull();
       }
+    });
+
+    it('ningún cliente conserva el email de relleno no-email@example.com (migración 2.31)', async () => {
+      const [{ fake }] = await ds.query(
+        `SELECT count(*)::int AS fake FROM clients
+          WHERE lower(email) = 'no-email@example.com'`,
+      );
+      expect(fake).toBe(0);
     });
 
     it('teléfono repetido sin email: el conflicto es del teléfono, no del email', async () => {
