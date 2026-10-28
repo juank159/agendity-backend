@@ -1,6 +1,5 @@
 import {
   Injectable,
-  ConflictException,
   NotFoundException,
   InternalServerErrorException,
   HttpException,
@@ -16,6 +15,8 @@ import { ClientFindOptions } from './interfaces/client-find-options.interface';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { PaginationDto, PaginationResult } from './dto/pagination.dto';
 import { parseBusinessDate } from '../common/utils/date.util';
+import { BusinessException } from '../common/exceptions/business.exception';
+import { ErrorCode } from '../common/constants/error-codes';
 
 @Injectable()
 export class ClientsService {
@@ -107,13 +108,17 @@ export class ClientsService {
     );
 
     if (existingClient) {
-      // Sin email (null) nunca es un duplicado de email (2.20).
-      const duplicatedField =
-        dto.email && existingClient.email === dto.email ? 'email' : 'teléfono';
-      const duplicatedValue =
-        duplicatedField === 'email' ? dto.email : dto.phone;
-      throw new ConflictException(
-        `Ya existe un cliente con el ${duplicatedField}: ${duplicatedValue}`,
+      // Sin email (null) nunca es un duplicado de email (2.20). Mismo `code`
+      // que el índice único y que los usuarios (2.30); el texto no cambia.
+      if (dto.email && existingClient.email === dto.email) {
+        throw new BusinessException(
+          ErrorCode.DUPLICATE_EMAIL,
+          `Ya existe un cliente con el email: ${dto.email}`,
+        );
+      }
+      throw new BusinessException(
+        ErrorCode.DUPLICATE_PHONE,
+        `Ya existe un cliente con el teléfono: ${dto.phone}`,
       );
     }
   }

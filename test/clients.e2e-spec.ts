@@ -2,6 +2,7 @@
  * Clientes (e2e que escriben). Solo corre con
  * `E2E_WRITABLE_DB=<copia> DB_NAME=<copia>` y las migraciones aplicadas en la copia.
  * - 2.20: el email del cliente es opcional (columna nullable, `ClientEmailNullable`).
+ * - 2.30: los duplicados salen con `DUPLICATE_PHONE`/`DUPLICATE_EMAIL`.
  * - 2.32: el Employee crea y edita clientes, pero no los borra (solo el Owner).
  */
 import { INestApplication } from '@nestjs/common';
@@ -62,6 +63,50 @@ describeWritable(
         .send({ name: 'Otro', lastname: 'Sin', phone: phone(0) });
       expect(res.status).toBe(409);
       expect(res.body.message).toContain('teléfono');
+      expect(res.body.code).toBe('DUPLICATE_PHONE');
+    });
+
+    it('duplicados al crear y al editar: DUPLICATE_PHONE / DUPLICATE_EMAIL con el texto de siempre (2.30)', async () => {
+      const email = `dup${stamp}@e2e.local`;
+      const first = await http
+        .post('/api/clients')
+        .set(auth(ownerToken))
+        .send({ name: 'Dup', lastname: 'Uno', phone: phone(4), email });
+      expect(first.status).toBe(201);
+      const second = await http
+        .post('/api/clients')
+        .set(auth(ownerToken))
+        .send({ name: 'Dup', lastname: 'Dos', phone: phone(5) });
+      expect(second.status).toBe(201);
+
+      const sameEmail = await http
+        .post('/api/clients')
+        .set(auth(ownerToken))
+        .send({ name: 'Dup', lastname: 'Tres', phone: phone(6), email });
+      expect(sameEmail.body).toEqual({
+        statusCode: 409,
+        code: 'DUPLICATE_EMAIL',
+        message: `Ya existe un cliente con el email: ${email}`,
+      });
+
+      const editPhone = await http
+        .patch(`/api/clients/${second.body.id}`)
+        .set(auth(ownerToken))
+        .send({ phone: phone(4) });
+      expect(editPhone.body).toEqual({
+        statusCode: 409,
+        code: 'DUPLICATE_PHONE',
+        message: `Ya existe un cliente con el teléfono: ${phone(4)}`,
+      });
+
+      const editEmail = await http
+        .patch(`/api/clients/${second.body.id}`)
+        .set(auth(ownerToken))
+        .send({ email });
+      expect([editEmail.status, editEmail.body.code]).toEqual([
+        409,
+        'DUPLICATE_EMAIL',
+      ]);
     });
 
     it('editar con email "" lo deja en null', async () => {
