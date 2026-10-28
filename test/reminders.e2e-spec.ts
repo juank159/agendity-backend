@@ -194,6 +194,8 @@ describeWritable('Recordatorios 2.09a (e2e, escribe en copia)', () => {
     const saved = await ds.getRepository(Appointment).save({
       ownerId: owner.id,
       professionalId: opts.professional.id,
+      // Zona guardada en la cita (6.03, NOT NULL).
+      timezone: 'America/Bogota',
       client: { id: client.id },
       services: [{ id: service.id }],
       date: new Date(opts.date),

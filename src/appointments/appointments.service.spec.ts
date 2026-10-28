@@ -1325,3 +1325,58 @@ describe('AppointmentsService: zona horaria de CADA negocio (6.02, D-15)', () =>
     expect(subscriptions.consumeAppointmentQuota).not.toHaveBeenCalled();
   });
 });
+
+describe('AppointmentsService: zona guardada en la cita (6.03)', () => {
+  const existing = () => ({
+    id: 'cita-1',
+    ownerId: TENANT,
+    professionalId: EMPLOYEE,
+    date: new Date('2030-01-01T10:00:00-05:00'),
+    timezone: BOGOTA,
+    status: AppointmentStatus.PENDING,
+    services: [{ id: SERVICE, duration: 60 }],
+  });
+
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  it('al crear guarda la zona del negocio en ese momento', async () => {
+    const { service, txRepo, zones } = build();
+    zones[TENANT] = 'America/Caracas';
+    await service.create(dto, TENANT);
+    expect(txRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ timezone: 'America/Caracas' }),
+    );
+  });
+
+  it('el negocio cambia de zona: editar sin mover conserva la zona de la cita', async () => {
+    const { service, repo, txRepo, zones } = build();
+    repo.findOne.mockResolvedValue(existing());
+    zones[TENANT] = 'America/Caracas';
+    await service.update('cita-1', { notes: 'x' } as any, TENANT);
+    const [saved] = txRepo.save.mock.calls[0];
+    expect(saved).not.toHaveProperty('timezone');
+    // Reenviar la MISMA fecha (con offset) tampoco cuenta como mover.
+    txRepo.save.mockClear();
+    await service.update(
+      'cita-1',
+      { date: '2030-01-01T10:00:00-05:00' } as any,
+      TENANT,
+    );
+    expect(txRepo.save.mock.calls[0][0]).not.toHaveProperty('timezone');
+  });
+
+  it('mover la cita toma la zona ACTUAL (la usada para la hora nueva y el horario)', async () => {
+    const { service, repo, txRepo, zones } = build();
+    repo.findOne.mockResolvedValue(existing());
+    zones[TENANT] = 'America/Caracas';
+    await service.update(
+      'cita-1',
+      { date: '2030-01-02T10:00:00' } as any,
+      TENANT,
+    );
+    const [saved] = txRepo.save.mock.calls[0];
+    expect(saved.timezone).toBe('America/Caracas');
+    expect(saved.date.toISOString()).toBe('2030-01-02T14:00:00.000Z');
+  });
+});

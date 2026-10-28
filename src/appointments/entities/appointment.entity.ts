@@ -81,6 +81,14 @@ export class Appointment {
     }
   }
 
+  /**
+   * Zona IANA del negocio con la que se agendó (o movió por última vez) la cita (6.03, D-15): si el negocio
+   * cambia de zona después, este registro conserva la suya. La fija el
+   * service desde `TenantSettingsService.getTimezone`; sale en las respuestas.
+   */
+  @Column({ type: 'varchar', length: 64, name: 'timezone' })
+  timezone: string;
+
   @Column('timestamptz', { name: 'date' })
   date: Date;
 

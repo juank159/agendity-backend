@@ -49,6 +49,17 @@ export const E2E_BOOT_TIMEOUT_MS = 60_000;
  */
 export const E2E_ROUTE_SCAN_TIMEOUT_MS = 30_000;
 
+/**
+ * Timeout de los tests de carreras que repiten la carrera en varias rondas
+ * (6.03). "2 anticipos simultáneos" hace 3 rondas de: crear una cita + 4 pagos
+ * a la vez que el lock de la cita SERIALIZA (cada uno espera al anterior) +
+ * consultas de comprobación: ~20 transacciones en fila en un solo `it`. En
+ * reposo tarda ~1 s; con la máquina cargada (load ~9, 2026-10-28) pasó de los
+ * 5 s de jest. El coste crece con las rondas, no con un fallo: si la regla se
+ * rompe, falla por las aserciones, no por tiempo.
+ */
+export const E2E_RACE_TIMEOUT_MS = 30_000;
+
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
 export type E2EMethod = (typeof HTTP_METHODS)[number];
 export type E2EHttp = Record<E2EMethod, (path: string) => request.Test>;

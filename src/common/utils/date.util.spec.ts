@@ -259,6 +259,24 @@ describe('date.util (zona del negocio, 2.05)', () => {
       expect(JSON.parse(JSON.stringify(body, businessJsonReplacer))).toEqual(
         json(undefined),
       );
+      // 6.03: un registro con su propia zona (`timezone`) sale con ella,
+      // aunque el tenant de la petición esté en otra.
+      const record = {
+        timezone: 'America/Bogota',
+        date: new Date('2026-10-21T13:00:00Z'),
+        client: { birthday: new Date('2026-10-21T13:00:00Z') },
+      };
+      expect(
+        JSON.parse(
+          runWithRequestTimeZone('America/Caracas', () =>
+            JSON.stringify(record, businessJsonReplacer),
+          ),
+        ),
+      ).toEqual({
+        timezone: 'America/Bogota',
+        date: '2026-10-21T08:00:00.000-05:00',
+        client: { birthday: '2026-10-21T09:00:00.000-04:00' },
+      });
     });
   });
 });

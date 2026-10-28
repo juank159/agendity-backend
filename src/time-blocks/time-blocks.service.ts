@@ -201,6 +201,8 @@ export class TimeBlocksService {
           repository.create({
             start_datetime: start,
             end_datetime: end,
+            // Zona del negocio al crear (6.03): el bloqueo la conserva.
+            timezone: timeZone,
             notes,
             user: userFound as User,
             appointment: appointmentFound,
@@ -234,6 +236,8 @@ export class TimeBlocksService {
       if (end_datetime) {
         timeBlock.end_datetime = this.toDate(end_datetime, timeZone);
       }
+      // Mover el bloqueo toma la zona actual (la usada para las horas nuevas), 6.03.
+      timeBlock.timezone = timeZone;
     }
     if (notes !== undefined) timeBlock.notes = notes;
 

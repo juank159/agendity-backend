@@ -15,6 +15,14 @@ export class TimeBlock {
   @Column({ type: 'timestamptz' })
   end_datetime: Date;
 
+  /**
+   * Zona IANA del negocio con la que se creó (o movió) el bloqueo (6.03, D-15): si el negocio
+   * cambia de zona después, este registro conserva la suya. La fija el
+   * service desde `TenantSettingsService.getTimezone`; sale en las respuestas.
+   */
+  @Column({ type: 'varchar', length: 64, name: 'timezone' })
+  timezone: string;
+
   @Column({ nullable: true })
   notes?: string;
 

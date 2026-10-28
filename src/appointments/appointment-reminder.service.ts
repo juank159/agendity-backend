@@ -13,7 +13,6 @@ import {
   formatBusinessLongDate,
   formatBusinessTime,
 } from '../common/utils/date.util';
-import { TenantSettingsService } from '../settings/tenant-settings.service';
 import { BusinessException } from '../common/exceptions/business.exception';
 import { ErrorCode } from '../common/constants/error-codes';
 import {
@@ -161,8 +160,8 @@ export function staffReminderMessage(
 /** Cita candidata leída por el cron (SQL crudo). */
 interface ReminderCandidate {
   id: string;
-  /** Negocio de la cita: su zona da el día y la hora de los textos (6.02). */
-  ownerId: string;
+  /** Zona guardada en la cita (6.03): da el día y la hora de los textos. */
+  timezone: string;
   date: Date;
   createdAt: Date;
 }
@@ -194,7 +193,6 @@ export class AppointmentReminderService {
     private readonly appointmentsRepository: Repository<Appointment>,
     private readonly dataSource: DataSource,
     private readonly whatsappService: WhatsappService,
-    private readonly tenantSettings: TenantSettingsService,
   ) {}
 
   /** Cada minuto. Sustituye a los `CronJob` en memoria y a la limpieza cada 6 h. */
@@ -232,10 +230,9 @@ export class AppointmentReminderService {
     for (const candidate of candidates) {
       if (!isReminderDue(candidate, now)) continue;
       try {
-        // Cada cita, en la zona de SU negocio (6.02): el cron recorre todos.
-        const timeZone = await this.tenantSettings.getTimezone(
-          candidate.ownerId,
-        );
+        // Cada cita, en SU zona guardada (6.03; 6.02 usaba la del negocio):
+        // si el negocio cambió de zona, la cita conserva la suya.
+        const timeZone = candidate.timezone;
         const appointment = await this.dataSource.transaction((manager) =>
           this.claimAndNotify(manager, candidate, timeZone),
         );
@@ -271,7 +268,7 @@ export class AppointmentReminderService {
       tenantFilter = 'AND a.owner_id = $4';
     }
     return this.appointmentsRepository.query(
-      `SELECT a.id, a.owner_id AS "ownerId", a."date" AS "date",
+      `SELECT a.id, a.timezone, a."date" AS "date",
               a.created_at AS "createdAt"
          FROM appointments a
         WHERE a.status::text = ANY($1::text[])
@@ -396,10 +393,8 @@ export class AppointmentReminderService {
       );
     }
 
-    const message = reminderMessage(
-      appointment,
-      await this.tenantSettings.getTimezone(scope.tenantId),
-    );
+    // Zona guardada en la cita (6.03).
+    const message = reminderMessage(appointment, appointment.timezone);
     return {
       appointmentId: appointment.id,
       clientId: appointment.client.id,

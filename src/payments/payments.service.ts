@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { TenantSettingsService } from 'src/settings/tenant-settings.service';
 import { Payment } from './entities/payment.entity';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
@@ -38,6 +39,7 @@ export class PaymentsService {
     private readonly notificationsService: NotificationsService,
     private readonly customPaymentMethodsService: CustomPaymentMethodsService,
     private readonly dataSource: DataSource,
+    private readonly tenantSettings: TenantSettingsService,
   ) {}
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
@@ -113,6 +115,8 @@ export class PaymentsService {
         );
       }
 
+      // Zona del negocio al registrar el pago (6.03): el pago la conserva.
+      const timeZone = await this.tenantSettings.getTimezone(tenantId);
       const savedPayment = await this.dataSource.transaction(
         async (manager) => {
           const locked = await this.appointmentsService.lockAppointment(
@@ -140,6 +144,7 @@ export class PaymentsService {
               appointment: { id: locked.id } as any,
               status: PaymentStatus.COMPLETED,
               ownerId: tenantId,
+              timezone: timeZone,
             }),
           );
           // PENDING → CONFIRMED (máquina de estados) y PARTIAL/COMPLETED.

@@ -344,11 +344,25 @@ export function formatBusinessTime(date: Date, timeZone: string): string {
   return `${hour % 12 || 12}:${pad(minute)} ${hour < 12 ? 'AM' : 'PM'}`;
 }
 
+/** ¿Conoce `Intl` esta zona? Con caché (lo usa el replacer en cada fecha). */
+function isKnownTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    formatterFor(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * `replacer` de JSON para las respuestas HTTP (registrado en
- * `config/app.setup.ts`): todo `Date` sale como ISO con el offset de la zona
- * del tenant de la petición (`requestTimeZone()`, que fija
- * `TenantTimeZoneInterceptor`); sin tenant (rutas públicas), en UTC con `Z`.
+ * `config/app.setup.ts`). Cada `Date` sale como ISO con offset:
+ * - si el objeto que la contiene trae su propia zona (`timezone`: citas,
+ *   bloqueos y pagos, 6.03), con la de ese registro;
+ * - si no, con la del tenant de la petición (`requestTimeZone()`, que fija
+ *   `TenantTimeZoneInterceptor`, 6.02);
+ * - sin tenant (rutas públicas), en UTC con `Z`.
  * Un `Date` inválido sale como `null` (igual que `JSON.stringify`).
  */
 export function businessJsonReplacer(
@@ -359,6 +373,8 @@ export function businessJsonReplacer(
   const raw = this?.[key];
   if (!(raw instanceof Date)) return value;
   if (!isValidDate(raw)) return null;
-  const timeZone = requestTimeZone();
+  const timeZone = isKnownTimeZone(this.timezone)
+    ? this.timezone
+    : requestTimeZone();
   return timeZone ? toBusinessIso(raw, timeZone) : raw.toISOString();
 }

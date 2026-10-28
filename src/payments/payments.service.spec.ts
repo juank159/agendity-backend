@@ -73,6 +73,7 @@ function build(appointment: Record<string, any> | null = {}) {
     notifications as any,
     customMethods as any,
     dataSource as any,
+    { getTimezone: jest.fn(async () => 'America/Caracas') } as any,
   );
   return {
     service,
@@ -114,6 +115,8 @@ describe('PaymentsService.create (2.06)', () => {
         amount: 50000,
         status: PaymentStatus.COMPLETED,
         ownerId: TENANT,
+        // Zona del negocio al registrar el pago (6.03).
+        timezone: 'America/Caracas',
       }),
     );
     expect(appointments.applyPaymentStatus).toHaveBeenCalledWith(

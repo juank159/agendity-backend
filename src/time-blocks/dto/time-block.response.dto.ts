@@ -6,6 +6,8 @@ export class TimeBlockResponseDto {
   id: string;
   start_datetime: Date;
   end_datetime: Date;
+  /** Zona IANA del bloqueo (6.03). */
+  timezone: string;
   notes?: string;
   user: User;
   appointment?: Appointment;

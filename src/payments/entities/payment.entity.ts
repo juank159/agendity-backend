@@ -59,6 +59,14 @@ export class Payment {
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   refund_amount?: number;
 
+  /**
+   * Zona IANA del negocio con la que se registró el pago (6.03, D-15): si el negocio
+   * cambia de zona después, este registro conserva la suya. La fija el
+   * service desde `TenantSettingsService.getTimezone`; sale en las respuestas.
+   */
+  @Column({ type: 'varchar', length: 64, name: 'timezone' })
+  timezone: string;
+
   // Instantes reales (now() de la BD). Hasta 2.05 se guardaban desplazados
   // -5/-6 h por un "parche" de zona horaria; la migración 2.05 los corrigió.
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

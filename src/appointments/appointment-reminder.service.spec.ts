@@ -230,6 +230,7 @@ describe('AppointmentReminderService.processDueReminders', () => {
   const NOW = at('2026-10-21T07:50:00-05:00');
   const due = {
     id: 'due-1',
+    timezone: BOGOTA,
     date: START,
     createdAt: at('2026-10-01T10:00:00-05:00'),
   };
@@ -254,7 +255,6 @@ describe('AppointmentReminderService.processDueReminders', () => {
   let saved: any[];
   let qbWheres: string[];
   let service: AppointmentReminderService;
-  let tenantSettings: { getTimezone: jest.Mock };
   const env = { ...process.env };
 
   beforeEach(() => {
@@ -285,7 +285,6 @@ describe('AppointmentReminderService.processDueReminders', () => {
       query: jest.fn().mockResolvedValue([due, notYet]),
       findOne: jest.fn(),
     };
-    tenantSettings = { getTimezone: jest.fn(async () => BOGOTA) };
     whatsapp = {
       sendToOwner: jest.fn().mockResolvedValue({ success: true }),
       sendWhatsAppMessage: jest.fn(() => {
@@ -296,7 +295,6 @@ describe('AppointmentReminderService.processDueReminders', () => {
       repo as any,
       dataSource,
       whatsapp as any,
-      tenantSettings as any,
     );
     delete process.env.REMINDER_OWNER_WHATSAPP;
   });
@@ -321,16 +319,14 @@ describe('AppointmentReminderService.processDueReminders', () => {
     expect(whatsapp.sendWhatsAppMessage).not.toHaveBeenCalled();
   });
 
-  it('cada cita usa la zona de SU negocio (owner_id del candidato, 6.02)', async () => {
-    repo.query.mockResolvedValue([{ ...due, ownerId: 'tenant-caracas' }]);
-    tenantSettings.getTimezone.mockImplementation(async (tenantId: string) =>
-      tenantId === 'tenant-caracas' ? 'America/Caracas' : BOGOTA,
-    );
+  it('cada cita usa SU zona guardada (6.03), aunque el negocio esté en otra', async () => {
+    // 08:00 de Bogotá = 09:00 de Caracas: la cita se agendó en Caracas.
+    repo.query.mockResolvedValue([{ ...due, timezone: 'America/Caracas' }]);
     await service.processDueReminders(NOW);
-    expect(tenantSettings.getTimezone).toHaveBeenCalledWith('tenant-caracas');
     const [sql] = repo.query.mock.calls[0];
-    expect(sql).toContain('a.owner_id AS "ownerId"');
+    expect(sql).toContain('a.timezone');
     expect(saved).toHaveLength(1);
+    expect(saved[0].message).toContain('a las 9:00 AM');
   });
 
   it('consulta PENDING y CONFIRMED de la próxima hora, sin las ya procesadas para su fecha', async () => {
@@ -403,6 +399,7 @@ describe('AppointmentReminderService.processDueReminders', () => {
 describe('AppointmentReminderService.prepareManualReminder', () => {
   const base = {
     id: 'a1',
+    timezone: BOGOTA,
     status: AppointmentStatus.CONFIRMED,
     date: START,
     services: [{ name: 'Corte' }],
@@ -419,10 +416,17 @@ describe('AppointmentReminderService.prepareManualReminder', () => {
       repo as any,
       {} as any,
       {} as any,
-      { getTimezone: jest.fn(async () => BOGOTA) } as any,
     );
     return { repo, service };
   };
+
+  it('el texto usa la zona guardada en la cita (6.03)', async () => {
+    const { service } = make({ ...base, timezone: 'America/Caracas' });
+    const result = await service.prepareManualReminder('a1', {
+      tenantId: 't1',
+    });
+    expect(result.message).toContain('*9:00 AM*');
+  });
 
   it('Employee: busca solo entre sus citas y devuelve teléfono por la relación de la cita', async () => {
     const { repo, service } = make(base);

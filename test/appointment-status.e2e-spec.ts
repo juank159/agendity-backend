@@ -23,6 +23,7 @@ import {
   E2EHttp,
   createE2EApp,
   E2E_BOOT_TIMEOUT_MS,
+  E2E_RACE_TIMEOUT_MS,
 } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
 
@@ -533,33 +534,39 @@ describeWritable(
       expect(ok.status).toBe(200);
     });
 
-    it('carrera: 2 anticipos simultáneos del 60 % → solo 1 pasa; nunca se paga más que el total (2.24)', async () => {
-      const payments = app.get(PaymentsService);
-      for (let i = 0; i < 3; i++) {
-        const { id, total } = await newAppointment();
-        const sixty = Math.round(total * 60) / 100;
-        const results = await Promise.allSettled(
-          [0, 1, 2, 3].map(() =>
-            payments.create(
-              {
-                appointment_id: id,
-                amount: sixty,
-                payment_method: 'CASH',
-              } as any,
-              owner.id,
+    it(
+      'carrera: 2 anticipos simultáneos del 60 % → solo 1 pasa; nunca se paga más que el total (2.24)',
+      async () => {
+        const payments = app.get(PaymentsService);
+        for (let i = 0; i < 3; i++) {
+          const { id, total } = await newAppointment();
+          const sixty = Math.round(total * 60) / 100;
+          const results = await Promise.allSettled(
+            [0, 1, 2, 3].map(() =>
+              payments.create(
+                {
+                  appointment_id: id,
+                  amount: sixty,
+                  payment_method: 'CASH',
+                } as any,
+                owner.id,
+              ),
             ),
-          ),
-        );
-        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-        const [{ paid }] = await ds.query(
-          `SELECT COALESCE(SUM(amount), 0)::float AS paid FROM payments
+          );
+          expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(
+            1,
+          );
+          const [{ paid }] = await ds.query(
+            `SELECT COALESCE(SUM(amount), 0)::float AS paid FROM payments
             WHERE "appointmentId" = $1 AND status = 'COMPLETED'`,
-          [id],
-        );
-        expect(paid).toBeCloseTo(sixty, 2);
-        expect(await statusOf(id)).toEqual(['CONFIRMED', 'PARTIAL']);
-      }
-    });
+            [id],
+          );
+          expect(paid).toBeCloseTo(sixty, 2);
+          expect(await statusOf(id)).toEqual(['CONFIRMED', 'PARTIAL']);
+        }
+      },
+      E2E_RACE_TIMEOUT_MS,
+    );
 
     it('carrera: pago y cancelación simultáneos → nunca una cita CANCELLED con pago COMPLETED', async () => {
       const payments = app.get(PaymentsService);

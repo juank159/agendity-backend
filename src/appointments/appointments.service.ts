@@ -91,20 +91,19 @@ export class AppointmentsService {
   /**
    * Fecha de una cita que llega al API, en la zona del tenant (6.02): con
    * offset = ese instante; sin offset = hora de pared del negocio. Inválida →
-   * 400 (antes lo comprobaba el controller con la zona global).
+   * 400 (antes lo comprobaba el controller con la zona global). Devuelve
+   * también la zona usada: es la que se guarda en la cita (6.03).
    */
   private async parseAppointmentDate(
     value: string,
     tenantId: string,
-  ): Promise<Date> {
-    const date = parseBusinessDate(
-      value,
-      await this.tenantSettings.getTimezone(tenantId),
-    );
+  ): Promise<{ date: Date; timeZone: string }> {
+    const timeZone = await this.tenantSettings.getTimezone(tenantId);
+    const date = parseBusinessDate(value, timeZone);
     if (!isValidDate(date)) {
       throw new BadRequestException('Invalid date format');
     }
-    return date;
+    return { date, timeZone };
   }
 
   private handleError(error: any, options: ErrorHandlerOptions): never {
@@ -166,7 +165,10 @@ export class AppointmentsService {
         'Solo puedes agendar citas para ti',
       );
       // Regla del usuario (2.21): solo a futuro, antes de leer o consumir nada.
-      const start = await this.parseAppointmentDate(date, tenantId);
+      const { date: start, timeZone } = await this.parseAppointmentDate(
+        date,
+        tenantId,
+      );
       assertStartNotInPast(start);
 
       const [client, professional] = await Promise.all([
@@ -187,6 +189,8 @@ export class AppointmentsService {
         ownerId: tenantId,
         professionalId: professional_id,
         date: start,
+        // Zona del negocio al agendar (6.03): la cita la conserva.
+        timezone: timeZone,
         total_price: priceLinesTotal(priceLines),
         status: AppointmentStatus.PENDING,
         payment_status: AppointmentPaymentStatus.PENDING,
@@ -569,11 +573,16 @@ export class AppointmentsService {
       // Solo los campos que cambian (save parcial por id).
       const updateData: Partial<Appointment> & { id: string } = { id };
 
-      if (updateAppointmentDto.date)
-        updateData.date = await this.parseAppointmentDate(
+      // Zona con la que se interpretó la nueva fecha (la actual del negocio).
+      let rescheduleTimeZone: string | undefined;
+      if (updateAppointmentDto.date) {
+        const parsed = await this.parseAppointmentDate(
           updateAppointmentDto.date,
           tenantId,
         );
+        updateData.date = parsed.date;
+        rescheduleTimeZone = parsed.timeZone;
+      }
       if (updateAppointmentDto.notes !== undefined)
         updateData.notes = updateAppointmentDto.notes;
 
@@ -637,6 +646,10 @@ export class AppointmentsService {
         // se puede seguir editando, completando y pagando.
         if (isRescheduled(current.date, updateData.date)) {
           assertStartNotInPast(updateData.date);
+          // 6.03: mover la cita toma la zona ACTUAL del negocio, la misma con
+          // la que se interpretó la nueva hora y se validó el horario. Sin
+          // mover (notas, estado, servicios), conserva la suya.
+          updateData.timezone = rescheduleTimeZone;
         }
 
         // Una cita CANCELLED no ocupa hueco: moverla no se comprueba. Como

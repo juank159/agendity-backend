@@ -68,6 +68,8 @@ describe('TimeBlocksService (2.08)', () => {
     const saved = txRepo.save.mock.calls[0][0];
     expect(saved.start_datetime.toISOString()).toBe('2030-01-07T15:00:00.000Z');
     expect(saved.end_datetime.toISOString()).toBe('2030-01-07T16:00:00.000Z');
+    // Zona del negocio al crear (6.03).
+    expect(saved.timezone).toBe(BOGOTA);
     expect(appointments.assertNoAppointmentOverlap).toHaveBeenCalledWith(
       manager,
       {

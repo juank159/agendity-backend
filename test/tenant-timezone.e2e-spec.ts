@@ -1,5 +1,5 @@
 /**
- * Tarea 6.02 (D-15): dos negocios en zonas distintas (Bogotá UTC-5 y Caracas
+ * Tareas 6.02 y 6.03 (D-15): dos negocios en zonas distintas (Bogotá UTC-5 y Caracas
  * UTC-4) sin cruzar horas. Escribe: solo contra una copia
  * (`E2E_WRITABLE_DB=<copia> DB_NAME=<copia>`).
  *
@@ -287,6 +287,85 @@ describeWritable(
       });
       expect(reg.status).toBe(201);
       expect(reg.body.user.created_at).toMatch(/Z$/);
+    });
+
+    it('6.03: el negocio cambia de zona y lo histórico conserva la suya (citas, bloqueos y pagos)', async () => {
+      const as = (req: any) => req.set(auth(bogota.token));
+      // Registros creados en Bogotá: cita, pago y bloqueo.
+      const before = await book(bogota, `${MONDAY}T09:30:00`);
+      expect(before.status).toBe(201);
+      expect(before.body.timezone).toBe('America/Bogota');
+      const payment = await as(http.post('/api/payments')).send({
+        appointment_id: before.body.id,
+        amount: 5000,
+        payment_method: 'CASH',
+      });
+      expect([payment.status, payment.body.timezone]).toEqual([
+        201,
+        'America/Bogota',
+      ]);
+      const block = await as(http.post('/api/time-blocks')).send({
+        user_id: bogota.ownerId,
+        start_datetime: '2030-01-08T09:00:00',
+        end_datetime: '2030-01-08T10:00:00',
+      });
+      expect([block.status, block.body.timezone]).toEqual([
+        201,
+        'America/Bogota',
+      ]);
+
+      // El negocio se muda a Caracas.
+      const patch = await as(http.patch('/api/settings')).send({
+        timezone: 'America/Caracas',
+      });
+      expect(patch.status).toBe(200);
+
+      // Lo de antes conserva Bogotá: zona y offset de sus fechas.
+      const appointment = await as(
+        http.get(`/api/appointments/${before.body.id}`),
+      );
+      expect(appointment.body).toMatchObject({
+        timezone: 'America/Bogota',
+        date: `${MONDAY}T09:30:00.000-05:00`,
+      });
+      const storedPayment = await as(
+        http.get(`/api/payments/${payment.body.id}`),
+      );
+      expect(storedPayment.body.timezone).toBe('America/Bogota');
+      expect(storedPayment.body.created_at).toMatch(/-05:00$/);
+      const storedBlock = await as(
+        http.get(`/api/time-blocks/${block.body.id}`),
+      );
+      expect(storedBlock.body).toMatchObject({
+        timezone: 'America/Bogota',
+        start_datetime: '2030-01-08T09:00:00.000-05:00',
+      });
+      const [row] = await ds.query(
+        'SELECT timezone FROM appointments WHERE id = $1',
+        [before.body.id],
+      );
+      expect(row.timezone).toBe('America/Bogota');
+
+      // Lo nuevo nace en Caracas: "09:00" sin offset = 13:00Z.
+      const after = await book(bogota, '2030-01-14T09:00:00');
+      expect(after.status).toBe(201);
+      expect(after.body).toMatchObject({
+        timezone: 'America/Caracas',
+        date: '2030-01-14T09:00:00.000-04:00',
+      });
+      expect(new Date(after.body.date).toISOString()).toBe(
+        '2030-01-14T13:00:00.000Z',
+      );
+
+      // Mover la cita vieja toma la zona actual (la usada para la hora nueva).
+      const moved = await as(
+        http.patch(`/api/appointments/${before.body.id}`),
+      ).send({ date: '2030-01-14T10:00:00' });
+      expect(moved.status).toBe(200);
+      expect(moved.body).toMatchObject({
+        timezone: 'America/Caracas',
+        date: '2030-01-14T10:00:00.000-04:00',
+      });
     });
   },
 );
