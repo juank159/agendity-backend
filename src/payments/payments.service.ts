@@ -350,36 +350,8 @@ export class PaymentsService {
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
 
-      console.log(
-        'Buscando pagos entre fechas:',
-        startDate,
-        'y',
-        adjustedEndDate,
-      );
-
-      // Obtener todos los pagos para depuración
-      const allPayments = await this.paymentRepository.find({
-        where: {
-          status: PaymentStatus.COMPLETED,
-          ownerId: tenantId,
-        },
-      });
-      console.log(
-        `Todos los pagos del usuario (${allPayments.length}):`,
-        allPayments,
-      );
-
-      // Filtrar manualmente los pagos por fecha para depuración
-      const filteredPayments = allPayments.filter((payment) => {
-        const paymentDate = new Date(payment.created_at);
-        return paymentDate >= startDate && paymentDate <= adjustedEndDate;
-      });
-      console.log(
-        `Pagos filtrados (${filteredPayments.length}):`,
-        filteredPayments,
-      );
-
-      // Realizar la consulta normal
+      // Una sola consulta agregada en la BD (2.26: antes cargaba y registraba
+      // en el log TODOS los pagos del negocio en cada llamada).
       const result = await this.paymentRepository
         .createQueryBuilder('payment')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
@@ -421,85 +393,8 @@ export class PaymentsService {
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
 
-      console.log(
-        `Obteniendo estadísticas para el profesional ID: ${professionalId}`,
-        'Fechas:',
-        startDate,
-        'a',
-        adjustedEndDate,
-      );
-
-      // Logs adicionales para depuración de fechas
-      console.log('Fecha de inicio ISO:', startDate.toISOString());
-      console.log('Fecha de fin ISO:', adjustedEndDate.toISOString());
-      console.log('Fecha de inicio local:', startDate.toString());
-      console.log('Fecha de fin local:', adjustedEndDate.toString());
-
-      // Verificar si existen pagos para este profesional (sin filtro de fechas)
-      const checkPayments = await this.paymentRepository.manager.query(
-        `
-      SELECT COUNT(*) as count 
-      FROM payments p
-      JOIN appointments a ON p."appointmentId" = a.id
-      WHERE p.owner_id = $1
-      AND p.status = 'COMPLETED'
-      AND a."professional_id" = $2
-    `,
-        [tenantId, professionalId],
-      );
-
-      console.log(
-        'Verificación de pagos totales para este profesional:',
-        checkPayments,
-      );
-
-      // Verificar si hay pagos en el rango de fechas especificado
-      const checkPaymentsInDateRange =
-        await this.paymentRepository.manager.query(
-          `
-      SELECT COUNT(*) as count, MIN(p.created_at) as first_payment, MAX(p.created_at) as last_payment
-      FROM payments p
-      JOIN appointments a ON p."appointmentId" = a.id
-      WHERE p.owner_id = $1
-      AND p.status = 'COMPLETED'
-      AND a."professional_id" = $2
-      AND p.created_at BETWEEN $3 AND $4
-    `,
-          [
-            tenantId,
-            professionalId,
-            startDate.toISOString(),
-            adjustedEndDate.toISOString(),
-          ],
-        );
-
-      console.log(
-        'Verificación de pagos en el rango de fechas:',
-        checkPaymentsInDateRange,
-      );
-
-      // Verificar estructura de la tabla para confirmar nombres de columnas
-      const tableStructure = await this.paymentRepository.manager.query(`
-      SELECT column_name, data_type 
-      FROM information_schema.columns 
-      WHERE table_name = 'appointments'
-    `);
-      console.log('Estructura de la tabla appointments:', tableStructure);
-
-      // Consulta de muestra para ver algunos pagos
-      const samplePayments = await this.paymentRepository.manager.query(
-        `
-      SELECT p.id, p.amount, p.created_at, a.id as appointment_id, a."professional_id"
-      FROM payments p
-      JOIN appointments a ON p."appointmentId" = a.id
-      WHERE p.owner_id = $1
-      LIMIT 5
-    `,
-        [tenantId],
-      );
-      console.log('Muestra de pagos:', samplePayments);
-
-      // Consultar totales para este profesional usando el query builder
+      // Totales del profesional en el periodo (2.26: sin las consultas de
+      // diagnóstico ni la misma suma repetida en SQL nativo).
       const result = await this.paymentRepository
         .createQueryBuilder('payment')
         .select(`SUM(${netAmountSql('payment')})`, 'total_amount')
@@ -520,33 +415,7 @@ export class PaymentsService {
         )
         .getRawOne();
 
-      console.log('Resultado de la consulta principal:', result);
-
-      // Query nativo como alternativa si el query builder no funciona
-      const nativeQueryResult = await this.paymentRepository.manager.query(
-        `
-      SELECT 
-        SUM(${netAmountSql('p')}) as total_amount,
-        COUNT(DISTINCT p.id) as payment_count,
-        COUNT(DISTINCT a.id) as appointment_count
-      FROM payments p
-      JOIN appointments a ON p."appointmentId" = a.id
-      WHERE p.owner_id = $1
-      AND p.status = 'COMPLETED'
-      AND a."professional_id" = $2
-      AND p.created_at BETWEEN $3 AND $4
-    `,
-        [
-          tenantId,
-          professionalId,
-          startDate.toISOString(),
-          adjustedEndDate.toISOString(),
-        ],
-      );
-
-      console.log('Resultado de consulta nativa:', nativeQueryResult);
-
-      // Consultar desglose por servicio con query nativo para evitar errores
+      // Desglose por servicio
       let serviceBreakdown = [];
       try {
         serviceBreakdown = await this.paymentRepository.manager.query(
@@ -574,9 +443,10 @@ export class PaymentsService {
             adjustedEndDate.toISOString(),
           ],
         );
-        console.log('Desglose por servicio:', serviceBreakdown);
       } catch (serviceError) {
-        console.error('Error en la consulta de servicios:', serviceError);
+        this.logger.error(
+          `Estadísticas del profesional: falló el desglose por servicio: ${serviceError?.message}`,
+        );
         serviceBreakdown = [];
       }
 
@@ -606,38 +476,22 @@ export class PaymentsService {
             businessTimeZone(),
           ],
         );
-        console.log('Evolución diaria:', dailyStats);
       } catch (dailyError) {
-        console.error('Error en la consulta de evolución diaria:', dailyError);
+        this.logger.error(
+          `Estadísticas del profesional: falló la evolución diaria: ${dailyError?.message}`,
+        );
         dailyStats = [];
       }
 
       // Preparar respuesta con los datos obtenidos
+      const totalAmount = Number(result?.total_amount) || 0;
+      const paymentCount = Number(result?.payment_count) || 0;
       const summary = {
-        total_amount: Number(
-          result?.total_amount || nativeQueryResult[0]?.total_amount || 0,
-        ),
-        payment_count: Number(
-          result?.payment_count || nativeQueryResult[0]?.payment_count || 0,
-        ),
-        appointment_count: Number(
-          result?.appointment_count ||
-            nativeQueryResult[0]?.appointment_count ||
-            0,
-        ),
-        average_per_payment:
-          Number(result?.payment_count || nativeQueryResult[0]?.payment_count) >
-          0
-            ? Number(
-                result?.total_amount || nativeQueryResult[0]?.total_amount,
-              ) /
-              Number(
-                result?.payment_count || nativeQueryResult[0]?.payment_count,
-              )
-            : 0,
+        total_amount: totalAmount,
+        payment_count: paymentCount,
+        appointment_count: Number(result?.appointment_count) || 0,
+        average_per_payment: paymentCount > 0 ? totalAmount / paymentCount : 0,
       };
-
-      console.log('Resumen final:', summary);
 
       return {
         summary: summary,
@@ -654,7 +508,6 @@ export class PaymentsService {
         })),
       };
     } catch (error) {
-      console.error('Error en getEmployeeStats:', error);
       this.handleError(error, {
         entity: 'los pagos',
         operation: 'buscar',
@@ -672,13 +525,6 @@ export class PaymentsService {
       // Días completos del negocio (BUSINESS_TIMEZONE), no de UTC
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
-
-      console.log(
-        'Buscando estadísticas por método de pago entre fechas:',
-        startDate,
-        'y',
-        adjustedEndDate,
-      );
 
       // Obtener el total general para calcular porcentajes
       const totalStats = await this.getPaymentStats(
@@ -708,7 +554,6 @@ export class PaymentsService {
 
       // Hacer la consulta para métodos estándar
       const standardResults = await standardMethodsQuery.getRawMany();
-      console.log('Resultados por método estándar:', standardResults);
 
       // Transformar los resultados
       const results = standardResults.map((item) => ({
@@ -750,14 +595,6 @@ export class PaymentsService {
       const adjustedPreviousEndDate = new Date(startDate.getTime() - 1);
       const previousStartDate = new Date(
         adjustedPreviousEndDate.getTime() - periodDuration,
-      );
-
-      console.log('Período actual:', startDate, 'a', adjustedEndDate);
-      console.log(
-        'Período anterior:',
-        previousStartDate,
-        'a',
-        adjustedPreviousEndDate,
       );
 
       // Obtener estadísticas para ambos períodos
@@ -843,20 +680,12 @@ export class PaymentsService {
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
 
-      console.log(
-        'Buscando estadísticas por servicio entre fechas:',
-        startDate,
-        'y',
-        adjustedEndDate,
-      );
-
       // Obtener el total general de pagos para calcular porcentajes
       const totalStats = await this.getPaymentStats(
         startDate,
         adjustedEndDate,
         tenantId,
       );
-      console.log('Total general de pagos:', totalStats);
 
       // Obtener servicios con sus precios
       const servicesWithPrices = await this.paymentRepository.manager
@@ -867,8 +696,6 @@ export class PaymentsService {
         .from('services', 's')
         .where('s.ownerId = :tenantId', { tenantId })
         .getRawMany();
-
-      console.log('Servicios con precios:', servicesWithPrices);
 
       // Crear un mapa de precios de servicios
       const servicePrices = {};
@@ -900,8 +727,6 @@ export class PaymentsService {
         adjustedEndDate.toISOString(),
       ]);
 
-      console.log('Uso de servicios:', serviceUsage);
-
       // Procesar los resultados utilizando los precios de los servicios
       const result = serviceUsage.map((item) => {
         const serviceId = item.service_id;
@@ -922,16 +747,11 @@ export class PaymentsService {
         };
       });
 
-      console.log('Resultados procesados finales (antes de ordenar):', result);
-
       // Ordenar por total_amount de mayor a menor
       result.sort((a, b) => b.total_amount - a.total_amount);
 
-      console.log('Resultados ordenados finales:', result);
-
       return result;
     } catch (error) {
-      console.error('Error en getPaymentStatsByService:', error);
       this.handleError(error, {
         entity: 'los pagos',
         operation: 'buscar',
@@ -950,25 +770,15 @@ export class PaymentsService {
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
 
-      console.log(
-        'Buscando estadísticas por profesional entre fechas:',
-        startDate,
-        'y',
-        adjustedEndDate,
-      );
-      console.log('Usuario ID:', tenantId);
-
       // Primero obtenemos el total general para calcular porcentajes
       const totalStats = await this.getPaymentStats(
         startDate,
         adjustedEndDate,
         tenantId,
       );
-      console.log('Total stats encontrados:', totalStats);
 
       // Verificar si hay pagos en el período
       if (totalStats.payment_count === 0) {
-        console.log('No se encontraron pagos en el período seleccionado');
         return []; // Retornar array vacío si no hay pagos
       }
 
@@ -998,11 +808,8 @@ export class PaymentsService {
         .orderBy('total_amount', 'DESC')
         .getRawMany();
 
-      console.log('Resultados de profesionales encontrados:', result);
-
       // Si no se encontraron profesionales
       if (result.length === 0) {
-        console.log('No se encontraron profesionales asociados a los pagos');
         return [];
       }
 
@@ -1023,7 +830,6 @@ export class PaymentsService {
             : 0,
       }));
     } catch (error) {
-      console.error('Error en getPaymentStatsByProfessional:', error);
       this.handleError(error, {
         entity: 'los pagos',
         operation: 'buscar',
@@ -1119,13 +925,6 @@ export class PaymentsService {
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
 
-      console.log(
-        'Buscando mejores clientes entre fechas:',
-        startDate,
-        'y',
-        adjustedEndDate,
-      );
-
       // Consulta SQL nativa simplificada
       const entityManager = this.paymentRepository.manager;
       // Consulta parametrizada: nada del usuario se interpola en el SQL
@@ -1154,8 +953,6 @@ export class PaymentsService {
         ],
       );
 
-      console.log('Resultados:', topClients);
-
       return topClients.map((client) => ({
         client_id: client.client_id,
         client_name: client.client_name,
@@ -1163,7 +960,6 @@ export class PaymentsService {
         total_spent: Number(client.total_spent) || 0,
       }));
     } catch (error) {
-      console.error('Error en getTopClients:', error);
       this.handleError(error, {
         entity: 'los pagos',
         operation: 'buscar',
