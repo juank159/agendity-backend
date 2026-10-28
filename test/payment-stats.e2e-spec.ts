@@ -4,6 +4,10 @@
  * 2.26: las estadísticas no hacen consultas de diagnóstico (`information_schema`,
  * muestras de pagos, la misma suma dos veces, todos los pagos del negocio sin
  * filtro de fechas) ni escriben en la consola en cada llamada.
+ * 2.28 (bloque que escribe, solo en una copia): por servicio = ingreso neto
+ * real repartido entre los servicios de la cita (una vez por cita, no por
+ * pago); por método incluye los métodos propios y suma 100 %; la evolución
+ * diaria separa pagos y citas.
  */
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { PostgresQueryRunner } from 'typeorm/driver/postgres/PostgresQueryRunner';
@@ -14,6 +18,17 @@ import {
   E2E_BOOT_TIMEOUT_MS,
 } from './utils/create-e2e-app';
 import { findDevOwnerAndEmployee, signToken } from './utils/dev-fixtures';
+import {
+  WRITABLE_DB,
+  assertWritableDatabase,
+  describeWritable,
+  firstFreeWeek,
+  futureMonday,
+  resetTrialQuota,
+} from './utils/writable-db';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Client } from '../src/clients/entities/client.entity';
+import { Service } from '../src/services/entities/service.entity';
 
 const RANGE = 'startDate=2026-01-01&endDate=2026-12-31';
 
@@ -112,3 +127,208 @@ describe('Estadísticas de pagos (e2e, solo lectura)', () => {
     expect(paymentSql()[0]).toMatch(/SUM\(/);
   });
 });
+
+describeWritable(
+  `Estadísticas de pagos contra la copia ${WRITABLE_DB} (e2e, escribe)`,
+  () => {
+    let http: E2EHttp;
+    let close: () => Promise<void>;
+    let app: any;
+    let ds: DataSource;
+    let owner: User;
+    let token: string;
+    let client: Client;
+    let cheap: Service;
+    let pricey: Service;
+    let week: number;
+
+    const auth = () => ({ Authorization: `Bearer ${token}` });
+    const day = new Date();
+    const ymd = new Intl.DateTimeFormat('en-CA', {
+      timeZone: process.env.BUSINESS_TIMEZONE || 'America/Bogota',
+    }).format(day);
+    const range = `startDate=${ymd}&endDate=${ymd}`;
+
+    beforeAll(async () => {
+      ({ app, http, close } = await createE2EApp());
+      ds = app.get(DataSource);
+      await assertWritableDatabase(ds);
+      jest.spyOn(app.get(EventEmitter2), 'emit').mockImplementation(() => true);
+      ({ owner } = await findDevOwnerAndEmployee(ds));
+      token = signToken(owner, ['Owner']);
+      client = await ds
+        .getRepository(Client)
+        .findOneOrFail({ where: { ownerId: owner.id } });
+      const services = await ds.getRepository(Service).find({
+        where: { ownerId: owner.id, isActive: true },
+        order: { price: 'ASC' },
+      });
+      cheap = services[0];
+      pricey = services[services.length - 1];
+      expect(Number(cheap.price)).toBeLessThan(Number(pricey.price));
+      await resetTrialQuota(ds, owner.id, { limit: 1000 });
+      week = await firstFreeWeek(ds);
+    }, E2E_BOOT_TIMEOUT_MS);
+
+    afterAll(async () => close?.());
+
+    async function newAppointment(): Promise<{ id: string; total: number }> {
+      week += 1;
+      const res = await http
+        .post('/api/appointments')
+        .set(auth())
+        .send({
+          client_id: client.id,
+          professional_id: owner.id,
+          service_ids: [cheap.id, pricey.id],
+          date: new Date(futureMonday(week) + 15 * 3_600_000).toISOString(),
+        });
+      expect(res.status).toBe(201);
+      return { id: res.body.id, total: Number(res.body.total_price) };
+    }
+
+    const pay = async (appointmentId: string, amount: number, extra = {}) => {
+      const res = await http
+        .post('/api/payments')
+        .set(auth())
+        .send({
+          appointment_id: appointmentId,
+          amount,
+          payment_method: 'CASH',
+          ...extra,
+        });
+      expect(res.status).toBe(201);
+      return res.body;
+    };
+
+    const get = async (path: string) => {
+      const res = await http.get(`/api/payments/${path}`).set(auth());
+      expect(res.status).toBe(200);
+      return res.body;
+    };
+    const byServiceId = (rows: any[], id: string) =>
+      rows.find((r) => r.service_id === id) ?? {
+        total_amount: 0,
+        appointment_count: 0,
+        total: 0,
+        count: 0,
+      };
+
+    it('by-service: ingreso neto repartido por precio, una vez por cita aunque tenga varios pagos; suma 100 % (2.28)', async () => {
+      const before = await get(`stats/by-service?${range}`);
+      const beforeEmployee = await get(
+        `employee-stats?${range}&professionalId=${owner.id}`,
+      );
+
+      const { id, total } = await newAppointment();
+      const first = Math.round(total * 40) / 100;
+      const rest = Math.round((total - first) * 100) / 100;
+      await pay(id, first);
+      const second = await pay(id, rest);
+      const refund = Math.round(total * 10) / 100;
+      const refunded = await http
+        .post(`/api/payments/${second.id}/refund`)
+        .set(auth())
+        .send({ refund_amount: refund, refund_reason: 'descuento' });
+      expect(refunded.status).toBe(201);
+      const net = total - refund;
+      const share = Number(cheap.price) / total;
+
+      const after = await get(`stats/by-service?${range}`);
+      const delta = (svc: Service) =>
+        byServiceId(after, svc.id).total_amount -
+        byServiceId(before, svc.id).total_amount;
+      expect(delta(cheap)).toBeCloseTo(net * share, 1);
+      expect(delta(pricey)).toBeCloseTo(net * (1 - share), 1);
+      for (const svc of [cheap, pricey]) {
+        expect(
+          byServiceId(after, svc.id).appointment_count -
+            byServiceId(before, svc.id).appointment_count,
+        ).toBe(1);
+      }
+      const percent = after.reduce(
+        (sum: number, r: any) => sum + r.percentage_of_total,
+        0,
+      );
+      expect(percent).toBeCloseTo(100, 1);
+      const overview = await get(`stats?${range}`);
+      expect(
+        after.reduce((sum: number, r: any) => sum + r.total_amount, 0),
+      ).toBeCloseTo(overview.total_amount, 1);
+
+      // employee-stats.by_service: misma regla (count = citas).
+      const employee = await get(
+        `employee-stats?${range}&professionalId=${owner.id}`,
+      );
+      const eDelta = (svc: Service) =>
+        byServiceId(employee.by_service, svc.id).total -
+        byServiceId(beforeEmployee.by_service, svc.id).total;
+      expect(eDelta(cheap)).toBeCloseTo(net * share, 1);
+      expect(
+        byServiceId(employee.by_service, pricey.id).count -
+          byServiceId(beforeEmployee.by_service, pricey.id).count,
+      ).toBe(1);
+
+      // daily_evolution: hoy, 2 pagos más pero 1 cita más.
+      const today = (body: any) =>
+        body.daily_evolution.find((d: any) => d.date === ymd) ?? {
+          count: 0,
+          payment_count: 0,
+          appointment_count: 0,
+          total: 0,
+        };
+      expect(
+        today(employee).payment_count - today(beforeEmployee).payment_count,
+      ).toBe(2);
+      expect(today(employee).count - today(beforeEmployee).count).toBe(2);
+      expect(
+        today(employee).appointment_count -
+          today(beforeEmployee).appointment_count,
+      ).toBe(1);
+      expect(today(employee).total - today(beforeEmployee).total).toBeCloseTo(
+        net,
+        1,
+      );
+    });
+
+    it('by-method: incluye los métodos propios (con su nombre) y los porcentajes suman 100 (2.28)', async () => {
+      const name = `Nequi e2e ${Date.now()}`;
+      const custom = await http
+        .post('/api/custom-payment-methods')
+        .set(auth())
+        .send({ name });
+      expect(custom.status).toBe(201);
+
+      const { id, total } = await newAppointment();
+      const half = Math.round(total * 50) / 100;
+      await pay(id, half);
+      await pay(id, Math.round((total - half) * 100) / 100, {
+        payment_method: undefined,
+        custom_payment_method_id: custom.body.id,
+      });
+
+      const rows = await get(`stats/by-method?${range}`);
+      const own = rows.find(
+        (r: any) => r.custom_payment_method_id === custom.body.id,
+      );
+      expect(own).toMatchObject({
+        method: name,
+        method_type: 'CUSTOM',
+        count: 1,
+      });
+      expect(own.total).toBeCloseTo(total - half, 1);
+      const percent = rows.reduce(
+        (sum: number, r: any) => sum + r.percentage,
+        0,
+      );
+      expect(percent).toBeCloseTo(100, 1);
+      const overview = await get(`stats?${range}`);
+      expect(
+        rows.reduce((sum: number, r: any) => sum + r.total, 0),
+      ).toBeCloseTo(overview.total_amount, 1);
+      for (const r of rows.filter((r: any) => r.method_type === 'STANDARD')) {
+        expect(r.custom_payment_method_id).toBeNull();
+      }
+    });
+  },
+);

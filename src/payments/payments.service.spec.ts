@@ -356,3 +356,89 @@ describe('PaymentsService.refund (2.06)', () => {
     expect(error).toBeInstanceOf(NotFoundException);
   });
 });
+
+describe('PaymentsService (estadísticas, 2.28)', () => {
+  const day = new Date('2030-01-07T00:00:00-05:00');
+  const withRows = (rows: any[]) => {
+    const built = build();
+    (built.paymentRepo as any).manager = {
+      query: jest.fn<Promise<any[]>, [string, unknown[]]>(async () => rows),
+    };
+    return built;
+  };
+
+  it('by-service: porcentajes sobre lo atribuido (suman 100) y promedio por cita', async () => {
+    const { service, paymentRepo } = withRows([
+      {
+        service_id: 'a',
+        service_name: 'A',
+        appointment_count: '2',
+        payment_count: '3',
+        total_amount: '75.004',
+      },
+      {
+        service_id: 'b',
+        service_name: 'B',
+        appointment_count: '1',
+        payment_count: '1',
+        total_amount: '25',
+      },
+    ]);
+    const rows = await service.getPaymentStatsByService(day, day, TENANT);
+    expect(rows).toEqual([
+      {
+        service_id: 'a',
+        service_name: 'A',
+        appointment_count: 2,
+        payment_count: 3,
+        total_amount: 75,
+        average_amount: 37.5,
+        percentage_of_total: 75,
+      },
+      expect.objectContaining({ service_id: 'b', percentage_of_total: 25 }),
+    ]);
+    const [sql, params] = (paymentRepo as any).manager.query.mock.calls[0];
+    expect(sql).toContain('l.price / l.appointment_price');
+    expect(params).toHaveLength(3); // sin filtro de profesional
+  });
+
+  it('by-method: estándar y propios en la misma lista; porcentajes suman 100', async () => {
+    const { service } = withRows([
+      {
+        method: 'CASH',
+        method_type: 'STANDARD',
+        custom_payment_method_id: null,
+        count: '2',
+        total: '60',
+      },
+      {
+        method: 'Nequi',
+        method_type: 'CUSTOM',
+        custom_payment_method_id: 'm1',
+        count: '1',
+        total: '40',
+      },
+    ]);
+    const rows = await service.getPaymentStatsByMethod(day, day, TENANT);
+    expect(rows).toEqual([
+      {
+        method: 'CASH',
+        method_type: 'STANDARD',
+        custom_payment_method_id: null,
+        count: 2,
+        total: 60,
+        average: 30,
+        percentage: 60,
+      },
+      {
+        method: 'Nequi',
+        method_type: 'CUSTOM',
+        custom_payment_method_id: 'm1',
+        count: 1,
+        total: 40,
+        average: 40,
+        percentage: 40,
+      },
+    ]);
+  });
+});

@@ -34,7 +34,10 @@ import { PaymentNotification } from './interfaces/payment-notification.interface
 import { CustomPaymentMethodsService } from './custom-payment-methods.service';
 import { PaymentMethodStats } from './interfaces/payment-method-stats.interface';
 import { PaymentComparisonStats } from './interfaces/payment-comparison-stats.interface';
-import { ServiceStats } from './interfaces/service-stats.interface';
+import {
+  ServiceRevenueRow,
+  ServiceStats,
+} from './interfaces/service-stats.interface';
 import { ProfessionalStats } from './interfaces/professional-stats.interface';
 import { ClientStats } from './interfaces/client-stats.interface';
 import {
@@ -353,6 +356,72 @@ export class PaymentsService {
     }
   }
 
+  /**
+   * Ingreso neto por servicio (2.28), ÚNICA consulta de "por servicio" (la usan
+   * `stats/by-service` y `employee-stats.by_service`). Lo pagado neto de cada
+   * cita en el periodo (pagos COMPLETED, `amount − refund_amount`) se reparte
+   * entre sus servicios en proporción a su precio (a partes iguales si todos
+   * valen 0). Así cada cita cuenta una vez por servicio, tenga los pagos que
+   * tenga, y la suma de todos los servicios = ingreso neto del periodo.
+   * Limitación: usa el precio ACTUAL del servicio (la cita no guarda el precio
+   * de cada servicio, solo `total_price`).
+   */
+  private async serviceRevenue(
+    tenantId: string,
+    start: Date,
+    end: Date,
+    professionalId?: string,
+  ): Promise<ServiceRevenueRow[]> {
+    const params: unknown[] = [
+      tenantId,
+      start.toISOString(),
+      end.toISOString(),
+    ];
+    if (professionalId) params.push(professionalId);
+    const rows = await this.paymentRepository.manager.query(
+      `
+      WITH paid AS (
+        SELECT p."appointmentId" AS appointment_id,
+               SUM(${netAmountSql('p')}) AS net,
+               COUNT(*) AS payments
+          FROM payments p
+          JOIN appointments a ON a.id = p."appointmentId"
+         WHERE p.owner_id = $1
+           AND p.status = 'COMPLETED'
+           AND p.created_at BETWEEN $2 AND $3
+           ${professionalId ? 'AND a.professional_id = $4' : ''}
+         GROUP BY p."appointmentId"
+      ), lines AS (
+        SELECT aps.appointment_id, s.id AS service_id, s.name AS service_name,
+               s.price,
+               SUM(s.price) OVER (PARTITION BY aps.appointment_id) AS appointment_price,
+               COUNT(*) OVER (PARTITION BY aps.appointment_id) AS appointment_lines
+          FROM appointment_services aps
+          JOIN services s ON s.id = aps.service_id
+         WHERE aps.appointment_id IN (SELECT appointment_id FROM paid)
+      )
+      SELECT l.service_id, l.service_name,
+             COUNT(DISTINCT l.appointment_id) AS appointment_count,
+             SUM(paid.payments) AS payment_count,
+             SUM(paid.net * CASE WHEN l.appointment_price > 0
+                                 THEN l.price / l.appointment_price
+                                 ELSE 1.0 / l.appointment_lines END) AS total_amount
+        FROM lines l
+        JOIN paid ON paid.appointment_id = l.appointment_id
+       GROUP BY l.service_id, l.service_name
+       ORDER BY total_amount DESC
+      `,
+      params,
+    );
+    return rows.map((row: any) => ({
+      service_id: row.service_id,
+      service_name: row.service_name,
+      appointment_count: Number(row.appointment_count) || 0,
+      payment_count: Number(row.payment_count) || 0,
+      total_amount: Math.round((Number(row.total_amount) || 0) * 100) / 100,
+    }));
+  }
+
   async getPaymentStats(
     startDate: Date,
     endDate: Date,
@@ -428,33 +497,14 @@ export class PaymentsService {
         )
         .getRawOne();
 
-      // Desglose por servicio
-      let serviceBreakdown = [];
+      // Desglose por servicio: ingreso neto repartido (2.28, `serviceRevenue`)
+      let serviceBreakdown: ServiceRevenueRow[] = [];
       try {
-        serviceBreakdown = await this.paymentRepository.manager.query(
-          `
-        SELECT 
-          s.id as service_id,
-          s.name as service_name,
-          COUNT(*) as service_count,
-          SUM(s.price) as service_total
-        FROM payments p
-        JOIN appointments a ON p."appointmentId" = a.id
-        JOIN appointment_services aps ON a.id = aps.appointment_id
-        JOIN services s ON aps.service_id = s.id
-        WHERE p.owner_id = $1
-        AND p.status = 'COMPLETED'
-        AND a."professional_id" = $2
-        AND p.created_at BETWEEN $3 AND $4
-        GROUP BY s.id, s.name
-        ORDER BY service_total DESC
-      `,
-          [
-            tenantId,
-            professionalId,
-            startDate.toISOString(),
-            adjustedEndDate.toISOString(),
-          ],
+        serviceBreakdown = await this.serviceRevenue(
+          tenantId,
+          startDate,
+          adjustedEndDate,
+          professionalId,
         );
       } catch (serviceError) {
         this.logger.error(
@@ -463,7 +513,7 @@ export class PaymentsService {
         serviceBreakdown = [];
       }
 
-      // Consultar evolución diaria con query nativo
+      // Evolución diaria: pagos y citas por separado (2.28)
       let dailyStats = [];
       try {
         dailyStats = await this.paymentRepository.manager.query(
@@ -471,7 +521,8 @@ export class PaymentsService {
         SELECT 
           to_char(p.created_at AT TIME ZONE $5::text, 'YYYY-MM-DD') as date,
           SUM(${netAmountSql('p')}) as daily_total,
-          COUNT(DISTINCT p.id) as daily_count
+          COUNT(DISTINCT p.id) as daily_count,
+          COUNT(DISTINCT p."appointmentId") as daily_appointments
         FROM payments p
         JOIN appointments a ON p."appointmentId" = a.id
         WHERE p.owner_id = $1
@@ -508,16 +559,21 @@ export class PaymentsService {
 
       return {
         summary: summary,
+        // `count` = citas en las que se hizo el servicio (2.28: antes, pagos).
         by_service: serviceBreakdown.map((item) => ({
           service_id: item.service_id,
           service_name: item.service_name,
-          count: Number(item.service_count || 0),
-          total: Number(item.service_total || 0),
+          count: item.appointment_count,
+          total: item.total_amount,
         })),
+        // `count` (= `payment_count`) son pagos, como antes; `appointment_count`
+        // son las citas distintas que recibieron esos pagos (2.28).
         daily_evolution: dailyStats.map((item) => ({
           date: item.date,
           total: Number(item.daily_total || 0),
           count: Number(item.daily_count || 0),
+          payment_count: Number(item.daily_count || 0),
+          appointment_count: Number(item.daily_appointments || 0),
         })),
       };
     } catch (error) {
@@ -539,48 +595,49 @@ export class PaymentsService {
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
 
-      // Obtener el total general para calcular porcentajes
-      const totalStats = await this.getPaymentStats(
-        startDate,
-        adjustedEndDate,
-        tenantId,
+      // Métodos estándar y propios (2.28: antes solo los estándar, y los
+      // porcentajes no sumaban 100). Un pago con método propio cuenta como
+      // CUSTOM con el nombre del método; el porcentaje es sobre la suma de
+      // todos los grupos (= ingreso neto del periodo).
+      const rows = await this.paymentRepository.manager.query(
+        `
+        SELECT
+          CASE WHEN p.custom_payment_method_id IS NOT NULL
+               THEN COALESCE(cpm.name, 'Método propio')
+               ELSE COALESCE(p.payment_method::text, 'SIN_METODO') END AS method,
+          CASE WHEN p.custom_payment_method_id IS NOT NULL
+               THEN 'CUSTOM' ELSE 'STANDARD' END AS method_type,
+          p.custom_payment_method_id AS custom_payment_method_id,
+          COUNT(*) AS count,
+          SUM(${netAmountSql('p')}) AS total
+        FROM payments p
+        LEFT JOIN custom_payment_methods cpm
+          ON cpm.id = p.custom_payment_method_id AND cpm.owner_id = p.owner_id
+        WHERE p.owner_id = $1
+          AND p.status = 'COMPLETED'
+          AND p.created_at BETWEEN $2 AND $3
+        GROUP BY 1, 2, 3
+        `,
+        [tenantId, startDate.toISOString(), adjustedEndDate.toISOString()],
+      );
+      const grandTotal = rows.reduce(
+        (sum: number, item: any) => sum + (Number(item.total) || 0),
+        0,
       );
 
-      // Consulta para pagos con métodos estándar
-      const standardMethodsQuery = this.paymentRepository
-        .createQueryBuilder('payment')
-        .select('payment.payment_method', 'method')
-        .addSelect("'STANDARD'", 'method_type')
-        .addSelect('COUNT(*)', 'count')
-        .addSelect(`SUM(${netAmountSql('payment')})`, 'total')
-        .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
-        .andWhere('payment.ownerId = :tenantId', { tenantId })
-        .andWhere(
-          'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
-          {
-            startDate,
-            adjustedEndDate,
-          },
-        )
-        .andWhere('payment.payment_method IS NOT NULL')
-        .groupBy('payment.payment_method');
-
-      // Hacer la consulta para métodos estándar
-      const standardResults = await standardMethodsQuery.getRawMany();
-
-      // Transformar los resultados
-      const results = standardResults.map((item) => ({
-        method: item.method,
-        method_type: item.method_type,
-        count: Number(item.count) || 0,
-        total: Number(item.total) || 0,
-        average:
-          Number(item.count) > 0 ? Number(item.total) / Number(item.count) : 0,
-        percentage:
-          totalStats.total_amount > 0
-            ? (Number(item.total) * 100) / totalStats.total_amount
-            : 0,
-      }));
+      const results: PaymentMethodStats[] = rows.map((item: any) => {
+        const count = Number(item.count) || 0;
+        const total = Number(item.total) || 0;
+        return {
+          method: item.method,
+          method_type: item.method_type,
+          custom_payment_method_id: item.custom_payment_method_id ?? null,
+          count,
+          total,
+          average: count > 0 ? total / count : 0,
+          percentage: grandTotal > 0 ? (total * 100) / grandTotal : 0,
+        };
+      });
 
       // Ordenar por total (de mayor a menor)
       return results.sort((a, b) => b.total - a.total);
@@ -693,72 +750,28 @@ export class PaymentsService {
       startDate = startOfBusinessDay(startDate);
       const adjustedEndDate = endOfBusinessDay(endDate);
 
-      // Obtener el total general de pagos para calcular porcentajes
-      const totalStats = await this.getPaymentStats(
+      // 2.28: ingreso neto real por servicio (antes, precio de lista × nº de
+      // pagos: con varios pagos por cita se contaba varias veces y los
+      // porcentajes pasaban de 100).
+      const rows = await this.serviceRevenue(
+        tenantId,
         startDate,
         adjustedEndDate,
-        tenantId,
       );
-
-      // Obtener servicios con sus precios
-      const servicesWithPrices = await this.paymentRepository.manager
-        .createQueryBuilder()
-        .select('s.id', 'id')
-        .addSelect('s.name', 'name')
-        .addSelect('s.price', 'price')
-        .from('services', 's')
-        .where('s.ownerId = :tenantId', { tenantId })
-        .getRawMany();
-
-      // Crear un mapa de precios de servicios
-      const servicePrices = {};
-      for (const service of servicesWithPrices) {
-        servicePrices[service.id] = Number(service.price) || 0;
-      }
-
-      // Consulta SQL para contar servicios y frecuencia
-      const entityManager = this.paymentRepository.manager;
-      const query = `
-        SELECT 
-          s.id as service_id,
-          s.name as service_name,
-          COUNT(*) as usage_count
-        FROM payments p
-        JOIN appointments a ON p."appointmentId" = a.id
-        JOIN appointment_services aps ON a.id = aps.appointment_id
-        JOIN services s ON aps.service_id = s.id
-        WHERE p.owner_id = $1
-        AND p.status = 'COMPLETED'
-        AND p.created_at BETWEEN $2 AND $3
-        GROUP BY s.id, s.name
-        ORDER BY usage_count DESC
-      `;
-
-      const serviceUsage = await entityManager.query(query, [
-        tenantId,
-        startDate.toISOString(),
-        adjustedEndDate.toISOString(),
-      ]);
-
-      // Procesar los resultados utilizando los precios de los servicios
-      const result = serviceUsage.map((item) => {
-        const serviceId = item.service_id;
-        const usageCount = Number(item.usage_count) || 0;
-        const price = servicePrices[serviceId] || 0;
-        const totalAmount = price * usageCount;
-
-        return {
-          service_id: serviceId,
-          service_name: item.service_name,
-          payment_count: usageCount,
-          total_amount: totalAmount,
-          average_amount: price,
-          percentage_of_total:
-            totalStats.total_amount > 0
-              ? (totalAmount * 100) / totalStats.total_amount
-              : 0,
-        };
-      });
+      const grandTotal = rows.reduce((sum, row) => sum + row.total_amount, 0);
+      const result: ServiceStats[] = rows.map((row) => ({
+        service_id: row.service_id,
+        service_name: row.service_name,
+        appointment_count: row.appointment_count,
+        payment_count: row.payment_count,
+        total_amount: row.total_amount,
+        average_amount:
+          row.appointment_count > 0
+            ? row.total_amount / row.appointment_count
+            : 0,
+        percentage_of_total:
+          grandTotal > 0 ? (row.total_amount * 100) / grandTotal : 0,
+      }));
 
       // Ordenar por total_amount de mayor a menor
       result.sort((a, b) => b.total_amount - a.total_amount);
