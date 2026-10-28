@@ -146,6 +146,13 @@ export class AuthController {
     );
   }
 
+  /** Usuario de la sesión, sin secretos (2.35). */
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  @Get('me')
+  me(@CurrentUser() user: AuthUser) {
+    return this.authService.me(user.id);
+  }
+
   @hasRoles(JwtRoles.Owner)
   @Get('employees')
   getEmployees(

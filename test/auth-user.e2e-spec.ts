@@ -88,6 +88,51 @@ describe('AuthUser y tenant (e2e)', () => {
     }
   });
 
+  it('GET /auth/me: Owner y Employee reciben su usuario (campos fijos, sin secretos) con su tenant (2.35)', async () => {
+    const fields = [
+      'email',
+      'id',
+      'image',
+      'isActive',
+      'is_email_verified',
+      'lastname',
+      'name',
+      'phone',
+      'roles',
+      'tenantId',
+    ];
+    const asOwner = await http
+      .get('/api/auth/me')
+      .set(auth(signToken(owner, ['Owner'])));
+    expect(asOwner.status).toBe(200);
+    expect(Object.keys(asOwner.body).sort()).toEqual(fields);
+    expect(asOwner.body).toMatchObject({
+      id: owner.id,
+      email: owner.email,
+      tenantId: owner.id,
+      is_email_verified: owner.is_email_verified,
+    });
+    expect(asOwner.body.roles).toEqual(
+      expect.arrayContaining([{ name: 'Owner' }]),
+    );
+
+    if (!employee) return; // la BD de dev no tiene empleado
+    const asEmployee = await http
+      .get('/api/auth/me')
+      .set(auth(signToken(employee, ['Employee'])));
+    expect(asEmployee.status).toBe(200);
+    expect(Object.keys(asEmployee.body).sort()).toEqual(fields);
+    expect(asEmployee.body).toMatchObject({
+      id: employee.id,
+      tenantId: owner.id,
+    });
+  });
+
+  it('GET /auth/me sin sesión → 401', async () => {
+    const res = await http.get('/api/auth/me');
+    expect([res.status, res.body.code]).toEqual([401, 'UNAUTHORIZED']);
+  });
+
   it('un token anterior a 2.01 de un usuario inexistente responde 401', async () => {
     const res = await http.get('/api/subscriptions/status').set(
       auth(

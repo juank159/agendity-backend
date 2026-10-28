@@ -123,6 +123,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
     async () => {
       const paths = [
         '/api/appointments',
+        '/api/auth/me',
         '/api/schedules/user/{owner}',
         '/api/auth/employees?includeDeleted=true',
         '/api/auth/employees/active',

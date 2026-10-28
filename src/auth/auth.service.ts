@@ -162,6 +162,35 @@ export class AuthService {
   }
 
   /**
+   * Usuario de la sesión (2.35, `GET /auth/me`): solo los campos que necesita
+   * la app, sin secretos (parte de `toUserResponse`). `tenantId` = id del Owner
+   * (Owner: el suyo; Employee: el de su owner). El acceso ya lo validó
+   * `JwtStrategy` en esta misma petición; si la fila desapareció, 404.
+   */
+  async me(userId: string): Promise<SessionUser> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['roles', 'owner'],
+    });
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+    const data = toUserResponse(user);
+    return {
+      id: data.id,
+      name: data.name,
+      lastname: data.lastname,
+      email: data.email,
+      phone: data.phone,
+      image: data.image ?? null,
+      roles: data.roles,
+      tenantId: tenantOf(user),
+      isActive: data.isActive,
+      is_email_verified: data.is_email_verified,
+    };
+  }
+
+  /**
    * Verifica el ID token de Google: firma, expiración y que la audiencia sea uno
    * de nuestros client IDs. Sin client IDs configurados no se verifica nunca
    * (sin audiencia valdría un token emitido para cualquier app de Google).
@@ -370,6 +399,20 @@ export class AuthService {
       message: 'Contraseña actualizada correctamente',
     };
   }
+}
+
+/** Respuesta de `GET /auth/me` (2.35). */
+export interface SessionUser {
+  id: string;
+  name: string;
+  lastname: string;
+  email: string;
+  phone: string | null;
+  image: string | null;
+  roles: { name: string }[];
+  tenantId: string;
+  isActive: boolean;
+  is_email_verified: boolean;
 }
 
 /**
