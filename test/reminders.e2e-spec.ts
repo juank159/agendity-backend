@@ -118,6 +118,19 @@ describe('Recordatorios 2.09a (e2e, solo lectura)', () => {
     expect(process).not.toHaveBeenCalled();
   });
 
+  it('no hay ruta para enviar WhatsApp libres: POST /whatsapp/send → 404 sin enviar (5.08)', async () => {
+    const res = await http
+      .post('/api/whatsapp/send')
+      .set(
+        auth(
+          signToken({ id: STRANGER_ID, name: 'x', email: 'x@x.x' }, ['Owner']),
+        ),
+      )
+      .send({ phoneNumber: '3001234567', message: 'hola' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+  });
+
   it('check-reminders: el Owner solo dispara los de su negocio', async () => {
     // Mockeado: la consulta real se prueba en la copia (bloque que escribe).
     const spy = jest

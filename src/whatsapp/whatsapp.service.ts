@@ -97,7 +97,10 @@ export class WhatsappService {
     }
   }
 
-  // Enviar mensaje de WhatsApp
+  /**
+   * Envío por CallMeBot. Uso interno (`sendToOwner`, `sendTestMessage`): desde
+   * 5.08 no hay ruta HTTP que lo exponga.
+   */
   async sendWhatsAppMessage(
     ownerId: string,
     phoneNumber: string,
