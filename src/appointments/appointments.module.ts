@@ -3,6 +3,7 @@ import { AppointmentsService } from './appointments.service';
 import { AppointmentsController } from './appointments.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Appointment } from './entities/appointment.entity';
+import { AppointmentServiceLine } from './entities/appointment-service-line.entity';
 import { ClientsModule } from 'src/clients/clients.module';
 import { UsersModule } from 'src/users/users.module';
 import { ServicesModule } from 'src/services/services.module';
@@ -13,7 +14,7 @@ import { SubscriptionsModule } from 'src/subscriptions/subscriptions.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Appointment]),
+    TypeOrmModule.forFeature([Appointment, AppointmentServiceLine]),
     ClientsModule,
     UsersModule,
     forwardRef(() => SubscriptionsModule),

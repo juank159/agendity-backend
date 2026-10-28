@@ -7,14 +7,15 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToOne,
-  ManyToMany,
-  JoinTable,
+  AfterLoad,
   JoinColumn,
   Index,
 } from 'typeorm';
 import { Client } from '../../clients/entities/client.entity';
 import { User } from '../../users/entities/user.entity';
+import { Exclude } from 'class-transformer';
 import { Service } from '../../services/entities/service.entity';
+import { AppointmentServiceLine } from './appointment-service-line.entity';
 import { TimeBlock } from 'src/time-blocks/entities/time-block.entity';
 import { Payment } from 'src/payments/entities/payment.entity';
 import { Review } from 'src/reviews/entities/review.entity';
@@ -22,6 +23,16 @@ import {
   AppointmentPaymentStatus,
   AppointmentStatus,
 } from 'src/common/enums/status.enum';
+
+/** Un servicio en la respuesta de una cita, con el precio cobrado en ella. */
+export type AppointmentServiceView = Service & { appointment_price: string };
+
+export function withAppointmentPrice(
+  service: Service,
+  price: string,
+): AppointmentServiceView {
+  return Object.assign(service, { appointment_price: price });
+}
 
 @Entity('appointments')
 // Lo usa el cron de recordatorios (2.09a) y cualquier consulta por rango de fechas.
@@ -43,19 +54,32 @@ export class Appointment {
   @JoinColumn({ name: 'professional_id' })
   professional: User;
 
-  @ManyToMany(() => Service, (service) => service.appointments)
-  @JoinTable({
-    name: 'appointment_services',
-    joinColumn: {
-      name: 'appointment_id',
-      referencedColumnName: 'id',
-    },
-    inverseJoinColumn: {
-      name: 'service_id',
-      referencedColumnName: 'id',
-    },
+  /**
+   * Servicios de la cita con su precio guardado (2.29). Interno: en las
+   * respuestas sale `services` (lo arma `exposeServices`).
+   */
+  @OneToMany(() => AppointmentServiceLine, (line) => line.appointment, {
+    cascade: ['insert'],
   })
-  services: Service[];
+  @Exclude({ toPlainOnly: true })
+  serviceLines: AppointmentServiceLine[];
+
+  /**
+   * Servicios de la cita tal como los lee la app (`id`, `name`, `duration`,
+   * `color`…), cada uno con `appointment_price`: el precio cobrado en ESTA
+   * cita (2.29), que puede diferir del `price` actual del servicio. Solo existe
+   * si se cargó `serviceLines.service` (no es una columna).
+   */
+  services?: AppointmentServiceView[];
+
+  @AfterLoad()
+  exposeServices(): void {
+    if (this.serviceLines?.every((line) => line.service)) {
+      this.services = this.serviceLines.map((line) =>
+        withAppointmentPrice(line.service, line.price),
+      );
+    }
+  }
 
   @Column('timestamptz', { name: 'date' })
   date: Date;

@@ -330,5 +330,83 @@ describeWritable(
         expect(r.custom_payment_method_id).toBeNull();
       }
     });
+
+    it('el precio de cada servicio queda guardado en la cita: subir el precio del catálogo no cambia el total, ni al editar, ni el reparto por servicio (2.29)', async () => {
+      const [{ id: categoryId }] = await ds.query(
+        `SELECT id FROM categories WHERE owner_id = $1 LIMIT 1`,
+        [owner.id],
+      );
+      const stamp = Date.now();
+      const newService = async (name: string) => {
+        const res = await http
+          .post('/api/services')
+          .set(auth())
+          .send({ name, price: 10000, duration: 30, categoryId });
+        expect(res.status).toBe(201);
+        return res.body.id as string;
+      };
+      const a = await newService(`Corte e2e 2.29 ${stamp}`);
+      const b = await newService(`Barba e2e 2.29 ${stamp}`);
+      const before = await get(`stats/by-service?${range}`);
+
+      week += 1;
+      const created = await http
+        .post('/api/appointments')
+        .set(auth())
+        .send({
+          client_id: client.id,
+          professional_id: owner.id,
+          service_ids: [a, b],
+          date: new Date(futureMonday(week) + 15 * 3_600_000).toISOString(),
+        });
+      expect(created.status).toBe(201);
+      expect(Number(created.body.total_price)).toBe(20000);
+      const id = created.body.id;
+      await pay(id, 20000);
+
+      // El servicio A sube de 10.000 a 30.000 en el catálogo.
+      const raised = await http
+        .patch(`/api/services/${a}`)
+        .set(auth())
+        .send({ price: 30000 });
+      expect(raised.status).toBe(200);
+
+      const read = await http.get(`/api/appointments/${id}`).set(auth());
+      expect(Number(read.body.total_price)).toBe(20000);
+      expect(
+        read.body.services
+          .map((s: any) => [s.id, s.appointment_price, Number(s.price)])
+          .sort(),
+      ).toEqual(
+        [
+          [a, '10000.00', 30000],
+          [b, '10000.00', 10000],
+        ].sort(),
+      );
+      expect(read.body).not.toHaveProperty('serviceLines');
+
+      // Editar reenviando los mismos servicios (lo hace la app) no recalcula.
+      const edited = await http
+        .patch(`/api/appointments/${id}`)
+        .set(auth())
+        .send({ service_ids: [a, b], notes: 'editada 2.29' });
+      expect(edited.status).toBe(200);
+      expect(Number(edited.body.total_price)).toBe(20000);
+
+      // Reparto por servicio con el precio guardado: 10.000 y 10.000 (no 15.000/5.000).
+      const after = await get(`stats/by-service?${range}`);
+      for (const svc of [a, b]) {
+        expect(
+          byServiceId(after, svc).total_amount -
+            byServiceId(before, svc).total_amount,
+        ).toBeCloseTo(10000, 1);
+      }
+
+      // La lista de citas también trae `services` con su precio en la cita.
+      const list = await http.get('/api/appointments').set(auth());
+      const listed = list.body.find((x: any) => x.id === id);
+      expect(listed.services).toHaveLength(2);
+      expect(listed.services.every((s: any) => s.appointment_price)).toBe(true);
+    });
   },
 );

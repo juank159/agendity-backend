@@ -15,8 +15,14 @@ import {
   DataSource,
   EntityManager,
   QueryFailedError,
+  In,
 } from 'typeorm';
-import { Appointment } from './entities/appointment.entity';
+import {
+  Appointment,
+  withAppointmentPrice,
+} from './entities/appointment.entity';
+import { AppointmentServiceLine } from './entities/appointment-service-line.entity';
+import { priceLinesFor, priceLinesTotal } from './appointment-pricing';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { ClientsService } from '../clients/clients.service';
@@ -151,21 +157,23 @@ export class AppointmentsService {
       this.assertProfessionalSchedulable(professional);
 
       const services = await this.loadTenantServices(service_ids, tenantId);
+      // Precio de cada servicio guardado en la cita (2.29); total = su suma.
+      const priceLines = priceLinesFor(services);
 
       const appointmentToSave = {
         ownerId: tenantId,
         professionalId: professional_id,
         date: start,
-        total_price: services.reduce(
-          (sum, service) => sum + Number(service.price),
-          0,
-        ),
+        total_price: priceLinesTotal(priceLines),
         status: AppointmentStatus.PENDING,
         payment_status: AppointmentPaymentStatus.PENDING,
         notes: appointmentData.notes || '',
         client: client,
         professional: professional,
-        services: services,
+        // Se insertan con la cita (cascade 'insert').
+        serviceLines: priceLines.map((line) =>
+          Object.assign(new AppointmentServiceLine(), line),
+        ),
       };
 
       const savedAppointment = await this.dataSource.transaction(
@@ -189,6 +197,11 @@ export class AppointmentsService {
             .getRepository(Appointment)
             .save(appointmentToSave);
         },
+      );
+
+      // La respuesta lleva los servicios como siempre, con su precio en la cita.
+      savedAppointment.services = services.map((service, i) =>
+        withAppointmentPrice(service, priceLines[i].price),
       );
 
       // Emitir el evento después de guardar la cita
@@ -545,28 +558,14 @@ export class AppointmentsService {
         updateData.client = client;
       }
 
-      if (
-        updateAppointmentDto.service_ids &&
-        updateAppointmentDto.service_ids.length > 0
-      ) {
-        const services = await Promise.all(
-          updateAppointmentDto.service_ids.map((id) =>
-            this.servicesService.findOne(id, tenantId),
-          ),
-        );
-
-        if (services.some((service) => !service)) {
-          throw new NotFoundException('Uno o más servicios no encontrados');
-        }
-
-        updateData.services = services;
-
-        // Actualizar precio total
-        updateData.total_price = services.reduce(
-          (sum, service) => sum + Number(service.price),
-          0,
-        );
-      }
+      // Servicios nuevos de la cita (si vienen). Sus precios y el total se
+      // calculan dentro de la transacción, contra las líneas guardadas (2.29).
+      const nextServices = updateAppointmentDto.service_ids?.length
+        ? await this.loadTenantServices(
+            updateAppointmentDto.service_ids,
+            tenantId,
+          )
+        : undefined;
 
       const slotChanged = !!(
         updateAppointmentDto.professional_id ||
@@ -614,7 +613,7 @@ export class AppointmentsService {
             tenantId,
             professionalId,
             start: new Date(updateData.date ?? appointment.date),
-            services: updateData.services ?? appointment.services,
+            services: nextServices ?? appointment.services,
             excludeAppointmentId: id,
           });
         }
@@ -624,6 +623,13 @@ export class AppointmentsService {
           updateData,
           manualReminderResetOnReschedule(current.date, updateData.date),
         );
+        if (nextServices) {
+          updateData.total_price = await this.replaceServiceLines(
+            manager,
+            id,
+            nextServices,
+          );
+        }
         await manager.getRepository(Appointment).save(updateData);
       });
 
@@ -635,6 +641,40 @@ export class AppointmentsService {
         operation: 'actualizar',
       });
     }
+  }
+
+  /**
+   * Cambia los servicios de una cita (2.29) con la cita ya bloqueada: los que
+   * se conservan mantienen el precio guardado, los nuevos toman el precio
+   * actual y los quitados se borran. Devuelve el total nuevo (suma de las
+   * líneas). Así, reenviar los mismos servicios no cambia el total aunque el
+   * catálogo haya cambiado de precio.
+   */
+  private async replaceServiceLines(
+    manager: EntityManager,
+    appointmentId: string,
+    services: { id: string; price: number | string }[],
+  ): Promise<number> {
+    const repo = manager.getRepository(AppointmentServiceLine);
+    const current = await repo.find({ where: { appointmentId } });
+    const lines = priceLinesFor(
+      services,
+      new Map(current.map((line) => [line.serviceId, line.price])),
+    );
+    const keep = new Set(lines.map((line) => line.serviceId));
+    const removed = current.filter((line) => !keep.has(line.serviceId));
+    if (removed.length) {
+      await repo.delete({
+        appointmentId,
+        serviceId: In(removed.map((line) => line.serviceId)),
+      });
+    }
+    const existing = new Set(current.map((line) => line.serviceId));
+    const added = lines.filter((line) => !existing.has(line.serviceId));
+    if (added.length) {
+      await repo.insert(added.map((line) => ({ appointmentId, ...line })));
+    }
+    return priceLinesTotal(lines);
   }
 
   /**
@@ -753,7 +793,7 @@ export class AppointmentsService {
 
       return await this.appointmentRepository.find({
         where,
-        relations: ['client', 'professional', 'services'],
+        relations: RELATION_GROUPS.default,
         order: {
           date: 'ASC',
         },

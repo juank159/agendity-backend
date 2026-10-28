@@ -5,6 +5,7 @@ import { ErrorCode } from 'src/common/constants/error-codes';
 import { AppointmentsService } from './appointments.service';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { AppointmentStatus } from 'src/common/enums/status.enum';
+import { AppointmentServiceLine } from './entities/appointment-service-line.entity';
 
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const EMPLOYEE = '0f2ac72d-a104-4782-81c0-1178c7503c54';
@@ -51,9 +52,37 @@ function build() {
     overlaps: [] as any[],
   };
   const scheduleRepo = { find: jest.fn(async () => db.schedules) };
+  // Servicios guardados de cada cita, con su precio (2.29).
+  const lines: { appointmentId: string; serviceId: string; price: string }[] =
+    [];
+  const lineRepo = {
+    find: jest.fn(async ({ where }) =>
+      lines.filter((l) => l.appointmentId === where.appointmentId),
+    ),
+    delete: jest.fn(async ({ appointmentId, serviceId }) => {
+      const ids: string[] = serviceId.value;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (
+          lines[i].appointmentId === appointmentId &&
+          ids.includes(lines[i].serviceId)
+        ) {
+          lines.splice(i, 1);
+        }
+      }
+      return { affected: ids.length };
+    }),
+    insert: jest.fn(async (rows: typeof lines) => {
+      lines.push(...rows);
+      return {};
+    }),
+  };
   const manager = {
     getRepository: jest.fn((entity) =>
-      entity === Schedule ? scheduleRepo : txRepo,
+      entity === Schedule
+        ? scheduleRepo
+        : entity === AppointmentServiceLine
+          ? lineRepo
+          : txRepo,
     ),
     query: jest.fn<Promise<any[]>, [string, unknown[]?]>(async (sql) => {
       if (sql.includes('pg_advisory_xact_lock')) return [{}];
@@ -91,6 +120,8 @@ function build() {
     events,
     db,
     scheduleRepo,
+    lines,
+    lineRepo,
   };
 }
 
@@ -1048,5 +1079,125 @@ describe('AppointmentsService: solo a futuro (2.21)', () => {
       TENANT,
     );
     expect(slots).toEqual([]);
+  });
+});
+
+describe('AppointmentsService: precio de cada servicio guardado en la cita (2.29)', () => {
+  const OTHER = 'c0000000-0000-4000-8000-000000000003';
+  const NEW = 'c0000000-0000-4000-8000-000000000004';
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  const catalog = (prices: Record<string, string>) => (id: string) =>
+    Promise.resolve({ id, price: prices[id], duration: 30 });
+
+  it('crear guarda una línea por servicio con su precio actual y total = suma (sin coma flotante)', async () => {
+    const { service, services, txRepo } = build();
+    services.findOne.mockImplementation(
+      catalog({ [SERVICE]: '0.10', [OTHER]: '0.20' }),
+    );
+    const created = await service.create(
+      { ...dto, service_ids: [SERVICE, OTHER] },
+      TENANT,
+    );
+    const [saved] = txRepo.save.mock.calls[0];
+    expect(saved.total_price).toBe(0.3);
+    expect(saved.serviceLines.map((l: any) => [l.serviceId, l.price])).toEqual([
+      [SERVICE, '0.10'],
+      [OTHER, '0.20'],
+    ]);
+    expect(saved).not.toHaveProperty('services');
+    // La respuesta sigue trayendo `services`, con el precio en la cita.
+    expect(
+      created.services.map((s: any) => [s.id, s.appointment_price]),
+    ).toEqual([
+      [SERVICE, '0.10'],
+      [OTHER, '0.20'],
+    ]);
+  });
+
+  it('editar con los mismos servicios tras subir el precio del catálogo NO cambia el total ni las líneas', async () => {
+    const { service, repo, services, txRepo, lines, lineRepo } = build();
+    lines.push({
+      appointmentId: 'cita-1',
+      serviceId: SERVICE,
+      price: '30000.00',
+    });
+    repo.findOne.mockResolvedValue({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+      date: new Date('2030-01-01T10:00:00-05:00'),
+      status: AppointmentStatus.PENDING,
+      total_price: '30000',
+      services: [{ id: SERVICE, duration: 30 }],
+    });
+    services.findOne.mockImplementation(catalog({ [SERVICE]: '50000.00' }));
+
+    await service.update(
+      'cita-1',
+      { service_ids: [SERVICE], notes: 'x' } as any,
+      TENANT,
+    );
+
+    const [saved] = txRepo.save.mock.calls[0];
+    expect(saved.total_price).toBe(30000);
+    expect(lines).toEqual([
+      { appointmentId: 'cita-1', serviceId: SERVICE, price: '30000.00' },
+    ]);
+    expect(lineRepo.insert).not.toHaveBeenCalled();
+    expect(lineRepo.delete).not.toHaveBeenCalled();
+  });
+
+  it('cambiar servicios: el que se queda conserva su precio, el nuevo toma el actual y el quitado se borra', async () => {
+    const { service, repo, services, txRepo, lines } = build();
+    lines.push(
+      { appointmentId: 'cita-1', serviceId: SERVICE, price: '30000.00' },
+      { appointmentId: 'cita-1', serviceId: OTHER, price: '5000.00' },
+    );
+    repo.findOne.mockResolvedValue({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+      date: new Date('2030-01-01T10:00:00-05:00'),
+      status: AppointmentStatus.PENDING,
+      total_price: '35000',
+      services: [],
+    });
+    services.findOne.mockImplementation(
+      catalog({ [SERVICE]: '50000.00', [NEW]: '8000.00' }),
+    );
+
+    await service.update(
+      'cita-1',
+      { service_ids: [SERVICE, NEW] } as any,
+      TENANT,
+    );
+
+    expect(txRepo.save.mock.calls[0][0].total_price).toBe(38000);
+    expect(lines).toEqual([
+      { appointmentId: 'cita-1', serviceId: SERVICE, price: '30000.00' },
+      { appointmentId: 'cita-1', serviceId: NEW, price: '8000.00' },
+    ]);
+  });
+
+  it('mover la cita (solo la fecha) no toca el total ni las líneas', async () => {
+    const { service, repo, txRepo, lineRepo } = build();
+    repo.findOne.mockResolvedValue({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+      date: new Date('2030-01-01T10:00:00-05:00'),
+      status: AppointmentStatus.PENDING,
+      total_price: '30000',
+      services: [{ id: SERVICE, duration: 30 }],
+    });
+    await service.update(
+      'cita-1',
+      { date: '2030-01-02T10:00:00' } as any,
+      TENANT,
+    );
+    expect(txRepo.save.mock.calls[0][0]).not.toHaveProperty('total_price');
+    expect(lineRepo.find).not.toHaveBeenCalled();
   });
 });

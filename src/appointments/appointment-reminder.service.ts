@@ -294,7 +294,7 @@ export class AppointmentReminderService {
 
     const appointment = await manager.getRepository(Appointment).findOne({
       where: { id: candidate.id },
-      relations: { client: true, services: true },
+      relations: { client: true, serviceLines: { service: true } },
     });
     if (!appointment) return null;
 
@@ -358,7 +358,7 @@ export class AppointmentReminderService {
           ? { professionalId: scope.professionalId }
           : {}),
       },
-      relations: { client: true, services: true },
+      relations: { client: true, serviceLines: { service: true } },
     });
     if (!appointment) throw notFound();
 

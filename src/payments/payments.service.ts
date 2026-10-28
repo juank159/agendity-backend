@@ -363,8 +363,9 @@ export class PaymentsService {
    * entre sus servicios en proporción a su precio (a partes iguales si todos
    * valen 0). Así cada cita cuenta una vez por servicio, tenga los pagos que
    * tenga, y la suma de todos los servicios = ingreso neto del periodo.
-   * Limitación: usa el precio ACTUAL del servicio (la cita no guarda el precio
-   * de cada servicio, solo `total_price`).
+   * El reparto usa el precio de cada servicio guardado EN LA CITA
+   * (`appointment_services.price`, 2.29), no el precio actual del catálogo:
+   * cambiar un precio no altera los informes del pasado.
    */
   private async serviceRevenue(
     tenantId: string,
@@ -393,8 +394,8 @@ export class PaymentsService {
          GROUP BY p."appointmentId"
       ), lines AS (
         SELECT aps.appointment_id, s.id AS service_id, s.name AS service_name,
-               s.price,
-               SUM(s.price) OVER (PARTITION BY aps.appointment_id) AS appointment_price,
+               aps.price,
+               SUM(aps.price) OVER (PARTITION BY aps.appointment_id) AS appointment_price,
                COUNT(*) OVER (PARTITION BY aps.appointment_id) AS appointment_lines
           FROM appointment_services aps
           JOIN services s ON s.id = aps.service_id

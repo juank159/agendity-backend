@@ -5,13 +5,11 @@ import {
   ManyToOne,
   JoinColumn,
   OneToMany,
-  ManyToMany,
   Index,
 } from 'typeorm';
 import { Category } from '../../categories/entities/category.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
 import { ApiProperty } from '@nestjs/swagger';
-import { Appointment } from 'src/appointments/entities/appointment.entity';
 import { User } from 'src/users/entities/user.entity';
 
 /** Nombre único por negocio (2.08; antes era único en toda la app). */
@@ -182,7 +180,4 @@ export class Service {
 
   @OneToMany(() => UserService, (userService) => userService.service)
   userServices: UserService[];
-
-  @ManyToMany(() => Appointment, (appointment) => appointment.services)
-  appointments: Appointment[];
 }
