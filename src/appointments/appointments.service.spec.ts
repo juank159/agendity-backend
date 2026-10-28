@@ -707,45 +707,55 @@ describe('AppointmentsService (estados: cancelar y completar, 2.06)', () => {
     expect(txRepo.update).not.toHaveBeenCalled();
   });
 
-  it('applyPaymentStatus: PENDING → CONFIRMED; COMPLETED se queda; CANCELLED → 409', async () => {
+  it('applyPaymentStatus: pago nuevo PENDING → CONFIRMED (también anticipo); COMPLETED se queda; CANCELLED → 409', async () => {
     const { service, manager, txRepo } = build();
     await service.applyPaymentStatus(
       manager as any,
       at(AppointmentStatus.PENDING) as any,
-      'COMPLETED' as any,
+      'PARTIAL' as any,
+      true,
     );
     expect(txRepo.update).toHaveBeenLastCalledWith(
       { id: 'cita-1' },
-      { payment_status: 'COMPLETED', status: AppointmentStatus.CONFIRMED },
+      { payment_status: 'PARTIAL', status: AppointmentStatus.CONFIRMED },
     );
     await service.applyPaymentStatus(
       manager as any,
       at(AppointmentStatus.COMPLETED) as any,
       'COMPLETED' as any,
+      true,
     );
     expect(txRepo.update).toHaveBeenLastCalledWith(
       { id: 'cita-1' },
       { payment_status: 'COMPLETED', status: AppointmentStatus.COMPLETED },
-    );
-    await service.applyPaymentStatus(
-      manager as any,
-      at(AppointmentStatus.CONFIRMED) as any,
-      'REFUNDED' as any,
-    );
-    expect(txRepo.update).toHaveBeenLastCalledWith(
-      { id: 'cita-1' },
-      { payment_status: 'REFUNDED' },
     );
     const error = await service
       .applyPaymentStatus(
         manager as any,
         at(AppointmentStatus.CANCELLED) as any,
         'COMPLETED' as any,
+        true,
       )
       .catch((e) => e);
     expect(error.getResponse()).toMatchObject({
       code: ErrorCode.INVALID_STATE_TRANSITION,
     });
+  });
+
+  it('applyPaymentStatus de un reembolso: solo payment_status, el estado no cambia', async () => {
+    const { service, manager, txRepo } = build();
+    for (const status of ['PARTIAL', 'REFUNDED']) {
+      await service.applyPaymentStatus(
+        manager as any,
+        at(AppointmentStatus.CONFIRMED) as any,
+        status as any,
+        false,
+      );
+      expect(txRepo.update).toHaveBeenLastCalledWith(
+        { id: 'cita-1' },
+        { payment_status: status },
+      );
+    }
   });
 });
 

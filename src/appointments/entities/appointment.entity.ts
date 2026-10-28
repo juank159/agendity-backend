@@ -18,7 +18,10 @@ import { Service } from '../../services/entities/service.entity';
 import { TimeBlock } from 'src/time-blocks/entities/time-block.entity';
 import { Payment } from 'src/payments/entities/payment.entity';
 import { Review } from 'src/reviews/entities/review.entity';
-import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
+import {
+  AppointmentPaymentStatus,
+  AppointmentStatus,
+} from 'src/common/enums/status.enum';
 
 @Entity('appointments')
 // Lo usa el cron de recordatorios (2.09a) y cualquier consulta por rango de fechas.
@@ -67,11 +70,11 @@ export class Appointment {
 
   @Column({
     type: 'enum',
-    enum: PaymentStatus,
+    enum: AppointmentPaymentStatus,
     name: 'payment_status',
-    default: PaymentStatus.PENDING,
+    default: AppointmentPaymentStatus.PENDING,
   })
-  payment_status: PaymentStatus;
+  payment_status: AppointmentPaymentStatus;
 
   @Column({ name: 'total_price', type: 'numeric' })
   total_price: number;

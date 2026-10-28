@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import {
+  AppointmentPaymentStatus,
   AppointmentStatus,
   PaymentMethod,
   PaymentStatus,
@@ -18,6 +19,7 @@ function build(appointment: Record<string, any> | null = {}) {
       id: APPOINTMENT,
       ownerId: TENANT,
       status: AppointmentStatus.PENDING,
+      payment_status: AppointmentPaymentStatus.PENDING,
       total_price: '50000',
       client: { id: 'cliente' },
       ...appointment,
@@ -32,27 +34,32 @@ function build(appointment: Record<string, any> | null = {}) {
     lockAppointment: jest.fn(async () => row),
     applyPaymentStatus: jest.fn(async () => undefined),
   };
-  const stored = { existing: null as any, payment: null as any };
+  // `paid`/`hasRefunds` = lo que devuelve la suma de pagos de la cita (2.24).
+  const stored = {
+    payment: null as any,
+    paid: '0',
+    hasRefunds: false,
+  };
   const txPayments = {
-    findOne: jest.fn(async (options: any) =>
-      options.lock
-        ? stored.payment
-        : options.where?.status
-          ? stored.existing
-          : stored.payment,
-    ),
+    findOne: jest.fn<Promise<any>, [any?]>(async () => stored.payment),
     create: jest.fn((p) => p),
     save: jest.fn(async (p) => ({ id: PAYMENT, ...p })),
     update: jest.fn(async () => ({ affected: 1 })),
   };
-  const manager = { getRepository: jest.fn(() => txPayments) };
+  const manager = {
+    getRepository: jest.fn(() => txPayments),
+    query: jest.fn<Promise<any[]>, [string, unknown[]?]>(async (sql) => {
+      if (!sql.includes('FROM payments')) throw new Error(`SQL: ${sql}`);
+      return [{ paid: stored.paid, has_refunds: stored.hasRefunds }];
+    }),
+  };
   const dataSource = {
     transaction: jest.fn(async (work: (m: any) => Promise<any>) =>
       work(manager),
     ),
   };
   const paymentRepo = {
-    findOne: jest.fn(async () => stored.payment),
+    findOne: jest.fn<Promise<any>, [any?]>(async () => stored.payment),
     save: jest.fn(),
   };
   const notifications = { create: jest.fn(async () => ({})) };
@@ -72,6 +79,7 @@ function build(appointment: Record<string, any> | null = {}) {
     notifications,
     dataSource,
     stored,
+    manager,
   };
 }
 
@@ -108,7 +116,8 @@ describe('PaymentsService.create (2.06)', () => {
     expect(appointments.applyPaymentStatus).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: APPOINTMENT }),
-      PaymentStatus.COMPLETED,
+      AppointmentPaymentStatus.COMPLETED,
+      true,
     );
     expect(notifications.create).toHaveBeenCalledTimes(1);
   });
@@ -145,22 +154,53 @@ describe('PaymentsService.create (2.06)', () => {
     expect(txPayments.save).not.toHaveBeenCalled();
   });
 
-  it('ya hay un pago COMPLETED (leído dentro de la transacción): 409 PAYMENT_ALREADY_EXISTS con el texto de siempre', async () => {
-    const { service, stored, txPayments } = build();
-    stored.existing = { id: 'otro', status: PaymentStatus.COMPLETED };
+  it('cita pagada del todo (suma leída bajo el lock): 409 PAYMENT_ALREADY_EXISTS', async () => {
+    const { service, stored, txPayments, manager, appointments } = build();
+    stored.paid = '50000.00';
     const res = await codeOf(service.create(dto(100), TENANT));
     expect(res).toMatchObject({
       status: 409,
       code: 'PAYMENT_ALREADY_EXISTS',
-      message: 'Ya existe un pago completado para esta cita',
+      message: 'La cita ya está pagada por completo',
     });
-    expect(txPayments.findOne).toHaveBeenCalledWith({
-      where: {
-        appointment: { id: APPOINTMENT },
-        status: PaymentStatus.COMPLETED,
-      },
-    });
+    const [sql, params] = manager.query.mock.calls[0];
+    expect(sql).toContain("status = 'COMPLETED'");
+    expect(params).toEqual([APPOINTMENT]);
+    expect(
+      appointments.lockAppointment.mock.invocationCallOrder[0],
+    ).toBeLessThan(manager.query.mock.invocationCallOrder[0]);
     expect(txPayments.save).not.toHaveBeenCalled();
+  });
+
+  it('anticipo: el primer pago parcial confirma la cita y la deja PARTIAL (2.24)', async () => {
+    const { service, appointments } = build();
+    await service.create(dto(20000), TENANT);
+    expect(appointments.applyPaymentStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: APPOINTMENT }),
+      AppointmentPaymentStatus.PARTIAL,
+      true,
+    );
+  });
+
+  it('segundo pago: hasta el saldo pendiente; el que completa el total la deja COMPLETED (2.24)', async () => {
+    const over = build();
+    over.stored.paid = '30000.00';
+    const res = await codeOf(over.service.create(dto(20000.01), TENANT));
+    expect(res).toMatchObject({ status: 400, code: ErrorCode.BAD_REQUEST });
+    expect(res.message).toContain('saldo pendiente');
+    expect(over.txPayments.save).not.toHaveBeenCalled();
+
+    const ok = build();
+    ok.stored.paid = '30000.00';
+    await ok.service.create(dto(20000), TENANT);
+    expect(ok.txPayments.save).toHaveBeenCalledTimes(1);
+    expect(ok.appointments.applyPaymentStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      AppointmentPaymentStatus.COMPLETED,
+      true,
+    );
   });
 
   it('un fallo de la notificación no convierte el pago guardado en error', async () => {
@@ -181,9 +221,14 @@ describe('PaymentsService.refund (2.06)', () => {
     ...extra,
   });
 
-  it('parcial: el pago sigue COMPLETED con refund_amount y la cita no cambia', async () => {
-    const { service, stored, txPayments, appointments } = build();
+  it('parcial: el pago sigue COMPLETED con refund_amount y la cita pasa a PARTIAL (2.24)', async () => {
+    const { service, stored, txPayments, appointments, manager } = build({
+      total_price: '100',
+      payment_status: AppointmentPaymentStatus.COMPLETED,
+    });
     stored.payment = payment();
+    stored.paid = '70.00'; // lo pagado neto tras el reembolso
+    stored.hasRefunds = true;
     await service.refund(
       PAYMENT,
       { refund_amount: 30, refund_reason: 'parcial' },
@@ -206,12 +251,26 @@ describe('PaymentsService.refund (2.06)', () => {
         refund_reason: 'parcial',
       },
     );
-    expect(appointments.applyPaymentStatus).not.toHaveBeenCalled();
+    // La suma se lee DESPUÉS de escribir el reembolso (misma transacción).
+    expect(txPayments.update.mock.invocationCallOrder[0]).toBeLessThan(
+      manager.query.mock.invocationCallOrder[0],
+    );
+    expect(appointments.applyPaymentStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: APPOINTMENT }),
+      AppointmentPaymentStatus.PARTIAL,
+      false,
+    );
   });
 
   it('el reembolso que completa el total: pago y cita REFUNDED', async () => {
-    const { service, stored, txPayments, appointments } = build();
+    const { service, stored, txPayments, appointments } = build({
+      total_price: '100',
+      payment_status: AppointmentPaymentStatus.PARTIAL,
+    });
     stored.payment = payment({ refund_amount: '30.00' });
+    stored.paid = '0';
+    stored.hasRefunds = true;
     await service.refund(
       PAYMENT,
       { refund_amount: 70, refund_reason: 'resto' },
@@ -228,8 +287,46 @@ describe('PaymentsService.refund (2.06)', () => {
     expect(appointments.applyPaymentStatus).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: APPOINTMENT }),
-      PaymentStatus.REFUNDED,
+      AppointmentPaymentStatus.REFUNDED,
+      false,
     );
+  });
+
+  it('reembolsar del todo uno de dos pagos: la cita queda PARTIAL con lo que sigue pagado (2.24)', async () => {
+    const { service, stored, appointments } = build({
+      total_price: '200',
+      payment_status: AppointmentPaymentStatus.COMPLETED,
+    });
+    stored.payment = payment();
+    stored.paid = '100.00'; // el otro pago sigue entero
+    stored.hasRefunds = true;
+    await service.refund(
+      PAYMENT,
+      { refund_amount: 100, refund_reason: 'uno' },
+      TENANT,
+    );
+    expect(appointments.applyPaymentStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      AppointmentPaymentStatus.PARTIAL,
+      false,
+    );
+  });
+
+  it('si el estado de pago de la cita no cambia, no la toca', async () => {
+    const { service, stored, appointments } = build({
+      total_price: '100',
+      payment_status: AppointmentPaymentStatus.PARTIAL,
+    });
+    stored.payment = payment({ amount: '50.00' });
+    stored.paid = '40.00';
+    stored.hasRefunds = true;
+    await service.refund(
+      PAYMENT,
+      { refund_amount: 10, refund_reason: 'x' },
+      TENANT,
+    );
+    expect(appointments.applyPaymentStatus).not.toHaveBeenCalled();
   });
 
   it('más que el saldo o un pago ya REFUNDED: 400 sin escribir', async () => {

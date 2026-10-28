@@ -97,12 +97,13 @@ export function statusAfterPayment(
 /**
  * Regla del usuario (2.15): una cita con un pago COMPLETED (no reembolsado del
  * todo; el reembolso total lo pasa a REFUNDED) no se cancela hasta reembolsarlo.
+ * Con anticipos (2.24) vale igual: mientras quede algo pagado, no se cancela.
  */
 export function assertCancellable(hasCompletedPayment: boolean): void {
   if (hasCompletedPayment) {
     throw new BusinessException(
       ErrorCode.APPOINTMENT_PAID,
-      'La cita tiene un pago registrado: reembólsalo por completo antes de cancelarla',
+      'La cita tiene pagos registrados: reembólsalos por completo antes de cancelarla',
     );
   }
 }

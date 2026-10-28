@@ -240,7 +240,7 @@ describeWritable(
       ]).toEqual([
         409,
         'PAYMENT_ALREADY_EXISTS',
-        'Ya existe un pago completado para esta cita',
+        'La cita ya está pagada por completo',
       ]);
 
       const done = await http
@@ -317,7 +317,8 @@ describeWritable(
       expect(first.status).toBe(201);
       expect(first.body.status).toBe('COMPLETED');
       expect(Number(first.body.refund_amount)).toBe(part);
-      expect(await statusOf(id)).toEqual(['CONFIRMED', 'COMPLETED']);
+      // Queda pagado menos que el total: pago parcial (2.24).
+      expect(await statusOf(id)).toEqual(['CONFIRMED', 'PARTIAL']);
 
       const tooMuch = await http
         .post(`/api/payments/${paymentId}/refund`)
@@ -450,6 +451,115 @@ describeWritable(
       expect(count).toBe(0);
     });
 
+    it('anticipos: varios pagos hasta el total; PARTIAL → COMPLETED; no se cancela con anticipo (2.24)', async () => {
+      const { id, total } = await newAppointment();
+      const first = Math.round(total * 40) / 100;
+      const rest = Math.round((total - first) * 100) / 100;
+
+      expect((await pay(id, first)).status).toBe(201);
+      // CONFIRMED al primer pago, aunque sea un anticipo.
+      expect(await statusOf(id)).toEqual(['CONFIRMED', 'PARTIAL']);
+
+      const cancel = await http
+        .patch(`/api/appointments/${id}/cancel`)
+        .set(auth(ownerToken))
+        .send({});
+      expect(cancel.status).toBe(409);
+      expect(cancel.body.code).toBe('APPOINTMENT_PAID');
+
+      const over = await pay(id, Math.round((rest + 0.01) * 100) / 100);
+      expect(over.status).toBe(400);
+      expect(over.body.message).toContain('saldo pendiente');
+
+      expect((await pay(id, rest)).status).toBe(201);
+      expect(await statusOf(id)).toEqual(['CONFIRMED', 'COMPLETED']);
+
+      const again = await pay(id, 1);
+      expect(again.status).toBe(409);
+      expect(again.body.code).toBe('PAYMENT_ALREADY_EXISTS');
+      expect(again.body.message).toBe('La cita ya está pagada por completo');
+
+      const list = await http
+        .get(`/api/payments/appointment/${id}`)
+        .set(auth(ownerToken));
+      expect(list.body.map((p: any) => Number(p.amount)).sort()).toEqual(
+        [first, rest].sort(),
+      );
+    });
+
+    it('anticipos: reembolsar uno de dos pagos deja PARTIAL; los dos, REFUNDED y ya se cancela; estadísticas netas (2.24)', async () => {
+      const payments = app.get(PaymentsService);
+      const today = new Date();
+      const net = async () =>
+        (await payments.getPaymentStats(today, today, owner.id)).total_amount;
+      const before = await net();
+
+      const { id, total } = await newAppointment();
+      const first = Math.round(total * 40) / 100;
+      const rest = Math.round((total - first) * 100) / 100;
+      const a = await pay(id, first);
+      const b = await pay(id, rest);
+      expect(await statusOf(id)).toEqual(['CONFIRMED', 'COMPLETED']);
+      expect(await net()).toBeCloseTo(before + total, 2);
+
+      const refundB = await http
+        .post(`/api/payments/${b.body.id}/refund`)
+        .set(auth(ownerToken))
+        .send({ refund_amount: rest, refund_reason: 'devuelve el resto' });
+      expect(refundB.status).toBe(201);
+      expect(refundB.body.status).toBe('REFUNDED');
+      expect(await statusOf(id)).toEqual(['CONFIRMED', 'PARTIAL']);
+      expect(await net()).toBeCloseTo(before + first, 2);
+
+      // Con algo pagado todavía no se cancela.
+      const denied = await http
+        .patch(`/api/appointments/${id}/cancel`)
+        .set(auth(ownerToken))
+        .send({});
+      expect(denied.body.code).toBe('APPOINTMENT_PAID');
+
+      await http
+        .post(`/api/payments/${a.body.id}/refund`)
+        .set(auth(ownerToken))
+        .send({ refund_amount: first, refund_reason: 'todo' });
+      expect(await statusOf(id)).toEqual(['CONFIRMED', 'REFUNDED']);
+      expect(await net()).toBeCloseTo(before, 2);
+
+      const ok = await http
+        .patch(`/api/appointments/${id}/cancel`)
+        .set(auth(ownerToken))
+        .send({});
+      expect(ok.status).toBe(200);
+    });
+
+    it('carrera: 2 anticipos simultáneos del 60 % → solo 1 pasa; nunca se paga más que el total (2.24)', async () => {
+      const payments = app.get(PaymentsService);
+      for (let i = 0; i < 3; i++) {
+        const { id, total } = await newAppointment();
+        const sixty = Math.round(total * 60) / 100;
+        const results = await Promise.allSettled(
+          [0, 1, 2, 3].map(() =>
+            payments.create(
+              {
+                appointment_id: id,
+                amount: sixty,
+                payment_method: 'CASH',
+              } as any,
+              owner.id,
+            ),
+          ),
+        );
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        const [{ paid }] = await ds.query(
+          `SELECT COALESCE(SUM(amount), 0)::float AS paid FROM payments
+            WHERE "appointmentId" = $1 AND status = 'COMPLETED'`,
+          [id],
+        );
+        expect(paid).toBeCloseTo(sixty, 2);
+        expect(await statusOf(id)).toEqual(['CONFIRMED', 'PARTIAL']);
+      }
+    });
+
     it('carrera: pago y cancelación simultáneos → nunca una cita CANCELLED con pago COMPLETED', async () => {
       const payments = app.get(PaymentsService);
       const appointments = app.get(AppointmentsService);
@@ -561,7 +671,7 @@ describeWritable(
       expect(ok).toHaveLength(1);
       for (const f of failed) {
         expect(f.reason.message).toBe(
-          'Ya existe un pago completado para esta cita',
+          'La cita ya está pagada por completo',
         );
       }
       const completed = await ds.getRepository(Payment).count({

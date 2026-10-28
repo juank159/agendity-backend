@@ -26,7 +26,11 @@ import { RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
-import { AppointmentStatus, PaymentStatus } from 'src/common/enums/status.enum';
+import {
+  AppointmentPaymentStatus,
+  AppointmentStatus,
+  PaymentStatus,
+} from 'src/common/enums/status.enum';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
 import { AppointmentScope, toAppointmentScope } from './appointment-scope';
@@ -157,7 +161,7 @@ export class AppointmentsService {
           0,
         ),
         status: AppointmentStatus.PENDING,
-        payment_status: PaymentStatus.PENDING,
+        payment_status: AppointmentPaymentStatus.PENDING,
         notes: appointmentData.notes || '',
         client: client,
         professional: professional,
@@ -713,17 +717,20 @@ export class AppointmentsService {
   }
 
   /**
-   * Efecto de un pago sobre la cita, dentro de la transacción del pago y con
-   * la cita ya bloqueada (`lockAppointment`): PENDING → CONFIRMED (máquina de
-   * estados) y `payment_status` según el pago.
+   * Efecto de los pagos sobre la cita, dentro de la transacción del pago o del
+   * reembolso y con la cita ya bloqueada (`lockAppointment`): escribe
+   * `payment_status` (lo calcula `appointmentPaymentStatus`) y, si es un pago
+   * nuevo, aplica la máquina de estados (PENDING → CONFIRMED al primer pago,
+   * también si es un anticipo, 2.24). Un reembolso no cambia el `status`.
    */
   async applyPaymentStatus(
     manager: EntityManager,
     locked: Appointment,
-    paymentStatus: PaymentStatus,
+    paymentStatus: AppointmentPaymentStatus,
+    isNewPayment: boolean,
   ): Promise<void> {
     const changes: Partial<Appointment> = { payment_status: paymentStatus };
-    if (paymentStatus === PaymentStatus.COMPLETED) {
+    if (isNewPayment) {
       changes.status = statusAfterPayment(locked.status);
     }
     await manager.getRepository(Appointment).update({ id: locked.id }, changes);

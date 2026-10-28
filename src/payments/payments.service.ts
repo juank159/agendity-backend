@@ -13,14 +13,14 @@ import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentStatus } from '../common/enums/status.enum';
-import { BusinessException } from '../common/exceptions/business.exception';
-import { ErrorCode } from '../common/constants/error-codes';
 import {
+  AppointmentPaidSummary,
+  appointmentPaymentStatus,
   applyRefund,
   assertPaymentAmount,
   fromCents,
   netAmountSql,
-  PAYMENT_ALREADY_EXISTS_MESSAGE,
+  toCents,
 } from './payment-rules';
 import { statusAfterPayment } from '../appointments/appointment-status';
 import {
@@ -71,29 +71,26 @@ export class PaymentsService {
   }
 
   /**
-   * Regla: un único pago COMPLETED por cita. Se llama DENTRO de la transacción
-   * del pago y con la cita bloqueada (`lockAppointment`): dos pagos simultáneos
-   * a la misma cita se serializan y el segundo ya ve el primero.
+   * Lo pagado neto de una cita y si tuvo reembolsos (2.24). Se llama DENTRO de
+   * la transacción y con la cita bloqueada (`lockAppointment`): dos pagos
+   * simultáneos a la misma cita se serializan y el segundo ya ve el primero,
+   * así que la suma nunca pasa del total.
    */
-  private async assertNoCompletedPayment(
+  private async loadPaidSummary(
     manager: EntityManager,
     appointmentId: string,
-  ): Promise<void> {
-    const existingPayment = await manager.getRepository(Payment).findOne({
-      where: {
-        appointment: { id: appointmentId },
-        status: PaymentStatus.COMPLETED,
-      },
-    });
-
-    if (existingPayment) {
-      // 409 directo (2.23): la app (payments, 4.02) decide por `code` y por
-      // tipo de failure, no por el 400 ni por el texto, que se conserva.
-      throw new BusinessException(
-        ErrorCode.PAYMENT_ALREADY_EXISTS,
-        PAYMENT_ALREADY_EXISTS_MESSAGE,
-      );
-    }
+  ): Promise<AppointmentPaidSummary> {
+    const [row] = await manager.query(
+      `SELECT COALESCE(SUM(${netAmountSql('p')}) FILTER (WHERE p.status = 'COMPLETED'), 0) AS paid,
+              COALESCE(bool_or(p.status = 'REFUNDED' OR COALESCE(p.refund_amount, 0) > 0), false) AS has_refunds
+         FROM payments p
+        WHERE p."appointmentId" = $1`,
+      [appointmentId],
+    );
+    return {
+      paidCents: toCents(row?.paid),
+      hasRefunds: row?.has_refunds === true,
+    };
   }
 
   private async sendPaymentNotification(
@@ -116,13 +113,13 @@ export class PaymentsService {
   }
 
   /**
-   * Registra un pago COMPLETED (2.06), en UNA transacción:
+   * Registra un pago COMPLETED (2.06; anticipos desde 2.24), en UNA transacción:
    * 1. Cita del negocio con lock de fila (ajena = 404).
    * 2. La cita no puede estar CANCELLED (`INVALID_STATE_TRANSITION`).
-   * 3. Un único pago COMPLETED por cita.
-   * 4. Monto > 0 y sin superar el total de la cita.
-   * 5. Inserta el pago y aplica la máquina de estados (PENDING → CONFIRMED,
-   *    `payment_status` = COMPLETED).
+   * 3. Lo pagado neto, leído bajo el lock: si ya cubre el total →
+   *    `PAYMENT_ALREADY_EXISTS` (409); si no, monto > 0 y ≤ saldo pendiente.
+   * 4. Inserta el pago y aplica la máquina de estados (PENDING → CONFIRMED al
+   *    primer pago) con `payment_status` PARTIAL o COMPLETED según lo pagado.
    * La notificación al cliente va después del commit.
    */
   async create(
@@ -150,8 +147,12 @@ export class PaymentsService {
             tenantId,
           );
           statusAfterPayment(locked.status); // CANCELLED → 409, antes de escribir
-          await this.assertNoCompletedPayment(manager, locked.id);
-          assertPaymentAmount(createPaymentDto.amount, locked.total_price);
+          const paid = await this.loadPaidSummary(manager, locked.id);
+          assertPaymentAmount(
+            createPaymentDto.amount,
+            locked.total_price,
+            paid.paidCents,
+          );
 
           const repo = manager.getRepository(Payment);
           const payment = await repo.save(
@@ -167,11 +168,15 @@ export class PaymentsService {
               ownerId: tenantId,
             }),
           );
-          // PENDING → CONFIRMED (máquina de estados) y payment_status COMPLETED.
+          // PENDING → CONFIRMED (máquina de estados) y PARTIAL/COMPLETED.
           await this.appointmentsService.applyPaymentStatus(
             manager,
             locked,
-            PaymentStatus.COMPLETED,
+            appointmentPaymentStatus(locked.total_price, {
+              ...paid,
+              paidCents: paid.paidCents + toCents(createPaymentDto.amount),
+            }),
+            true,
           );
           return payment;
         },
@@ -264,11 +269,12 @@ export class PaymentsService {
   }
 
   /**
-   * Reembolso parcial o total (2.06), en UNA transacción con locks en orden
-   * cita → pago (el mismo que crear un pago). Los reembolsos se acumulan en
-   * `refund_amount`: mientras quede saldo el pago sigue COMPLETED (y la cita
-   * con `payment_status` COMPLETED); al devolver todo, ambos pasan a REFUNDED.
-   * El estado de la cita (`status`) no cambia.
+   * Reembolso parcial o total de UN pago (2.06), en UNA transacción con locks
+   * en orden cita → pago (el mismo que crear un pago). Se acumula en
+   * `refund_amount`: mientras quede saldo el pago sigue COMPLETED; al devolver
+   * todo pasa a REFUNDED. El `payment_status` de la cita se recalcula con lo
+   * pagado neto de todos sus pagos (2.24: PARTIAL si queda algo por debajo del
+   * total, REFUNDED si no queda nada). El `status` de la cita no cambia.
    */
   async refund(
     id: string,
@@ -308,11 +314,18 @@ export class PaymentsService {
             refund_reason: refundDto.refund_reason,
           },
         );
-        if (status === PaymentStatus.REFUNDED) {
+        // Estado de pago de la cita con lo que queda pagado (incluye este
+        // reembolso: misma transacción). El `status` de la cita no cambia.
+        const appointmentStatus = appointmentPaymentStatus(
+          locked.total_price,
+          await this.loadPaidSummary(manager, locked.id),
+        );
+        if (appointmentStatus !== locked.payment_status) {
           await this.appointmentsService.applyPaymentStatus(
             manager,
             locked,
-            PaymentStatus.REFUNDED,
+            appointmentStatus,
+            false,
           );
         }
         return repo.findOne({
