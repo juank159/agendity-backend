@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
+import { PaymentStatsService } from './payment-stats.service';
 import { PaymentsController } from './payments.controller';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { AppointmentsModule } from 'src/appointments/appointments.module';
@@ -16,7 +17,11 @@ import { CustomPaymentMethodsService } from './custom-payment-methods.service';
     NotificationsModule,
   ],
   controllers: [PaymentsController, CustomPaymentMethodsController],
-  providers: [PaymentsService, CustomPaymentMethodsService],
+  providers: [
+    PaymentsService,
+    PaymentStatsService,
+    CustomPaymentMethodsService,
+  ],
   exports: [PaymentsService, CustomPaymentMethodsService],
 })
 export class PaymentsModule {}

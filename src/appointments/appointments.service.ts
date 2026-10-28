@@ -2,8 +2,6 @@ import {
   Injectable,
   NotFoundException,
   InternalServerErrorException,
-  Inject,
-  forwardRef,
   HttpException,
   Logger,
 } from '@nestjs/common';
@@ -80,7 +78,6 @@ export class AppointmentsService {
     private readonly usersService: UsersService,
     private readonly servicesService: ServicesService,
     private readonly eventEmitter: EventEmitter2,
-    @Inject(forwardRef(() => SubscriptionsService))
     private readonly subscriptionsService: SubscriptionsService,
     private readonly dataSource: DataSource,
   ) {}

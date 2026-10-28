@@ -10,8 +10,9 @@ import {
   Query,
 } from '@nestjs/common';
 
-import { CreateAuthDto, CreateEmployeeDto, LoginAuthDto } from './dto';
+import { CreateAuthDto, LoginAuthDto } from './dto';
 import { AuthService } from './auth.service';
+import { EmployeesService } from './employees.service';
 import { JwtRoles } from './jwt/jwt.role';
 import { hasRoles } from './jwt/has.roles';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
@@ -28,7 +29,10 @@ import { AuthUser } from './interfaces';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly employeesService: EmployeesService,
+  ) {}
 
   @Public()
   @RateLimit(AUTH_RATE_LIMITS.registerOwner)
@@ -41,12 +45,11 @@ export class AuthController {
   @Post('register/employee')
   createEmployee(
     @CurrentUser() owner: AuthUser,
-    @Body() createEmployeeDto: CreateEmployeeWithDetailsDto, // Usar el nuevo DTO
+    @Body() createEmployeeDto: CreateEmployeeWithDetailsDto,
   ) {
-    return this.authService.createEmployee(createEmployeeDto, owner);
+    return this.employeesService.createEmployee(createEmployeeDto, owner);
   }
 
-  // NUEVO ENDPOINT PARA ACTUALIZAR EMPLEADO
   @hasRoles(JwtRoles.Owner)
   @Patch('employee/:id')
   updateEmployee(
@@ -54,7 +57,7 @@ export class AuthController {
     @Param('id') employeeId: string,
     @Body() updateEmployeeDto: UpdateEmployeeDto,
   ) {
-    return this.authService.updateEmployee(
+    return this.employeesService.updateEmployee(
       owner.id,
       employeeId,
       updateEmployeeDto,
@@ -68,22 +71,21 @@ export class AuthController {
     @Param('id') employeeId: string,
     @Body() statusDto: ToggleEmployeeStatusDto,
   ) {
-    return this.authService.toggleEmployeeStatus(
+    return this.employeesService.toggleEmployeeStatus(
       owner.id,
       employeeId,
       statusDto,
     );
   }
 
-  // NUEVO ENDPOINT PARA ELIMINAR EMPLEADO
   @hasRoles(JwtRoles.Owner)
   @Delete('employee/:id')
   deleteEmployee(
     @CurrentUser() owner: AuthUser,
     @Param('id') employeeId: string,
-    @Body('reason') reason?: string, // Razón opcional
+    @Body('reason') reason?: string,
   ) {
-    return this.authService.deleteEmployee(owner.id, employeeId, reason);
+    return this.employeesService.deleteEmployee(owner.id, employeeId, reason);
   }
 
   @hasRoles(JwtRoles.Owner)
@@ -92,7 +94,7 @@ export class AuthController {
     @CurrentUser() owner: AuthUser,
     @Param('id') employeeId: string,
   ) {
-    return this.authService.restoreEmployee(owner.id, employeeId);
+    return this.employeesService.restoreEmployee(owner.id, employeeId);
   }
 
   @Public()
@@ -111,11 +113,6 @@ export class AuthController {
     return this.authService.googleLogin(token);
   }
 
-  // @Post('verify/request-code')
-  // requestVerificationCode(@Body('email') email: string) {
-  //   return this.authService.generateVerificationCode(email);
-  // }
-
   @Public()
   @RateLimit(AUTH_RATE_LIMITS.requestCode)
   @Post('verify/request-code')
@@ -131,26 +128,12 @@ export class AuthController {
     return this.authService.verifyEmail(email, code);
   }
 
-  // @Post('forgot-password')
-  // forgotPassword(@Body('email') email: string) {
-  //   return this.authService.generatePasswordResetCode(email);
-  // }
-
   @Public()
   @RateLimit(AUTH_RATE_LIMITS.forgotPassword)
   @Post('forgot-password')
   forgotPassword(@Body('email') email: string) {
     return this.authService.generatePasswordResetCode(email);
   }
-
-  // @Post('reset-password')
-  // resetPassword(
-  //   @Body('email') email: string,
-  //   @Body('code') code: string,
-  //   @Body('new_password') newPassword: string,
-  // ) {
-  //   return this.authService.resetPassword(email, code, newPassword);
-  // }
 
   @Public()
   @RateLimit(AUTH_RATE_LIMITS.verifyCode)
@@ -167,29 +150,31 @@ export class AuthController {
   @Get('employees')
   getEmployees(
     @CurrentUser() owner: AuthUser,
-    @Query('includeDeleted') includeDeleted?: string, // Parámetro opcional
+    @Query('includeDeleted') includeDeleted?: string,
   ) {
     const shouldIncludeDeleted = includeDeleted === 'true';
-    return this.authService.getEmployeesByOwner(owner.id, shouldIncludeDeleted);
+    return this.employeesService.getEmployeesByOwner(
+      owner.id,
+      shouldIncludeDeleted,
+    );
   }
 
   @hasRoles(JwtRoles.Owner)
   @Get('employee/:id')
   getEmployee(@CurrentUser() owner: AuthUser, @Param('id') employeeId: string) {
-    return this.authService.getEmployeeByOwner(owner.id, employeeId);
+    return this.employeesService.getEmployeeByOwner(owner.id, employeeId);
   }
 
   @hasRoles(JwtRoles.Owner)
   @Get('employees/deleted')
   getDeletedEmployees(@CurrentUser() owner: AuthUser) {
-    return this.authService.getDeletedEmployeesByOwner(owner.id);
+    return this.employeesService.getDeletedEmployeesByOwner(owner.id);
   }
 
-  // 🆕 NUEVO: Endpoint específico para empleados activos
   @hasRoles(JwtRoles.Owner)
   @Get('employees/active')
   getActiveEmployees(@CurrentUser() owner: AuthUser) {
-    return this.authService.getActiveEmployeesByOwner(owner.id);
+    return this.employeesService.getActiveEmployeesByOwner(owner.id);
   }
 
   // La app la llama con la sesión del Owner (verify_employee_email_controller.dart).
@@ -201,6 +186,6 @@ export class AuthController {
     @Body('employee_id') employeeId: string,
     @Body('code') code: string,
   ) {
-    return this.authService.verifyEmployeeEmail(owner, employeeId, code);
+    return this.employeesService.verifyEmployeeEmail(owner, employeeId, code);
   }
 }

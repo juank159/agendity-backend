@@ -17,6 +17,7 @@ import { Service } from '../src/services/entities/service.entity';
 import { Payment } from '../src/payments/entities/payment.entity';
 import { Appointment } from '../src/appointments/entities/appointment.entity';
 import { PaymentsService } from '../src/payments/payments.service';
+import { PaymentStatsService } from '../src/payments/payment-stats.service';
 import { AppointmentsService } from '../src/appointments/appointments.service';
 import {
   E2EHttp,
@@ -488,10 +489,10 @@ describeWritable(
     });
 
     it('anticipos: reembolsar uno de dos pagos deja PARTIAL; los dos, REFUNDED y ya se cancela; estadísticas netas (2.24)', async () => {
-      const payments = app.get(PaymentsService);
+      const stats = app.get(PaymentStatsService);
       const today = new Date();
       const net = async () =>
-        (await payments.getPaymentStats(today, today, owner.id)).total_amount;
+        (await stats.getPaymentStats(today, today, owner.id)).total_amount;
       const before = await net();
 
       const { id, total } = await newAppointment();
@@ -670,9 +671,7 @@ describeWritable(
       ) as PromiseRejectedResult[];
       expect(ok).toHaveLength(1);
       for (const f of failed) {
-        expect(f.reason.message).toBe(
-          'La cita ya está pagada por completo',
-        );
+        expect(f.reason.message).toBe('La cita ya está pagada por completo');
       }
       const completed = await ds.getRepository(Payment).count({
         where: { appointment: { id }, status: 'COMPLETED' as any },

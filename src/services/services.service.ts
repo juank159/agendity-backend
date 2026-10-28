@@ -3,8 +3,6 @@ import {
   NotFoundException,
   ConflictException,
   InternalServerErrorException,
-  Inject,
-  forwardRef,
   HttpException,
   Logger,
 } from '@nestjs/common';
@@ -27,7 +25,6 @@ export class ServicesService {
   constructor(
     @InjectRepository(Service)
     private readonly serviceRepository: Repository<Service>,
-    @Inject(forwardRef(() => CategoriesService)) // Usar forwardRef aquí
     private readonly categoriesService: CategoriesService,
   ) {}
 

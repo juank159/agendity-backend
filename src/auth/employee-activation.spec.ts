@@ -1,33 +1,25 @@
-import { ConfigService } from '@nestjs/config';
 import { NotFoundException } from '@nestjs/common';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import {
-  AuthService,
+  EmployeesService,
   assertCanActivateEmployee,
   canActivateEmployee,
   emailChanges,
   initialEmployeeState,
-} from './auth.service';
+} from './employees.service';
 
 const OWNER = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const EMPLOYEE = '0f2ac72d-a104-4782-81c0-1178c7503c54';
 
 function build(employee: Record<string, any> | null) {
-  const config = { get: jest.fn() } as unknown as ConfigService;
   const userRepository = {
     findOne: jest.fn().mockResolvedValue(employee),
     save: jest.fn(async (x) => x),
     update: jest.fn(async () => ({ affected: 1 })),
     restore: jest.fn(async () => ({ affected: 1 })),
   };
-  const service = new AuthService(
+  const service = new EmployeesService(
     userRepository as any,
-    {} as any,
-    {} as any,
-    config,
-    {} as any,
-    {} as any,
-    {} as any,
     {} as any,
     {} as any,
     {} as any,
@@ -143,18 +135,11 @@ describe('Los empleados nacen inactivos hasta verificar el email (2.16)', () => 
     const roleRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'r', name: 'Employee' }),
     };
-    const jwtService = { sign: jest.fn(() => 'jwt') };
     const dataSource = { transaction: jest.fn((cb) => cb(manager)) };
-    const service = new AuthService(
+    const service = new EmployeesService(
       userRepository as any,
       roleRepository as any,
-      jwtService as any,
-      { get: jest.fn() } as unknown as ConfigService,
-      {} as any,
-      {} as any,
       dataSource as any,
-      {} as any,
-      {} as any,
       {} as any,
     );
     return { service, manager, saved };
@@ -288,16 +273,10 @@ describe('Empleados: borrar, lista agendable y cambio de email (2.33)', () => {
       }),
     };
     const dataSource = { transaction: jest.fn((cb) => cb(manager)) };
-    const service = new AuthService(
-      {} as any,
-      {} as any,
-      {} as any,
-      { get: jest.fn() } as unknown as ConfigService,
+    const service = new EmployeesService(
       {} as any,
       {} as any,
       dataSource as any,
-      {} as any,
-      {} as any,
       {} as any,
     );
     await service.updateEmployee(OWNER, EMPLOYEE, {

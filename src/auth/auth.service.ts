@@ -1,71 +1,58 @@
 import {
-  ForbiddenException,
-  forwardRef,
-  Inject,
+  HttpException,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
   UnauthorizedException,
-  HttpException,
 } from '@nestjs/common';
-import { CreateAuthDto, CreateEmployeeDto, LoginAuthDto } from './dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  User,
-  UserSecretField,
-  omitUserSecrets,
-} from 'src/users/entities/user.entity';
-import { Not, Repository, DataSource, FindOptionsWhere } from 'typeorm';
-import { assertAccountCanLogin } from './account-access';
-import { BusinessException } from 'src/common/exceptions/business.exception';
-import { ErrorCode } from 'src/common/constants/error-codes';
-import {
-  UserAccessActor,
-  assertCanManageUser,
-  canBeScheduled,
-} from 'src/users/user-access';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { randomInt, timingSafeEqual } from 'crypto';
+import { randomInt } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
-import { AuthUser, JwtPayload, tenantOf } from './interfaces';
-import { Role } from 'src/roles/entities/role.entity';
+import { ConfigService } from '@nestjs/config';
 import { v4 as uuid } from 'uuid';
 import { OAuth2Client, TokenPayload } from 'google-auth-library';
-import { ConfigService } from '@nestjs/config';
+import { User } from 'src/users/entities/user.entity';
+import { Role } from 'src/roles/entities/role.entity';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode } from 'src/common/constants/error-codes';
 import { EmailService } from 'src/email/email.service';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
-import { UpdateEmployeeDto } from './dto/update-employee.dto';
-import { UserService } from 'src/user-services/entities/user-service.entity';
-import { Schedule } from 'src/schedules/entities/schedule.entity';
-import { UserServicesService } from 'src/user-services/user-services.service';
-import { SchedulesService } from 'src/schedules/schedules.service';
-import { CreateEmployeeWithDetailsDto } from './dto/create-employee-with-details.dto';
-import { ToggleEmployeeStatusDto } from './dto/toggle-employee-status.dto';
+import { CreateAuthDto, LoginAuthDto } from './dto';
+import { assertAccountCanLogin } from './account-access';
+import { JwtPayload, tenantOf } from './interfaces';
+import { VerificationAttemptsService } from './verification-attempts.service';
 import {
-  VerificationAttemptsService,
-  VerificationPurpose,
-} from './verification-attempts.service';
+  assertEmailAndPhoneAvailable,
+  assertValidCode,
+  findRole,
+  findUserWithSecrets,
+  hashPassword,
+  toUserResponse,
+} from './user-accounts';
 
+/**
+ * Autenticación: alta del Owner, login (email y Google), JWT y códigos de
+ * verificación y de recuperación. La gestión de empleados vive en
+ * `EmployeesService` (5.05).
+ */
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly googleClient: OAuth2Client;
   /** Client IDs de la app (web, iOS, Android) aceptados como audiencia del ID token. */
   private readonly googleClientIds: string[];
+
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
     @InjectRepository(Role) private readonly roleRepository: Repository<Role>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
-    @Inject(forwardRef(() => SubscriptionsService))
     private readonly subscriptionsService: SubscriptionsService,
     private readonly dataSource: DataSource,
-    @Inject(forwardRef(() => UserServicesService))
-    private readonly userServicesService: UserServicesService,
-    @Inject(forwardRef(() => SchedulesService))
-    private readonly schedulesService: SchedulesService,
     private readonly verificationAttempts: VerificationAttemptsService,
   ) {
     // Solo se usa para verificar ID tokens: la audiencia va en cada llamada.
@@ -80,56 +67,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * Email o teléfono repetido. El texto se mantiene igual que antes: la app lo
-   * compara ("Ya existe un usuario con el email"/"teléfono") hasta migrar a `code`.
-   */
-  private duplicateUserError(
-    isEmail: boolean,
-    email: string,
-    phone: string,
-  ): BusinessException {
-    return isEmail
-      ? new BusinessException(
-          ErrorCode.DUPLICATE_EMAIL,
-          `Ya existe un usuario con el email: ${email}`,
-        )
-      : new BusinessException(
-          ErrorCode.DUPLICATE_PHONE,
-          `Ya existe un usuario con el teléfono: ${phone}`,
-        );
-  }
-
-  private async validateUserExists(email: string, phone?: string | null) {
-    // TypeORM ignora `phone: undefined` (la condición casaría con cualquier
-    // usuario): el teléfono solo se compara si viene.
-    const where: FindOptionsWhere<User>[] = [{ email }];
-    if (phone) where.push({ phone });
-    const existingUser = await this.userRepository.findOne({ where });
-
-    if (existingUser) {
-      throw this.duplicateUserError(existingUser.email === email, email, phone);
-    }
-  }
-
-  private async getRole(roleName: string): Promise<Role> {
-    const role = await this.roleRepository.findOne({
-      where: { name: roleName },
-    });
-
-    if (!role) {
-      throw new InternalServerErrorException(
-        `Role ${roleName} no está configurado en la base de datos`,
-      );
-    }
-
-    return role;
-  }
-
-  private async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, 10);
-  }
-
   /** `user` debe traer `roles` y, si es empleado, `owner`. */
   private generateToken(user: User): string {
     const tenantId = tenantOf(user);
@@ -142,29 +79,7 @@ export class AuthService {
       ownerId: tenantId,
       tenant_id: tenantId,
     };
-
-    return this.getJwtToken(payload);
-  }
-
-  /**
-   * Las columnas secretas de `User` tienen `select: false`. Solo los flujos que
-   * comparan contraseña o códigos las piden aquí, de forma explícita.
-   */
-  private findUserWithSecrets(
-    where: FindOptionsWhere<User>,
-    secrets: UserSecretField[],
-    relations: string[] = [],
-    { withDeleted = false }: { withDeleted?: boolean } = {},
-  ): Promise<User | null> {
-    const qb = this.userRepository.createQueryBuilder('user').where(where);
-    if (withDeleted) qb.withDeleted();
-    for (const field of secrets) {
-      qb.addSelect(`user.${field}`);
-    }
-    for (const relation of relations) {
-      qb.leftJoinAndSelect(`user.${relation}`, relation);
-    }
-    return qb.getOne();
+    return this.jwtService.sign(payload);
   }
 
   /** Código de 6 dígitos con aleatoriedad criptográfica. */
@@ -178,79 +93,8 @@ export class AuthService {
     return expires;
   }
 
-  /**
-   * Comprueba un código de verificación o de reset. Cada fallo cuenta; al llegar a
-   * MAX_CODE_ATTEMPTS el código se borra de la BD y hay que pedir uno nuevo.
-   * `user` debe traer las columnas del código (`findUserWithSecrets`).
-   */
-  private async assertValidCode(
-    purpose: VerificationPurpose,
-    user: User,
-    input: string,
-  ): Promise<void> {
-    const stored =
-      purpose === 'reset' ? user.reset_password_code : user.verification_code;
-    const expires =
-      purpose === 'reset'
-        ? user.reset_password_expires
-        : user.verification_code_expires;
-
-    // Código incorrecto, vencido o agotado: 400 `INVALID_VERIFICATION_CODE`
-    // (2.33; antes 401, que la app confundía con una sesión vencida).
-    if (!this.codesMatch(stored, input)) {
-      const exhausted = this.verificationAttempts.registerFailure(
-        purpose,
-        user.id,
-      );
-      if (exhausted) {
-        if (stored) await this.invalidateCode(purpose, user.id);
-        this.verificationAttempts.reset(purpose, user.id);
-        throw invalidCode(
-          'Demasiados intentos fallidos. Solicita un código nuevo.',
-        );
-      }
-      throw invalidCode(
-        purpose === 'reset'
-          ? 'Código de recuperación inválido'
-          : 'Código de verificación inválido',
-      );
-    }
-
-    if (!expires || new Date() > expires) {
-      throw invalidCode(
-        purpose === 'reset'
-          ? 'El código de recuperación ha expirado'
-          : 'El código de verificación ha expirado',
-      );
-    }
-    this.verificationAttempts.reset(purpose, user.id);
-  }
-
-  private codesMatch(stored: string | null, input: unknown): boolean {
-    if (!stored || typeof input !== 'string') return false;
-    const a = Buffer.from(stored);
-    const b = Buffer.from(input);
-    return a.length === b.length && timingSafeEqual(a, b);
-  }
-
-  private async invalidateCode(
-    purpose: VerificationPurpose,
-    userId: string,
-  ): Promise<void> {
-    await this.userRepository.update(
-      userId,
-      purpose === 'reset'
-        ? { reset_password_code: null, reset_password_expires: null }
-        : { verification_code: null, verification_code_expires: null },
-    );
-  }
-
-  private transformUserResponse(user: User) {
-    const userData = omitUserSecrets(user);
-    return {
-      ...userData,
-      roles: userData.roles.map((role) => ({ name: role.name })),
-    };
+  private get codeDeps() {
+    return { users: this.userRepository, attempts: this.verificationAttempts };
   }
 
   /**
@@ -263,7 +107,7 @@ export class AuthService {
   private async createOwnerAccount(
     data: Omit<Partial<User>, 'roles'>,
   ): Promise<User> {
-    const ownerRole = await this.getRole('Owner');
+    const ownerRole = await findRole(this.roleRepository, 'Owner');
     const id = uuid();
     return this.dataSource.transaction(async (manager) => {
       const users = manager.getRepository(User);
@@ -276,521 +120,45 @@ export class AuthService {
   }
 
   async createOwner(createAuthDto: CreateAuthDto) {
-    try {
-      await this.validateUserExists(createAuthDto.email, createAuthDto.phone);
+    await assertEmailAndPhoneAvailable(
+      this.userRepository,
+      createAuthDto.email,
+      createAuthDto.phone,
+    );
 
-      const { password, ...userData } = createAuthDto;
-      const newUser = await this.createOwnerAccount({
-        ...userData,
-        password: await this.hashPassword(password),
-      });
+    const { password, ...userData } = createAuthDto;
+    const newUser = await this.createOwnerAccount({
+      ...userData,
+      password: await hashPassword(password),
+    });
 
-      return {
-        user: this.transformUserResponse(newUser),
-        token: this.generateToken(newUser),
-      };
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  async createEmployee(
-    createEmployeeDto: CreateEmployeeDto | CreateEmployeeWithDetailsDto,
-    owner: AuthUser,
-  ) {
-    try {
-      // Usamos transacción para asegurar consistencia
-      return await this.dataSource.transaction(async (manager) => {
-        await this.validateUserExists(
-          createEmployeeDto.email,
-          createEmployeeDto.phone,
-        );
-
-        const employeeRole = await this.getRole('Employee');
-
-        // Verificar si es CreateEmployeeWithDetailsDto (que tiene services y schedules)
-        const isWithDetails =
-          'services' in createEmployeeDto || 'schedules' in createEmployeeDto;
-
-        // Extraer los datos según el tipo de DTO
-        let services: any[] = [];
-        let schedules: any[] = [];
-
-        if (isWithDetails) {
-          const withDetailsDto =
-            createEmployeeDto as CreateEmployeeWithDetailsDto;
-          services = withDetailsDto.services || [];
-          schedules = withDetailsDto.schedules || [];
-        }
-
-        // Extraer schedule del DTO original
-        const { password, schedule, ...userData } = createEmployeeDto;
-
-        // Crear el empleado base
-        const newEmployee = manager.create(User, {
-          ...userData,
-          password: await this.hashPassword(password),
-          roles: [employeeRole],
-          owner: { id: owner.id } as User,
-          // Hereda el tenant del Owner (antes quedaba NULL: el JWT no lo traía).
-          tenant_id: owner.tenantId,
-          ...initialEmployeeState(),
-        });
-
-        await manager.save(newEmployee);
-
-        // Asignar servicios con sus porcentajes si existen
-        if (services && services.length > 0) {
-          const userServices = services.map((service) =>
-            manager.create(UserService, {
-              userId: newEmployee.id,
-              serviceId: service.serviceId,
-              customPrice: service.customPrice,
-              commissionPercentage: service.commissionPercentage || 0,
-              isActive:
-                service.isActive !== undefined ? service.isActive : true,
-            }),
-          );
-
-          await manager.save(userServices);
-        }
-
-        // Asignar horarios si existe el schedule (formato de frontend)
-        if (schedule && typeof schedule === 'object') {
-          // Mapeo de días a números
-          const dayMap = {
-            monday: 1,
-            tuesday: 2,
-            wednesday: 3,
-            thursday: 4,
-            friday: 5,
-            saturday: 6,
-            sunday: 7,
-          };
-
-          const userSchedules = [];
-
-          // Procesar cada día del schedule
-          for (const [day, hours] of Object.entries(schedule)) {
-            // Verificar tipo de 'hours' antes de acceder a propiedades
-            if (
-              dayMap[day] &&
-              hours &&
-              typeof hours === 'object' &&
-              'start' in hours &&
-              'end' in hours
-            ) {
-              userSchedules.push(
-                manager.create(Schedule, {
-                  user: newEmployee,
-                  day_of_week: dayMap[day],
-                  start_time: hours.start as string,
-                  end_time: hours.end as string,
-                  is_available: true,
-                }),
-              );
-            }
-          }
-
-          if (userSchedules.length > 0) {
-            await manager.save(userSchedules);
-          }
-        }
-
-        // Asignar horarios si existen en formato de arreglo (compatible con código existente)
-        else if (schedules && schedules.length > 0) {
-          const userSchedules = schedules.map((schedule) => {
-            // Verificar si user_id existe antes de desestructurar
-            if ('user_id' in schedule) {
-              const { user_id, ...scheduleData } = schedule;
-              return manager.create(Schedule, {
-                ...scheduleData,
-                user: newEmployee,
-              });
-            } else {
-              return manager.create(Schedule, {
-                ...schedule,
-                user: newEmployee,
-              });
-            }
-          });
-
-          await manager.save(userSchedules);
-        }
-
-        // Cargar el empleado con sus relaciones para la respuesta
-        const employeeWithRelations = await manager.findOne(User, {
-          where: { id: newEmployee.id },
-          relations: ['roles', 'owner', 'schedules'], // Añadir relación con schedules
-        });
-
-        // Sin `token`: el Owner no debe recibir una sesión del empleado (2.12).
-        return {
-          user: this.transformUserResponse(employeeWithRelations),
-        };
-      });
-    } catch (error) {
-      if (!(error instanceof HttpException)) {
-        this.logger.error(`Error en createEmployee: ${error?.message}`);
-      }
-      throw error;
-    }
-  }
-
-  // auth.service.ts - método updateEmployee
-  async updateEmployee(
-    ownerId: string,
-    employeeId: string,
-    updateData: UpdateEmployeeDto,
-  ) {
-    try {
-      // Usamos transacción para garantizar consistencia
-      return await this.dataSource.transaction(async (manager) => {
-        // 1. Buscar el empleado actual incluyendo sus roles
-        const employee = await manager.findOne(User, {
-          where: {
-            id: employeeId,
-            owner: { id: ownerId },
-          },
-          relations: ['roles', 'owner'],
-        });
-
-        if (!employee) {
-          throw new NotFoundException('Empleado no encontrado');
-        }
-
-        // 2. Validar email y teléfono
-        if (
-          (updateData.email && updateData.email !== employee.email) ||
-          (updateData.phone && updateData.phone !== employee.phone)
-        ) {
-          const duplicateQuery = [];
-
-          if (updateData.email && updateData.email !== employee.email) {
-            duplicateQuery.push({ email: updateData.email });
-          }
-
-          if (updateData.phone && updateData.phone !== employee.phone) {
-            duplicateQuery.push({ phone: updateData.phone });
-          }
-
-          if (duplicateQuery.length > 0) {
-            const existingUser = await manager.findOne(User, {
-              where: duplicateQuery,
-            });
-
-            if (existingUser && existingUser.id !== employeeId) {
-              throw this.duplicateUserError(
-                existingUser.email === updateData.email,
-                updateData.email,
-                updateData.phone,
-              );
-            }
-          }
-        }
-
-        // 3. Manejar la contraseña
-        if (updateData.password) {
-          employee.password = await this.hashPassword(updateData.password);
-        }
-
-        // 4. Actualizar el resto de datos básicos
-        if (updateData.name) employee.name = updateData.name;
-        if (updateData.lastname) employee.lastname = updateData.lastname;
-        if (emailChanges(employee.email, updateData.email)) {
-          // Regla 2.33 (coherente con 2.16): un email nuevo vuelve a exigir
-          // verificación; el empleado queda inactivo hasta verificarlo.
-          Object.assign(employee, initialEmployeeState(), {
-            verification_code: null,
-            verification_code_expires: null,
-          });
-        }
-        if (updateData.email) employee.email = updateData.email;
-        if (updateData.phone) employee.phone = updateData.phone;
-
-        // 5. Guardar los cambios básicos del empleado
-        await manager.save(employee);
-
-        // 6. Actualizar el horario si se proporciona
-        if (updateData.schedule && typeof updateData.schedule === 'object') {
-          // Primero, eliminar horarios existentes
-          await manager.delete(Schedule, { user: { id: employeeId } });
-
-          // Mapeo de días a números
-          const dayMap = {
-            monday: 1,
-            tuesday: 2,
-            wednesday: 3,
-            thursday: 4,
-            friday: 5,
-            saturday: 6,
-            sunday: 7,
-          };
-
-          // Crear nuevos horarios
-          const schedules = [];
-          for (const [day, hours] of Object.entries(updateData.schedule)) {
-            if (dayMap[day] && hours && hours.start && hours.end) {
-              schedules.push(
-                manager.create(Schedule, {
-                  user: { id: employeeId },
-                  day_of_week: dayMap[day],
-                  start_time: hours.start,
-                  end_time: hours.end,
-                  is_available: true,
-                }),
-              );
-            }
-          }
-
-          if (schedules.length > 0) {
-            await manager.save(schedules);
-          }
-        }
-
-        // 7. Actualizar servicios si se proporcionan
-        if (updateData.services && Array.isArray(updateData.services)) {
-          // Eliminar asignaciones existentes
-          await manager.delete(UserService, { userId: employeeId });
-
-          // Crear nuevas asignaciones
-          if (updateData.services.length > 0) {
-            const userServices = updateData.services.map((service) =>
-              manager.create(UserService, {
-                userId: employeeId,
-                serviceId: service.serviceId,
-                customPrice: service.customPrice,
-                commissionPercentage: service.commissionPercentage || 0,
-                isActive:
-                  service.isActive !== undefined ? service.isActive : true,
-              }),
-            );
-
-            await manager.save(userServices);
-          }
-        }
-
-        // 8. Cargar y devolver el empleado actualizado con todas sus relaciones
-        const updatedEmployee = await manager.findOne(User, {
-          where: { id: employeeId },
-          relations: [
-            'roles',
-            'owner',
-            'userServices',
-            'userServices.service',
-            'schedules',
-          ],
-        });
-
-        if (!updatedEmployee) {
-          throw new NotFoundException(
-            'No se pudo encontrar el empleado después de actualizarlo',
-          );
-        }
-
-        // 9. Convertir el horario al formato esperado por el frontend
-        const schedule = {};
-        if (updatedEmployee.schedules && updatedEmployee.schedules.length > 0) {
-          const dayMap = {
-            1: 'monday',
-            2: 'tuesday',
-            3: 'wednesday',
-            4: 'thursday',
-            5: 'friday',
-            6: 'saturday',
-            7: 'sunday',
-          };
-
-          updatedEmployee.schedules.forEach((scheduleItem) => {
-            const day = dayMap[scheduleItem.day_of_week];
-            if (day) {
-              schedule[day] = {
-                start: scheduleItem.start_time,
-                end: scheduleItem.end_time,
-              };
-            }
-          });
-        }
-
-        // 10. Construir y devolver la respuesta
-        const userData = omitUserSecrets(updatedEmployee);
-        return {
-          ...userData,
-          roles: userData.roles.map((role) => ({ name: role.name })),
-          services:
-            updatedEmployee.userServices?.map((us) => ({
-              id: us.service.id,
-              name: us.service.name,
-              commissionPercentage: us.commissionPercentage || 0,
-              customPrice: us.customPrice,
-              originalPrice: us.service.price,
-              isActive: us.isActive,
-            })) || [],
-          schedule,
-        };
-      });
-    } catch (error) {
-      // Propagar errores conocidos, envolver errores desconocidos
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      console.error('Error al actualizar empleado:', error);
-      throw new InternalServerErrorException(
-        `Error al actualizar el empleado: ${error.message}`,
-      );
-    }
-  }
-
-  async deleteEmployee(
-    ownerId: string,
-    employeeId: string,
-    deletionReason?: string,
-  ) {
-    try {
-      console.log(
-        `🗑️ Iniciando soft delete de empleado ${employeeId} por owner ${ownerId}`,
-      );
-
-      // 1. El dueño no se borra (2.33: antes daba 404, porque se buscaba
-      //    entre los empleados del Owner y el Owner no es su propio empleado).
-      if (employeeId === ownerId) {
-        throw ownerNotDeletable();
-      }
-
-      // 2. Buscar el empleado del Owner, también si ya está borrado (2.33:
-      //    sin `withDeleted` el 409 "ya eliminado" era inalcanzable → 404).
-      const employee = await this.userRepository.findOne({
-        where: {
-          id: employeeId,
-          owner: { id: ownerId },
-        },
-        relations: ['roles', 'owner'],
-        withDeleted: true,
-      });
-
-      if (!employee) {
-        throw new NotFoundException('Empleado no encontrado');
-      }
-
-      const isOwner = employee.roles.some((role) => role.name === 'Owner');
-      if (isOwner) {
-        throw ownerNotDeletable();
-      }
-
-      // 3. Verificar que no esté ya eliminado
-      if (employee.deletedAt) {
-        throw new BusinessException(
-          ErrorCode.CONFLICT,
-          'El empleado ya ha sido eliminado previamente',
-        );
-      }
-
-      // 4. SOFT DELETE usando TypeORM
-      await this.userRepository.softDelete(employeeId);
-
-      // 5. Desactivar al empleado (para que no pueda hacer login ni agendar citas)
-      await this.userRepository.update(employeeId, {
-        isActive: false,
-        deletionReason: deletionReason || 'Eliminado por administrador',
-        deletedBy: ownerId,
-      });
-
-      console.log(
-        `✅ Empleado ${employeeId} eliminado exitosamente (soft delete)`,
-      );
-
-      return {
-        message: 'Profesional eliminado correctamente',
-        id: employeeId,
-        deletedAt: new Date(),
-        reason: deletionReason || 'Eliminado por administrador',
-      };
-    } catch (error) {
-      console.error(`❌ Error eliminando empleado ${employeeId}:`, error);
-
-      if (error instanceof HttpException) {
-        throw error;
-      }
-
-      throw new InternalServerErrorException('Error al eliminar el empleado');
-    }
-  }
-
-  async restoreEmployee(ownerId: string, employeeId: string) {
-    try {
-      console.log(`♻️ Restaurando empleado ${employeeId}`);
-
-      // Buscar empleado eliminado (withDeleted: true incluye soft-deleted)
-      const employee = await this.userRepository.findOne({
-        where: {
-          id: employeeId,
-          owner: { id: ownerId },
-        },
-        relations: ['roles', 'owner'],
-        withDeleted: true, // ⭐ IMPORTANTE: Incluir registros soft-deleted
-      });
-
-      if (!employee || !employee.deletedAt) {
-        throw new NotFoundException('Empleado eliminado no encontrado');
-      }
-
-      // Verificar permisos
-      if (employee.owner?.id !== ownerId) {
-        throw new ForbiddenException(
-          'No tienes permisos para restaurar este empleado',
-        );
-      }
-
-      // Restaurar empleado
-      await this.userRepository.restore(employeeId);
-
-      // Reactivar solo si verificó su email (2.15). Si no, se restaura
-      // inactivo: el Owner lo activa al verificar (`verify/employee-email`).
-      const isActive = canActivateEmployee(employee);
-      await this.userRepository.update(employeeId, {
-        isActive,
-        deletionReason: null,
-        deletedBy: null,
-      });
-
-      return {
-        message: isActive
-          ? 'Empleado restaurado correctamente'
-          : 'Empleado restaurado. Debe verificar su email para activarse',
-        id: employeeId,
-        isActive,
-        restoredAt: new Date(),
-      };
-    } catch (error) {
-      console.error(`❌ Error restaurando empleado ${employeeId}:`, error);
-      throw error;
-    }
+    return {
+      user: toUserResponse(newUser),
+      token: this.generateToken(newUser),
+    };
   }
 
   async login(loginAuthDto: LoginAuthDto) {
-    try {
-      const { email, password } = loginAuthDto;
-      // Con borrados: así una cuenta dada de baja recibe su motivo (2.12).
-      const user = await this.findUserWithSecrets(
-        { email },
-        ['password'],
-        ['roles', 'owner'],
-        { withDeleted: true },
-      );
+    const { email, password } = loginAuthDto;
+    // Con borrados: así una cuenta dada de baja recibe su motivo (2.12).
+    const user = await findUserWithSecrets(
+      this.userRepository,
+      { email },
+      ['password'],
+      ['roles', 'owner'],
+      { withDeleted: true },
+    );
 
-      if (!user || !(await bcrypt.compare(password, user.password))) {
-        throw new UnauthorizedException('Credenciales inválidas');
-      }
-      // Solo tras la contraseña correcta: no revela el estado de cuentas ajenas.
-      assertAccountCanLogin(user);
-
-      return {
-        user: this.transformUserResponse(user),
-        token: this.generateToken(user),
-      };
-    } catch (error) {
-      throw error;
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      throw new UnauthorizedException('Credenciales inválidas');
     }
+    // Solo tras la contraseña correcta: no revela el estado de cuentas ajenas.
+    assertAccountCanLogin(user);
+
+    return {
+      user: toUserResponse(user),
+      token: this.generateToken(user),
+    };
   }
 
   /**
@@ -830,7 +198,6 @@ export class AuthService {
     try {
       const { email, name } = payload;
 
-      // Buscar si el usuario ya existe
       // Con borrados: una cuenta dada de baja no se "recrea" como Owner nueva.
       let user = await this.userRepository.findOne({
         where: { email },
@@ -851,15 +218,14 @@ export class AuthService {
           name: firstName || '',
           lastname: lastName || '',
           phone: null, // Sin teléfono: único pero opcional (2.10)
-          password: await this.hashPassword(uuid()), // Generar contraseña aleatoria
+          password: await hashPassword(uuid()), // Contraseña aleatoria
           is_google_account: true,
           is_email_verified: true, // Los emails de Google ya están verificados
         });
       }
 
-      // Generar token y retornar usuario
       return {
-        user: this.transformUserResponse(user),
+        user: toUserResponse(user),
         token: this.generateToken(user),
       };
     } catch (error) {
@@ -929,7 +295,7 @@ export class AuthService {
   }
 
   async verifyEmail(email: string, code: string) {
-    const user = await this.findUserWithSecrets({ email }, [
+    const user = await findUserWithSecrets(this.userRepository, { email }, [
       'verification_code',
       'verification_code_expires',
     ]);
@@ -937,7 +303,7 @@ export class AuthService {
       throw new NotFoundException('Usuario no encontrado');
     }
 
-    await this.assertValidCode('verify', user, code);
+    await assertValidCode(this.codeDeps, 'verify', user, code);
 
     user.is_email_verified = true;
     user.verification_code = null;
@@ -948,208 +314,6 @@ export class AuthService {
       message: 'Email verificado correctamente',
       is_verified: true,
     };
-  }
-
-  async getEmployeesByOwner(ownerId: string, includeDeleted: boolean = false) {
-    try {
-      console.log(
-        `📋 Obteniendo empleados para owner ${ownerId}, incluir eliminados: ${includeDeleted}`,
-      );
-
-      const options: any = {
-        where: { owner: { id: ownerId } },
-        relations: [
-          'roles',
-          'userServices',
-          'userServices.service',
-          'schedules',
-        ],
-      };
-
-      // Si se quieren incluir empleados eliminados
-      if (includeDeleted) {
-        options.withDeleted = true;
-      }
-
-      const employees = await this.userRepository.find(options);
-
-      // También obtener el owner
-      const ownerOptions: any = {
-        where: { id: ownerId },
-        relations: [
-          'roles',
-          'userServices',
-          'userServices.service',
-          'schedules',
-        ],
-      };
-
-      if (includeDeleted) {
-        ownerOptions.withDeleted = true;
-      }
-
-      const owner = await this.userRepository.findOne(ownerOptions);
-
-      if (!owner) {
-        throw new NotFoundException('Propietario no encontrado');
-      }
-
-      // Combinar resultados
-      const allUsers = [owner, ...employees];
-
-      // Transformar respuesta
-      return allUsers.map((user) => {
-        const userData = omitUserSecrets(user);
-
-        // Convertir schedules a formato de frontend
-        const schedule = {};
-        if (user.schedules && user.schedules.length > 0) {
-          const dayMap = {
-            1: 'monday',
-            2: 'tuesday',
-            3: 'wednesday',
-            4: 'thursday',
-            5: 'friday',
-            6: 'saturday',
-            7: 'sunday',
-          };
-
-          user.schedules.forEach((scheduleItem) => {
-            const day = dayMap[scheduleItem.day_of_week];
-            if (day) {
-              schedule[day] = {
-                start: scheduleItem.start_time,
-                end: scheduleItem.end_time,
-              };
-            }
-          });
-        }
-
-        return {
-          ...userData,
-          roles: userData.roles.map((role) => ({ name: role.name })),
-          isOwner: user.id === ownerId,
-          isDeleted: !!user.deletedAt, // 🆕 Indicar si está eliminado
-          deletedAt: user.deletedAt,
-          deletionReason: user.deletionReason,
-          services:
-            user.userServices?.map((us) => ({
-              id: us.service.id,
-              name: us.service.name,
-              commissionPercentage: us.commissionPercentage || 0,
-              customPrice: us.customPrice,
-              originalPrice: us.service.price,
-              isActive: us.isActive,
-            })) || [],
-          schedule,
-        };
-      });
-    } catch (error) {
-      console.error('❌ Error obteniendo empleados:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Profesionales que se pueden agendar (2.33): misma regla que crear o mover
-   * una cita (`canBeScheduled`). Incluye al Owner si es agendable.
-   */
-  async getActiveEmployeesByOwner(ownerId: string) {
-    const all = await this.getEmployeesByOwner(ownerId, false);
-    return all.filter((user) => canBeScheduled(user, ownerId));
-  }
-
-  // 🆕 NUEVO: Método para obtener empleados eliminados
-  async getDeletedEmployeesByOwner(ownerId: string) {
-    try {
-      const employees = await this.userRepository.find({
-        where: {
-          owner: { id: ownerId },
-        },
-        relations: [
-          'roles',
-          'userServices',
-          'userServices.service',
-          'schedules',
-        ],
-        withDeleted: true, // Incluir eliminados
-      });
-
-      // Filtrar solo los eliminados
-      const deletedEmployees = employees.filter((emp) => emp.deletedAt);
-
-      return deletedEmployees.map((user) => {
-        const userData = omitUserSecrets(user);
-        return {
-          ...userData,
-          roles: userData.roles.map((role) => ({ name: role.name })),
-          isDeleted: true,
-          deletedAt: user.deletedAt,
-          deletionReason: user.deletionReason,
-        };
-      });
-    } catch (error) {
-      console.error('❌ Error obteniendo empleados eliminados:', error);
-      throw error;
-    }
-  }
-
-  async getEmployeeByOwner(ownerId: string, employeeId: string) {
-    const employee = await this.userRepository.findOne({
-      where: {
-        id: employeeId,
-        owner: { id: ownerId },
-      },
-      relations: ['roles', 'userServices', 'userServices.service', 'schedules'],
-    });
-
-    if (!employee) {
-      throw new NotFoundException('Empleado no encontrado');
-    }
-
-    // Convertir schedules a formato de frontend
-    const schedule = {};
-    if (employee.schedules && employee.schedules.length > 0) {
-      const dayMap = {
-        1: 'monday',
-        2: 'tuesday',
-        3: 'wednesday',
-        4: 'thursday',
-        5: 'friday',
-        6: 'saturday',
-        7: 'sunday',
-      };
-
-      employee.schedules.forEach((scheduleItem) => {
-        const day = dayMap[scheduleItem.day_of_week];
-        if (day) {
-          schedule[day] = {
-            start: scheduleItem.start_time,
-            end: scheduleItem.end_time,
-          };
-        }
-      });
-    }
-
-    const userData = omitUserSecrets(employee);
-    return {
-      ...userData,
-      roles: userData.roles.map((role) => ({ name: role.name })),
-      services:
-        employee.userServices?.map((us) => ({
-          id: us.service.id,
-          name: us.service.name,
-          commissionPercentage: us.commissionPercentage || 0,
-          customPrice: us.customPrice,
-          originalPrice: us.service.price,
-          isActive: us.isActive,
-        })) || [],
-      schedule, // Añadir el horario convertido
-    };
-  }
-
-  private getJwtToken(payload: JwtPayload): string {
-    return this.jwtService.sign(payload);
   }
 
   async generatePasswordResetCode(email: string) {
@@ -1166,7 +330,6 @@ export class AuthService {
       await this.userRepository.save(user);
       this.verificationAttempts.reset('reset', user.id);
 
-      // Enviar email
       const emailSent = await this.emailService.sendPasswordResetCode(
         email,
         code,
@@ -1188,7 +351,7 @@ export class AuthService {
   }
 
   async resetPassword(email: string, code: string, newPassword: string) {
-    const user = await this.findUserWithSecrets({ email }, [
+    const user = await findUserWithSecrets(this.userRepository, { email }, [
       'reset_password_code',
       'reset_password_expires',
     ]);
@@ -1196,9 +359,9 @@ export class AuthService {
       throw new NotFoundException('Usuario no encontrado');
     }
 
-    await this.assertValidCode('reset', user, code);
+    await assertValidCode(this.codeDeps, 'reset', user, code);
 
-    user.password = await this.hashPassword(newPassword);
+    user.password = await hashPassword(newPassword);
     user.reset_password_code = null;
     user.reset_password_expires = null;
     await this.userRepository.save(user);
@@ -1206,96 +369,6 @@ export class AuthService {
     return {
       message: 'Contraseña actualizada correctamente',
     };
-  }
-
-  /**
-   * Activa o desactiva un empleado del Owner (404 si es de otro negocio).
-   * Regla del usuario (2.15): activar exige el email verificado
-   * (`EMAIL_NOT_VERIFIED`, 409). `verify/employee-email` ya activa al verificar.
-   */
-  async toggleEmployeeStatus(
-    ownerId: string,
-    employeeId: string,
-    statusData: ToggleEmployeeStatusDto,
-  ) {
-    try {
-      const employee = await this.userRepository.findOne({
-        where: {
-          id: employeeId,
-          owner: { id: ownerId },
-        },
-        relations: ['roles', 'owner'],
-      });
-
-      if (!employee) {
-        throw new NotFoundException('Empleado no encontrado');
-      }
-
-      if (statusData.isActive) {
-        assertCanActivateEmployee(employee);
-      }
-      employee.isActive = statusData.isActive;
-      await this.userRepository.save(employee);
-
-      // Retornar el empleado actualizado
-      const updatedEmployee = await this.userRepository.findOne({
-        where: { id: employeeId },
-        relations: ['roles', 'owner'],
-      });
-
-      return this.transformUserResponse(updatedEmployee);
-    } catch (error) {
-      // Propagar errores conocidos, envolver errores desconocidos
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      this.logger.error(
-        `Error al cambiar el estado del empleado: ${error?.message}`,
-      );
-      throw new InternalServerErrorException(
-        'Error al actualizar el estado del empleado',
-      );
-    }
-  }
-
-  async verifyEmployeeEmail(
-    owner: UserAccessActor,
-    employeeId: string,
-    code: string,
-  ) {
-    try {
-      // Solo empleados del Owner que llama (404 si es de otro negocio).
-      await assertCanManageUser(
-        this.userRepository,
-        owner,
-        { id: employeeId },
-        { employeesOnly: true },
-      );
-      const employee = await this.findUserWithSecrets({ id: employeeId }, [
-        'verification_code',
-        'verification_code_expires',
-      ]);
-
-      if (!employee) {
-        throw new NotFoundException('Empleado no encontrado');
-      }
-
-      await this.assertValidCode('verify', employee, code);
-
-      // Activar el empleado
-      employee.isActive = true;
-      employee.is_email_verified = true;
-      employee.verification_code = null;
-      employee.verification_code_expires = null;
-      await this.userRepository.save(employee);
-
-      return {
-        message: 'Email verificado y empleado activado correctamente',
-        is_verified: true,
-      };
-    } catch (error) {
-      throw error;
-    }
   }
 }
 
@@ -1308,68 +381,4 @@ export function parseGoogleClientIds(raw: string | undefined | null): string[] {
     .split(',')
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
-}
-
-/** Regla del usuario (2.15): solo se activa un empleado con el email verificado. */
-export function canActivateEmployee(employee: {
-  is_email_verified?: boolean;
-}): boolean {
-  return employee?.is_email_verified === true;
-}
-
-/**
- * Regla del usuario (2.16): un empleado nace inactivo y sin verificar; lo
- * activa `verify/employee-email`. No hay alta con el email ya verificado:
- * `createEmployee` rechaza cualquier email existente (también el registro
- * temporal de `verify/request-code`), y el DTO no admite `isActive` ni
- * `is_email_verified`. Se fija aquí porque el default de la columna
- * `isActive` es `true` (lo siguen usando el Owner y el login con Google).
- */
-export function initialEmployeeState(): {
-  isActive: boolean;
-  is_email_verified: boolean;
-} {
-  const is_email_verified = false;
-  return {
-    is_email_verified,
-    isActive: canActivateEmployee({ is_email_verified }),
-  };
-}
-
-export function assertCanActivateEmployee(employee: {
-  is_email_verified?: boolean;
-}): void {
-  if (!canActivateEmployee(employee)) {
-    throw new BusinessException(
-      ErrorCode.EMAIL_NOT_VERIFIED,
-      'El profesional debe verificar su email antes de activarse',
-    );
-  }
-}
-
-/** Código de verificación o de recuperación no válido (2.33). */
-function invalidCode(message: string): BusinessException {
-  return new BusinessException(ErrorCode.INVALID_VERIFICATION_CODE, message);
-}
-
-/** Borrar al dueño del negocio: 409 `OWNER_NOT_DELETABLE` (2.33; antes 403 legado). */
-function ownerNotDeletable(): BusinessException {
-  return new BusinessException(
-    ErrorCode.OWNER_NOT_DELETABLE,
-    'No se puede eliminar al dueño del negocio',
-  );
-}
-
-/**
- * ¿El email de un empleado cambia de verdad? (2.33). Solo mayúsculas o
- * espacios distintos no cuentan como email nuevo.
- */
-export function emailChanges(
-  current: string | null | undefined,
-  next: string | null | undefined,
-): boolean {
-  if (!next) return false;
-  const normalize = (email: string | null | undefined) =>
-    (email ?? '').trim().toLowerCase();
-  return normalize(next) !== normalize(current);
 }

@@ -2,8 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  Inject,
-  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -28,7 +26,6 @@ export class SchedulesService {
   constructor(
     @InjectRepository(Schedule)
     private readonly scheduleRepository: Repository<Schedule>,
-    @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
     private readonly dataSource: DataSource,
   ) {}

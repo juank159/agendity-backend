@@ -35,8 +35,6 @@ function build(googleClientId: string | undefined) {
     {} as any,
     {} as any,
     {} as any,
-    {} as any,
-    {} as any,
   );
   return { service, userRepository };
 }
@@ -187,8 +185,6 @@ describe('AuthService.googleLogin: usuarios nuevos sin teléfono (2.10)', () => 
       subscriptions as any,
       dataSource as any,
       {} as any,
-      {} as any,
-      {} as any,
     );
     return {
       service,
@@ -331,8 +327,6 @@ describe('AuthService.generateVerificationCode: sin registros temporales (2.19)'
       {} as any,
       {} as any,
       { get: () => undefined } as any,
-      {} as any,
-      {} as any,
       {} as any,
       {} as any,
       {} as any,

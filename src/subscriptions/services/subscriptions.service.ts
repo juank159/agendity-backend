@@ -913,9 +913,6 @@ export class SubscriptionsService {
         this.logger.log(
           `Subscription ${subscription.id} for tenant ${subscription.tenant_id} expires soon`,
         );
-
-        // Ejemplo: enviar correo de recordatorio
-        // await this.emailService.sendExpirationReminder(subscription);
       }
     } catch (error) {
       this.logger.error(`Error sending expiration reminders: ${error.message}`);

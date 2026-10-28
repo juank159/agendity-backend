@@ -6,7 +6,7 @@
  * el proceso en America/Bogota y con `TZ=UTC`.
  */
 import { DataSource, EntityManager, Repository } from 'typeorm';
-import { PaymentsService } from '../src/payments/payments.service';
+import { PaymentStatsService } from '../src/payments/payment-stats.service';
 import { User } from '../src/users/entities/user.entity';
 import {
   parseBusinessDate,
@@ -75,7 +75,7 @@ describe('Fechas y zona del negocio (e2e, 2.05)', () => {
 
   it('query sin offset = día del negocio; con offset se respeta', async () => {
     const stats = jest
-      .spyOn(app.get(PaymentsService), 'getPaymentStats')
+      .spyOn(app.get(PaymentStatsService), 'getPaymentStats')
       .mockResolvedValue({
         total_amount: 0,
         payment_count: 0,

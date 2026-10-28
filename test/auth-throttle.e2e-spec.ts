@@ -96,9 +96,18 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
       });
 
     const mockDb = (user: User) => {
+      // Lectura del usuario con sus secretos (`findUserWithSecrets`, un
+      // QueryBuilder desde 5.05): devuelve el usuario falso sin tocar la BD.
+      const qb: any = {
+        where: () => qb,
+        withDeleted: () => qb,
+        addSelect: () => qb,
+        leftJoinAndSelect: () => qb,
+        getOne: async () => user,
+      };
       jest
-        .spyOn(authService as any, 'findUserWithSecrets')
-        .mockImplementation(async () => user);
+        .spyOn(Repository.prototype, 'createQueryBuilder')
+        .mockReturnValue(qb);
       const update = jest
         .spyOn(Repository.prototype, 'update')
         .mockImplementation(async () => ({

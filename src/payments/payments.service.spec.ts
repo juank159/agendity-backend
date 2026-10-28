@@ -7,6 +7,7 @@ import {
   PaymentStatus,
 } from 'src/common/enums/status.enum';
 import { PaymentsService } from './payments.service';
+import { PaymentStatsService } from './payment-stats.service';
 
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const APPOINTMENT = 'a0000000-0000-4000-8000-000000000001';
@@ -357,14 +358,18 @@ describe('PaymentsService.refund (2.06)', () => {
   });
 });
 
-describe('PaymentsService (estadísticas, 2.28)', () => {
+describe('PaymentStatsService (estadísticas, 2.28; separadas en 5.05)', () => {
   const day = new Date('2030-01-07T00:00:00-05:00');
   const withRows = (rows: any[]) => {
-    const built = build();
-    (built.paymentRepo as any).manager = {
-      query: jest.fn<Promise<any[]>, [string, unknown[]]>(async () => rows),
+    const paymentRepo = {
+      manager: {
+        query: jest.fn<Promise<any[]>, [string, unknown[]]>(async () => rows),
+      },
     };
-    return built;
+    return {
+      service: new PaymentStatsService(paymentRepo as any),
+      paymentRepo,
+    };
   };
 
   it('by-service: porcentajes sobre lo atribuido (suman 100) y promedio por cita', async () => {

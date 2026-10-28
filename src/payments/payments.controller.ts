@@ -11,6 +11,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
+import { PaymentStatsService } from './payment-stats.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -22,7 +23,10 @@ import { AuthUser, isOnlyEmployee } from '../auth/interfaces';
 
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(
+    private readonly paymentsService: PaymentsService,
+    private readonly paymentStatsService: PaymentStatsService,
+  ) {}
 
   @Post()
   @hasRoles(JwtRoles.Owner)
@@ -56,7 +60,11 @@ export class PaymentsController {
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getPaymentStats(startDate, endDate, tenantId);
+    return this.paymentStatsService.getPaymentStats(
+      startDate,
+      endDate,
+      tenantId,
+    );
   }
 
   @Get('employee-stats')
@@ -77,7 +85,7 @@ export class PaymentsController {
         );
       }
       // Empleado: solo sus propias estadísticas, dentro de su negocio
-      return this.paymentsService.getEmployeeStats(
+      return this.paymentStatsService.getEmployeeStats(
         user.id,
         startDate,
         endDate,
@@ -91,7 +99,7 @@ export class PaymentsController {
         'Se requiere professionalId para consultar estadísticas de un profesional específico',
       );
     }
-    return this.paymentsService.getEmployeeStats(
+    return this.paymentStatsService.getEmployeeStats(
       professionalId,
       startDate,
       endDate,
@@ -122,7 +130,7 @@ export class PaymentsController {
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getPaymentStatsByMethod(
+    return this.paymentStatsService.getPaymentStatsByMethod(
       startDate,
       endDate,
       tenantId,
@@ -136,7 +144,7 @@ export class PaymentsController {
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getPaymentStatsComparison(
+    return this.paymentStatsService.getPaymentStatsComparison(
       startDate,
       endDate,
       tenantId,
@@ -150,7 +158,7 @@ export class PaymentsController {
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getPaymentStatsByService(
+    return this.paymentStatsService.getPaymentStatsByService(
       startDate,
       endDate,
       tenantId,
@@ -164,7 +172,7 @@ export class PaymentsController {
     @Query('endDate', ParseDatePipe) endDate: Date,
     @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getPaymentStatsByProfessional(
+    return this.paymentStatsService.getPaymentStatsByProfessional(
       startDate,
       endDate,
       tenantId,
@@ -179,7 +187,7 @@ export class PaymentsController {
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getPaymentStatsByClient(
+    return this.paymentStatsService.getPaymentStatsByClient(
       startDate,
       endDate,
       tenantId,
@@ -195,7 +203,7 @@ export class PaymentsController {
     @Query('limit', new DefaultValuePipe(5), ParseIntPipe) limit: number,
     @Tenant() tenantId: string,
   ) {
-    return this.paymentsService.getTopClients(
+    return this.paymentStatsService.getTopClients(
       startDate,
       endDate,
       tenantId,

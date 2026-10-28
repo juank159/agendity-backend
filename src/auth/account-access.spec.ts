@@ -119,8 +119,6 @@ describe('Login con cuentas sin acceso (2.12)', () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
-      {} as any,
     );
     return { service, qb, userRepository, jwtService };
   }

@@ -515,15 +515,8 @@ export class WompiService {
         return;
       }
 
-      // Para suscripciones reales en Wompi, usarías algo como:
-      // await axios.post(
-      //   `${this.apiBaseUrl}/subscriptions/${subscriptionId}/cancel`,
-      //   {},
-      //   { headers: this.getAuthHeaders() },
-      // );
-
-      // Pero como estamos usando links de pago en lugar de suscripciones reales,
-      // simplemente registramos que se intentó cancelar
+      // Con links de pago (no suscripciones recurrentes de Wompi) no hay nada
+      // que cancelar en Wompi: solo se registra el intento.
       this.logger.log(
         `Simulando cancelación de suscripción. En un entorno real con suscripciones, se enviaría la petición a Wompi.`,
       );

@@ -33,7 +33,6 @@ export class RolesController {
   @ApiResponse({ 
     status: 200, 
     description: 'Lista de todos los roles',
-    //type: [Role]
   })
   findAll() {
     return this.rolesService.findAll();
