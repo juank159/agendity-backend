@@ -740,7 +740,7 @@ describe('Aislamiento por tenant (e2e)', () => {
       expectNoWrites();
     });
 
-    it('sigue sin poder editar ni borrar el catálogo ni las citas (403)', async () => {
+    it('sigue sin poder editar ni borrar el catálogo ni las citas, ni borrar clientes (403)', async () => {
       if (!employeeToken) return;
       const t = auth(employeeToken);
       await expectStatuses([
@@ -762,6 +762,11 @@ describe('Aislamiento por tenant (e2e)', () => {
         [
           'DELETE category',
           () => http.delete(`/api/categories/${category.id}`).set(t),
+          403,
+        ],
+        [
+          'DELETE client (solo Owner, 2.32)',
+          () => http.delete(`/api/clients/${client.id}`).set(t),
           403,
         ],
         [

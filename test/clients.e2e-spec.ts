@@ -1,7 +1,8 @@
 /**
- * Tarea 2.20: el email del cliente es opcional (columna nullable, migración
- * `ClientEmailNullable`). Solo escribe: corre con
- * `E2E_WRITABLE_DB=<copia> DB_NAME=<copia>` y la migración aplicada en la copia.
+ * Clientes (e2e que escriben). Solo corre con
+ * `E2E_WRITABLE_DB=<copia> DB_NAME=<copia>` y las migraciones aplicadas en la copia.
+ * - 2.20: el email del cliente es opcional (columna nullable, `ClientEmailNullable`).
+ * - 2.32: el Employee crea y edita clientes, pero no los borra (solo el Owner).
  */
 import { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
@@ -28,6 +29,7 @@ describeWritable(
     let close: () => Promise<void>;
     let ds: DataSource;
     let owner: User;
+    let employee: User | null;
     let ownerToken: string;
     const stamp = Date.now().toString().slice(-7);
     const phone = (n: number) => `32${n}${stamp}`;
@@ -36,7 +38,7 @@ describeWritable(
       ({ app, http, close } = await createE2EApp());
       ds = app.get(DataSource);
       await assertWritableDatabase(ds);
-      ({ owner } = await findDevOwnerAndEmployee(ds));
+      ({ owner, employee } = await findDevOwnerAndEmployee(ds));
       ownerToken = signToken(owner, ['Owner']);
     }, E2E_BOOT_TIMEOUT_MS);
 
@@ -94,6 +96,40 @@ describeWritable(
         [owner.id, phone(2)],
       );
       expect(row.email).toBeNull();
+    });
+
+    it('Employee: crea y edita un cliente del negocio, pero no lo borra; el Owner sí (2.32)', async () => {
+      if (!employee) return;
+      const employeeAuth = auth(signToken(employee, ['Employee']));
+
+      const created = await http
+        .post('/api/clients')
+        .set(employeeAuth)
+        .send({ name: 'Del', lastname: 'Empleado', phone: phone(3) });
+      expect(created.status).toBe(201);
+      expect(created.body.ownerId).toBe(owner.id);
+      const { id } = created.body;
+
+      const edited = await http
+        .patch(`/api/clients/${id}`)
+        .set(employeeAuth)
+        .send({ name: 'Editado' });
+      expect([edited.status, edited.body.name]).toEqual([200, 'Editado']);
+
+      const denied = await http.delete(`/api/clients/${id}`).set(employeeAuth);
+      expect([denied.status, denied.body.code]).toEqual([403, 'FORBIDDEN']);
+      const [{ count }] = await ds.query(
+        `SELECT count(*)::int AS count FROM clients WHERE id = $1`,
+        [id],
+      );
+      expect(count).toBe(1);
+
+      await http.delete(`/api/clients/${id}`).set(auth(ownerToken)).expect(200);
+      const [{ remaining }] = await ds.query(
+        `SELECT count(*)::int AS remaining FROM clients WHERE id = $1`,
+        [id],
+      );
+      expect(remaining).toBe(0);
     });
   },
 );

@@ -72,7 +72,9 @@ export class ClientsController {
     return this.clientsService.update(id, updateClientDto, tenantId);
   }
 
+  /** Solo el Owner borra clientes; el Employee crea y edita (2.32). */
   @Delete(':id')
+  @hasRoles(JwtRoles.Owner)
   remove(@Param('id') id: string, @Tenant() tenantId: string) {
     return this.clientsService.remove(id, tenantId);
   }
