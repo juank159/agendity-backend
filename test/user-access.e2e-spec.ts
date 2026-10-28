@@ -202,12 +202,15 @@ describe('Acceso a usuarios por Owner (e2e)', () => {
     expect(res.status).toBe(404);
   });
 
-  it('verify/employee-email: el Owner propio pasa el control y un código erróneo da 401 (sin escribir)', async () => {
+  it('verify/employee-email: el Owner propio pasa el control y un código erróneo da 400 INVALID_VERIFICATION_CODE (sin escribir; antes 401, 2.33)', async () => {
     if (!employee) return;
     const res = await http
       .post('/api/auth/verify/employee-email')
       .set(auth(ownerToken))
       .send({ employee_id: employee.id, code: 'no-es-un-codigo' });
-    expect(res.status).toBe(401);
+    expect([res.status, res.body.code]).toEqual([
+      400,
+      'INVALID_VERIFICATION_CODE',
+    ]);
   });
 });

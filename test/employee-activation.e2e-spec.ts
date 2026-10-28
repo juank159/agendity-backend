@@ -179,6 +179,18 @@ describeWritable(
       expect((await employeeRow()).isActive).toBe(false);
     });
 
+    it('código incorrecto: 400 INVALID_VERIFICATION_CODE (antes 401) y sigue inactivo (2.33)', async () => {
+      const res = await http
+        .post('/api/auth/verify/employee-email')
+        .set(auth(ownerToken))
+        .send({ employee_id: employeeId, code: '000000' });
+      expect([res.status, res.body.code]).toEqual([
+        400,
+        'INVALID_VERIFICATION_CODE',
+      ]);
+      expect((await employeeRow()).isActive).toBe(false);
+    });
+
     it('pedir el código y verificar (con la sesión del Owner) lo deja activo y agendable', async () => {
       const request = await http
         .post('/api/auth/verify/request-code')
@@ -207,6 +219,94 @@ describeWritable(
 
       const res = await book();
       expect(res.status).toBe(201);
+    });
+
+    /** Pide el código para `address` y lo verifica con la sesión del Owner. */
+    const verifyEmployee = async (address: string) => {
+      await http
+        .post('/api/auth/verify/request-code')
+        .send({ email: address })
+        .expect(201);
+      const [{ code }] = await ds.query(
+        'SELECT verification_code AS code FROM users WHERE id = $1',
+        [employeeId],
+      );
+      await http
+        .post('/api/auth/verify/employee-email')
+        .set(auth(ownerToken))
+        .send({ employee_id: employeeId, code })
+        .expect(201);
+    };
+    const activeIds = async () => {
+      const res = await http
+        .get('/api/auth/employees/active')
+        .set(auth(ownerToken));
+      expect(res.status).toBe(200);
+      return (res.body as { id: string }[]).map((u) => u.id);
+    };
+
+    it('employees/active = los agendables: el empleado verificado y activo sí (2.33)', async () => {
+      const ids = await activeIds();
+      expect(ids).toContain(employeeId);
+      expect(ids).toContain(owner.id);
+    });
+
+    it('cambiar el email del empleado exige verificarlo de nuevo: queda inactivo, fuera de active y sin citas (2.33)', async () => {
+      const newEmail = `e2e.233.${suffix}@agendity.test`;
+      const res = await http
+        .patch(`/api/auth/employee/${employeeId}`)
+        .set(auth(ownerToken))
+        .send({ email: newEmail });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        email: newEmail,
+        isActive: false,
+        is_email_verified: false,
+      });
+      expect(await activeIds()).not.toContain(employeeId);
+      const booking = await book();
+      expect(booking.body.code).toBe('PROFESSIONAL_INACTIVE');
+
+      // Verificar el email nuevo lo deja como estaba (activo y agendable).
+      await verifyEmployee(newEmail);
+      const row = await employeeRow();
+      expect([row.isActive, row.is_email_verified]).toEqual([true, true]);
+      expect(await activeIds()).toContain(employeeId);
+    });
+
+    it('borrar al dueño: 409 OWNER_NOT_DELETABLE (antes 404) (2.33)', async () => {
+      const res = await http
+        .delete(`/api/auth/employee/${owner.id}`)
+        .set(auth(ownerToken));
+      expect([res.status, res.body.code]).toEqual([409, 'OWNER_NOT_DELETABLE']);
+    });
+
+    it('borrar dos veces el mismo empleado: la segunda, 409 CONFLICT "ya eliminado" (antes 404) (2.33)', async () => {
+      const extra = String(Date.now()).slice(-9);
+      const created = await http
+        .post('/api/auth/register/employee')
+        .set(auth(ownerToken))
+        .send({
+          name: 'Prueba',
+          lastname: 'Borrada',
+          email: `e2e.233b.${extra}@agendity.test`,
+          phone: `3${extra}`,
+          password: 'Clave123!',
+        });
+      expect(created.status).toBe(201);
+      const id = created.body.user.id;
+      await http
+        .delete(`/api/auth/employee/${id}`)
+        .set(auth(ownerToken))
+        .expect(200);
+      const again = await http
+        .delete(`/api/auth/employee/${id}`)
+        .set(auth(ownerToken));
+      expect([again.status, again.body.code, again.body.message]).toEqual([
+        409,
+        'CONFLICT',
+        'El empleado ya ha sido eliminado previamente',
+      ]);
     });
   },
 );

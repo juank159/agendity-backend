@@ -62,6 +62,7 @@ import {
 import { Payment } from 'src/payments/entities/payment.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { User } from 'src/users/entities/user.entity';
+import { canBeScheduled } from 'src/users/user-access';
 import {
   endOfBusinessDay,
   parseBusinessDate,
@@ -154,7 +155,7 @@ export class AppointmentsService {
       if (!client || !professional) {
         throw new NotFoundException('Cliente o profesional no encontrado');
       }
-      this.assertProfessionalSchedulable(professional);
+      this.assertProfessionalSchedulable(professional, tenantId);
 
       const services = await this.loadTenantServices(service_ids, tenantId);
       // Precio de cada servicio guardado en la cita (2.29); total = su suma.
@@ -276,7 +277,7 @@ export class AppointmentsService {
       professionalId,
       tenantId,
     );
-    this.assertProfessionalSchedulable(professional);
+    this.assertProfessionalSchedulable(professional, tenantId);
     const services = await this.loadTenantServices(serviceIds, tenantId);
     const durationMinutes = appointmentDurationMinutes(services);
 
@@ -307,9 +308,15 @@ export class AppointmentsService {
     });
   }
 
-  /** Un profesional desactivado (o borrado) no recibe citas nuevas ni movidas. */
-  private assertProfessionalSchedulable(professional: User): void {
-    if (!professional?.isActive || professional.deletedAt) {
+  /**
+   * Un profesional que no se puede agendar (desactivado, borrado o empleado
+   * sin verificar, `canBeScheduled`, 2.33) no recibe citas nuevas ni movidas.
+   */
+  private assertProfessionalSchedulable(
+    professional: User,
+    tenantId: string,
+  ): void {
+    if (!canBeScheduled(professional, tenantId)) {
       throw new BusinessException(
         ErrorCode.PROFESSIONAL_INACTIVE,
         'El profesional no está activo y no puede recibir citas',
@@ -608,7 +615,7 @@ export class AppointmentsService {
               professionalId,
               tenantId,
             ));
-          this.assertProfessionalSchedulable(professional);
+          this.assertProfessionalSchedulable(professional, tenantId);
           await this.assertSlotAvailable(manager, {
             tenantId,
             professionalId,

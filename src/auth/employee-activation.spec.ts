@@ -5,6 +5,7 @@ import {
   AuthService,
   assertCanActivateEmployee,
   canActivateEmployee,
+  emailChanges,
   initialEmployeeState,
 } from './auth.service';
 
@@ -217,5 +218,110 @@ describe('Los empleados nacen inactivos hasta verificar el email (2.16)', () => 
       isActive: false,
       is_email_verified: false,
     });
+  });
+});
+
+describe('Empleados: borrar, lista agendable y cambio de email (2.33)', () => {
+  it('borrar al dueño (su propio id): 409 OWNER_NOT_DELETABLE sin consultar ni escribir (antes 404)', async () => {
+    const { service, userRepository } = build(null);
+    const error = await service.deleteEmployee(OWNER, OWNER).catch((e) => e);
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.OWNER_NOT_DELETABLE,
+    });
+    expect(userRepository.findOne).not.toHaveBeenCalled();
+    expect(userRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('borrar un empleado ya borrado: 409 CONFLICT "ya ha sido eliminado" (lo busca con withDeleted)', async () => {
+    const { service, userRepository } = build(
+      employee(true, { deletedAt: new Date() }),
+    );
+    (userRepository as any).softDelete = jest.fn();
+    const error = await service.deleteEmployee(OWNER, EMPLOYEE).catch((e) => e);
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.CONFLICT,
+      message: 'El empleado ya ha sido eliminado previamente',
+    });
+    expect(userRepository.findOne.mock.calls[0][0]).toMatchObject({
+      withDeleted: true,
+    });
+    expect((userRepository as any).softDelete).not.toHaveBeenCalled();
+  });
+
+  it('employees/active: solo los agendables (activos, sin borrar y verificados; el Owner aunque no verifique)', async () => {
+    const { service } = build(null);
+    jest.spyOn(service, 'getEmployeesByOwner').mockResolvedValue([
+      { id: OWNER, isActive: true, is_email_verified: false, deletedAt: null },
+      { id: 'ok', isActive: true, is_email_verified: true, deletedAt: null },
+      { id: 'sin-verificar', isActive: true, is_email_verified: false },
+      { id: 'inactivo', isActive: false, is_email_verified: true },
+    ] as any);
+    const result = await service.getActiveEmployeesByOwner(OWNER);
+    expect(result.map((u: any) => u.id)).toEqual([OWNER, 'ok']);
+  });
+
+  it('emailChanges: solo un email distinto cuenta (mayúsculas y espacios no)', () => {
+    expect(emailChanges('ana@test.co', 'otra@test.co')).toBe(true);
+    expect(emailChanges('ana@test.co', ' ANA@test.co ')).toBe(false);
+    expect(emailChanges('ana@test.co', undefined)).toBe(false);
+    expect(emailChanges('ana@test.co', '')).toBe(false);
+  });
+
+  it('PATCH con email nuevo: el empleado queda sin verificar e inactivo y sin código vigente', async () => {
+    const current = {
+      ...employee(true, { isActive: true }),
+      email: 'ana@test.co',
+      phone: '3000000000',
+    };
+    const saved: any[] = [];
+    const manager = {
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce({ ...current }) // el empleado
+        .mockResolvedValueOnce(null) // nadie más con ese email
+        .mockImplementation(async () => ({ ...saved[0], roles: [] })),
+      save: jest.fn(async (x) => {
+        saved.push({ ...x });
+        return x;
+      }),
+    };
+    const dataSource = { transaction: jest.fn((cb) => cb(manager)) };
+    const service = new AuthService(
+      {} as any,
+      {} as any,
+      {} as any,
+      { get: jest.fn() } as unknown as ConfigService,
+      {} as any,
+      {} as any,
+      dataSource as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    await service.updateEmployee(OWNER, EMPLOYEE, {
+      email: 'nuevo@test.co',
+    } as any);
+    expect(saved[0]).toMatchObject({
+      email: 'nuevo@test.co',
+      isActive: false,
+      is_email_verified: false,
+      verification_code: null,
+      verification_code_expires: null,
+    });
+
+    // Otros cambios (o el mismo email) no tocan la verificación.
+    saved.length = 0;
+    manager.findOne
+      .mockReset()
+      .mockResolvedValueOnce({ ...current })
+      .mockResolvedValueOnce(null) // el email solo cambia de mayúsculas
+      .mockImplementation(async () => ({ ...saved[0], roles: [] }));
+    await service.updateEmployee(OWNER, EMPLOYEE, {
+      email: 'ANA@test.co',
+      name: 'Ana María',
+    } as any);
+    expect(saved[0]).toMatchObject({ isActive: true, is_email_verified: true });
   });
 });

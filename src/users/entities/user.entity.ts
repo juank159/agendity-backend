@@ -241,8 +241,4 @@ export class User {
   canLogin(): boolean {
     return this.isActive && !this.isDeleted();
   }
-
-  canBeScheduled(): boolean {
-    return this.isActive && !this.isDeleted();
-  }
 }

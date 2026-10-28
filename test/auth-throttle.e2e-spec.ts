@@ -7,7 +7,7 @@
  * - El límite por código se prueba llamando a AuthService con un usuario falso
  *   (se intercepta `findUserWithSecrets`) y con `Repository.update/save` simulados.
  */
-import { INestApplication, UnauthorizedException } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { AuthService } from '../src/auth/auth.service';
 import { MAX_CODE_ATTEMPTS } from '../src/auth/verification-attempts.service';
@@ -124,14 +124,24 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
     it(`verifyEmail: al fallo nº ${MAX_CODE_ATTEMPTS} invalida el código en la BD`, async () => {
       const { update } = mockDb(fakeUser());
       for (let i = 1; i < MAX_CODE_ATTEMPTS; i++) {
-        const err = await errorOf(authService.verifyEmail('x', '000000'));
-        expect(err).toBeInstanceOf(UnauthorizedException);
-        expect((err as Error).message).toBe('Código de verificación inválido');
+        const err: any = await errorOf(authService.verifyEmail('x', '000000'));
+        // 2.33: 400 INVALID_VERIFICATION_CODE (antes 401, que la app tomaba
+        // por una sesión vencida).
+        expect(err.getStatus()).toBe(400);
+        expect(err.getResponse()).toEqual({
+          statusCode: 400,
+          code: 'INVALID_VERIFICATION_CODE',
+          message: 'Código de verificación inválido',
+        });
       }
       expect(update).not.toHaveBeenCalled();
 
-      const last = await errorOf(authService.verifyEmail('x', '000000'));
+      const last: any = await errorOf(authService.verifyEmail('x', '000000'));
       expect((last as Error).message).toMatch(/Demasiados intentos/);
+      expect(last.getResponse()).toMatchObject({
+        statusCode: 400,
+        code: 'INVALID_VERIFICATION_CODE',
+      });
       expect(update).toHaveBeenCalledWith(FAKE_ID, {
         verification_code: null,
         verification_code_expires: null,
@@ -143,10 +153,13 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
       for (let i = 1; i < MAX_CODE_ATTEMPTS; i++) {
         await errorOf(authService.resetPassword('x', '000000', 'Nueva#Clave1'));
       }
-      const last = await errorOf(
+      const last: any = await errorOf(
         authService.resetPassword('x', '000000', 'Nueva#Clave1'),
       );
       expect((last as Error).message).toMatch(/Demasiados intentos/);
+      expect(last.getResponse()).toMatchObject({
+        code: 'INVALID_VERIFICATION_CODE',
+      });
       expect(update).toHaveBeenCalledWith(FAKE_ID, {
         reset_password_code: null,
         reset_password_expires: null,
@@ -174,8 +187,21 @@ describe('Throttle de /auth y límite por código (e2e)', () => {
 
     it('un código vacío o ya invalidado nunca es válido', async () => {
       mockDb(fakeUser({ verification_code: null }));
-      const err = await errorOf(authService.verifyEmail('x', ''));
-      expect(err).toBeInstanceOf(UnauthorizedException);
+      const err: any = await errorOf(authService.verifyEmail('x', ''));
+      expect(err.getResponse()).toMatchObject({
+        statusCode: 400,
+        code: 'INVALID_VERIFICATION_CODE',
+      });
+    });
+
+    it('código vencido: 400 INVALID_VERIFICATION_CODE "ha expirado" (2.33)', async () => {
+      mockDb(fakeUser({ verification_code_expires: new Date(Date.now() - 1) }));
+      const err: any = await errorOf(authService.verifyEmail('x', '123456'));
+      expect(err.getResponse()).toEqual({
+        statusCode: 400,
+        code: 'INVALID_VERIFICATION_CODE',
+        message: 'El código de verificación ha expirado',
+      });
     });
 
     it('los códigos son de 6 dígitos (crypto.randomInt)', () => {

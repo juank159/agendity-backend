@@ -1,5 +1,4 @@
 import {
-  ConflictException,
   ForbiddenException,
   forwardRef,
   Inject,
@@ -20,8 +19,12 @@ import {
 import { Not, Repository, DataSource, FindOptionsWhere } from 'typeorm';
 import { assertAccountCanLogin } from './account-access';
 import { BusinessException } from 'src/common/exceptions/business.exception';
-import { ErrorCode, LEGACY_STATUS } from 'src/common/constants/error-codes';
-import { UserAccessActor, assertCanManageUser } from 'src/users/user-access';
+import { ErrorCode } from 'src/common/constants/error-codes';
+import {
+  UserAccessActor,
+  assertCanManageUser,
+  canBeScheduled,
+} from 'src/users/user-access';
 import * as bcrypt from 'bcrypt';
 import { randomInt, timingSafeEqual } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
@@ -192,6 +195,8 @@ export class AuthService {
         ? user.reset_password_expires
         : user.verification_code_expires;
 
+    // Código incorrecto, vencido o agotado: 400 `INVALID_VERIFICATION_CODE`
+    // (2.33; antes 401, que la app confundía con una sesión vencida).
     if (!this.codesMatch(stored, input)) {
       const exhausted = this.verificationAttempts.registerFailure(
         purpose,
@@ -200,11 +205,11 @@ export class AuthService {
       if (exhausted) {
         if (stored) await this.invalidateCode(purpose, user.id);
         this.verificationAttempts.reset(purpose, user.id);
-        throw new UnauthorizedException(
+        throw invalidCode(
           'Demasiados intentos fallidos. Solicita un código nuevo.',
         );
       }
-      throw new UnauthorizedException(
+      throw invalidCode(
         purpose === 'reset'
           ? 'Código de recuperación inválido'
           : 'Código de verificación inválido',
@@ -212,7 +217,7 @@ export class AuthService {
     }
 
     if (!expires || new Date() > expires) {
-      throw new UnauthorizedException(
+      throw invalidCode(
         purpose === 'reset'
           ? 'El código de recuperación ha expirado'
           : 'El código de verificación ha expirado',
@@ -492,6 +497,14 @@ export class AuthService {
         // 4. Actualizar el resto de datos básicos
         if (updateData.name) employee.name = updateData.name;
         if (updateData.lastname) employee.lastname = updateData.lastname;
+        if (emailChanges(employee.email, updateData.email)) {
+          // Regla 2.33 (coherente con 2.16): un email nuevo vuelve a exigir
+          // verificación; el empleado queda inactivo hasta verificarlo.
+          Object.assign(employee, initialEmployeeState(), {
+            verification_code: null,
+            verification_code_expires: null,
+          });
+        }
         if (updateData.email) employee.email = updateData.email;
         if (updateData.phone) employee.phone = updateData.phone;
 
@@ -638,32 +651,36 @@ export class AuthService {
         `🗑️ Iniciando soft delete de empleado ${employeeId} por owner ${ownerId}`,
       );
 
-      // 1. Buscar el empleado verificando que pertenezca al owner
+      // 1. El dueño no se borra (2.33: antes daba 404, porque se buscaba
+      //    entre los empleados del Owner y el Owner no es su propio empleado).
+      if (employeeId === ownerId) {
+        throw ownerNotDeletable();
+      }
+
+      // 2. Buscar el empleado del Owner, también si ya está borrado (2.33:
+      //    sin `withDeleted` el 409 "ya eliminado" era inalcanzable → 404).
       const employee = await this.userRepository.findOne({
         where: {
           id: employeeId,
           owner: { id: ownerId },
         },
         relations: ['roles', 'owner'],
+        withDeleted: true,
       });
 
       if (!employee) {
         throw new NotFoundException('Empleado no encontrado');
       }
 
-      // 2. Verificar que no sea el dueño
       const isOwner = employee.roles.some((role) => role.name === 'Owner');
       if (isOwner) {
-        throw new BusinessException(
-          ErrorCode.OWNER_NOT_DELETABLE,
-          'No se puede eliminar al dueño del negocio',
-          LEGACY_STATUS.OWNER_NOT_DELETABLE_EMPLOYEES,
-        );
+        throw ownerNotDeletable();
       }
 
       // 3. Verificar que no esté ya eliminado
       if (employee.deletedAt) {
-        throw new ConflictException(
+        throw new BusinessException(
+          ErrorCode.CONFLICT,
           'El empleado ya ha sido eliminado previamente',
         );
       }
@@ -1033,9 +1050,13 @@ export class AuthService {
     }
   }
 
-  // 🆕 NUEVO: Método para obtener solo empleados activos (no eliminados)
+  /**
+   * Profesionales que se pueden agendar (2.33): misma regla que crear o mover
+   * una cita (`canBeScheduled`). Incluye al Owner si es agendable.
+   */
   async getActiveEmployeesByOwner(ownerId: string) {
-    return this.getEmployeesByOwner(ownerId, false);
+    const all = await this.getEmployeesByOwner(ownerId, false);
+    return all.filter((user) => canBeScheduled(user, ownerId));
   }
 
   // 🆕 NUEVO: Método para obtener empleados eliminados
@@ -1324,4 +1345,31 @@ export function assertCanActivateEmployee(employee: {
       'El profesional debe verificar su email antes de activarse',
     );
   }
+}
+
+/** Código de verificación o de recuperación no válido (2.33). */
+function invalidCode(message: string): BusinessException {
+  return new BusinessException(ErrorCode.INVALID_VERIFICATION_CODE, message);
+}
+
+/** Borrar al dueño del negocio: 409 `OWNER_NOT_DELETABLE` (2.33; antes 403 legado). */
+function ownerNotDeletable(): BusinessException {
+  return new BusinessException(
+    ErrorCode.OWNER_NOT_DELETABLE,
+    'No se puede eliminar al dueño del negocio',
+  );
+}
+
+/**
+ * ¿El email de un empleado cambia de verdad? (2.33). Solo mayúsculas o
+ * espacios distintos no cuentan como email nuevo.
+ */
+export function emailChanges(
+  current: string | null | undefined,
+  next: string | null | undefined,
+): boolean {
+  if (!next) return false;
+  const normalize = (email: string | null | undefined) =>
+    (email ?? '').trim().toLowerCase();
+  return normalize(next) !== normalize(current);
 }

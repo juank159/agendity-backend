@@ -1,7 +1,11 @@
 import { NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
-import { assertUserInTenant, tenantMembersWhere } from './user-access';
+import {
+  assertUserInTenant,
+  canBeScheduled,
+  tenantMembersWhere,
+} from './user-access';
 
 const TENANT = '3275ba14-af85-42a6-b02f-199c1b4058d4';
 const EMPLOYEE = '0f2ac72d-a104-4782-81c0-1178c7503c54';
@@ -59,5 +63,39 @@ describe('assertUserInTenant', () => {
       NotFoundException,
     );
     expect(findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('canBeScheduled: a quién se le pueden agendar citas (2.33)', () => {
+  const OWNER_ID = TENANT;
+  const base = { isActive: true, deletedAt: null, is_email_verified: true };
+
+  it('empleado activo, sin borrar y verificado: sí', () => {
+    expect(canBeScheduled({ id: EMPLOYEE, ...base }, OWNER_ID)).toBe(true);
+  });
+
+  it('empleado sin verificar, inactivo o borrado: no', () => {
+    for (const change of [
+      { is_email_verified: false },
+      { isActive: false },
+      { deletedAt: new Date() },
+    ]) {
+      expect(
+        canBeScheduled({ id: EMPLOYEE, ...base, ...change }, OWNER_ID),
+      ).toBe(false);
+    }
+    expect(canBeScheduled(null, OWNER_ID)).toBe(false);
+  });
+
+  it('el Owner con el email sin verificar sí (puede entrar sin verificar); inactivo, no', () => {
+    expect(
+      canBeScheduled(
+        { id: OWNER_ID, ...base, is_email_verified: false },
+        OWNER_ID,
+      ),
+    ).toBe(true);
+    expect(
+      canBeScheduled({ id: OWNER_ID, ...base, isActive: false }, OWNER_ID),
+    ).toBe(false);
   });
 });

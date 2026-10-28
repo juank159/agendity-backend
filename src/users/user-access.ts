@@ -93,3 +93,23 @@ export async function assertUserInTenant(
   if (!user) throw notFound();
   return user;
 }
+
+/**
+ * ¿Se le pueden agendar citas a este profesional del negocio `tenantId`?
+ * (2.33, regla ÚNICA: la usan crear/mover una cita, los huecos libres y
+ * `GET /auth/employees/active`). Activo, sin borrar y, si es empleado, con el
+ * email verificado (2.15/2.16: un empleado sin verificar no se activa). El
+ * Owner (`id === tenantId`) puede tener el email sin verificar.
+ */
+export function canBeScheduled(
+  user: {
+    id: string;
+    isActive?: boolean;
+    deletedAt?: Date | null;
+    is_email_verified?: boolean;
+  } | null,
+  tenantId: string,
+): boolean {
+  if (!user?.isActive || user.deletedAt) return false;
+  return user.id === tenantId || user.is_email_verified === true;
+}

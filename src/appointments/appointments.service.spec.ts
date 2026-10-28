@@ -22,7 +22,11 @@ function build() {
   const users = {
     findTenantMember: jest
       .fn()
-      .mockResolvedValue({ id: EMPLOYEE, isActive: true }),
+      .mockResolvedValue({
+        id: EMPLOYEE,
+        isActive: true,
+        is_email_verified: true,
+      }),
   };
   const services = {
     findOne: jest
@@ -425,7 +429,11 @@ describe('AppointmentsService (disponibilidad, 2.04)', () => {
       const OTHER = 'c0000000-0000-4000-8000-000000000099';
       const { service, repo, users, manager, txRepo } = build();
       repo.findOne.mockResolvedValue(existing());
-      users.findTenantMember.mockResolvedValue({ id: OTHER, isActive: true });
+      users.findTenantMember.mockResolvedValue({
+        id: OTHER,
+        isActive: true,
+        is_email_verified: true,
+      });
       await service.update('cita-1', { professional_id: OTHER } as any, TENANT);
       expect(queriesWith(manager, 'pg_advisory_xact_lock')[0][1]).toEqual([
         `appointment-slot:${OTHER}`,
