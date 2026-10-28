@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { QueryFailedError } from 'typeorm';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import { AppointmentsService } from './appointments.service';
@@ -41,6 +42,7 @@ function build() {
     update: jest.fn(async () => ({ affected: 1 })),
     // ¿Tiene la cita un pago COMPLETED? (cancelar, 2.15)
     exist: jest.fn(async () => false),
+    delete: jest.fn(async () => ({ affected: 1 })),
   };
   // Lo que "hay" en la BD para el hueco: horarios, bloqueos y citas que se cruzan.
   const db = {
@@ -744,6 +746,67 @@ describe('AppointmentsService (estados: cancelar y completar, 2.06)', () => {
     expect(error.getResponse()).toMatchObject({
       code: ErrorCode.INVALID_STATE_TRANSITION,
     });
+  });
+});
+
+describe('AppointmentsService.remove (borrado físico, 2.25)', () => {
+  const appointment = {
+    id: 'cita-1',
+    ownerId: TENANT,
+    status: AppointmentStatus.CONFIRMED,
+  };
+
+  it('con pagos: 409 APPOINTMENT_PAID, consultado bajo el lock de la cita, sin borrar', async () => {
+    const { service, repo, txRepo, dataSource } = build();
+    repo.findOne.mockResolvedValue(appointment);
+    txRepo.exist.mockResolvedValue(true);
+    const error = await service.remove('cita-1', TENANT).catch((e) => e);
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.APPOINTMENT_PAID,
+    });
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(txRepo.findOne.mock.calls[0][0]).toMatchObject({
+      where: { id: 'cita-1', ownerId: TENANT },
+      lock: { mode: 'pessimistic_write' },
+    });
+    // Cualquier pago (también reembolsado): no solo los COMPLETED.
+    expect(txRepo.exist).toHaveBeenCalledWith({
+      where: { appointment: { id: 'cita-1' } },
+    });
+    expect(txRepo.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+      txRepo.exist.mock.invocationCallOrder[0],
+    );
+    expect(txRepo.delete).not.toHaveBeenCalled();
+  });
+
+  it('sin pagos: se borra dentro de la misma transacción', async () => {
+    const { service, repo, txRepo } = build();
+    repo.findOne.mockResolvedValue(appointment);
+    await service.remove('cita-1', TENANT);
+    expect(txRepo.delete).toHaveBeenCalledWith({ id: 'cita-1' });
+    expect(txRepo.exist.mock.invocationCallOrder[0]).toBeLessThan(
+      txRepo.delete.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('de otro negocio: 404 sin consultar pagos ni borrar', async () => {
+    const { service, repo, txRepo } = build();
+    repo.findOne.mockResolvedValue(null);
+    const error = await service.remove('cita-1', TENANT).catch((e) => e);
+    expect(error).toBeInstanceOf(NotFoundException);
+    expect(txRepo.exist).not.toHaveBeenCalled();
+    expect(txRepo.delete).not.toHaveBeenCalled();
+  });
+
+  it('otra FK (reseña, bloqueo ligado): el error de BD llega al filtro global (409), no 500', async () => {
+    const { service, repo, txRepo } = build();
+    repo.findOne.mockResolvedValue(appointment);
+    const fk = new QueryFailedError('DELETE', [], new Error('fk'));
+    (fk as any).code = '23503';
+    txRepo.delete.mockRejectedValue(fk);
+    const error = await service.remove('cita-1', TENANT).catch((e) => e);
+    expect(error).toBe(fk);
   });
 });
 

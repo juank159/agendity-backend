@@ -3,6 +3,7 @@ import { ErrorCode } from 'src/common/constants/error-codes';
 import {
   APPOINTMENT_TRANSITIONS,
   assertCancellable,
+  assertDeletable,
   assertTransition,
   canTransition,
   isFinalStatus,
@@ -82,5 +83,21 @@ describe('Cita pagada (2.15)', () => {
       code: ErrorCode.APPOINTMENT_PAID,
     });
     expect(() => assertCancellable(false)).not.toThrow();
+  });
+});
+
+describe('Borrar una cita (2.25)', () => {
+  it('con pagos registrados (en cualquier estado) no se borra: 409 APPOINTMENT_PAID', () => {
+    let error: any;
+    try {
+      assertDeletable(true);
+    } catch (e) {
+      error = e;
+    }
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.APPOINTMENT_PAID,
+    });
+    expect(() => assertDeletable(false)).not.toThrow();
   });
 });

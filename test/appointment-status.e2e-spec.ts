@@ -415,6 +415,41 @@ describeWritable(
       expect(await statusOf(id)).toEqual(['CANCELLED', 'REFUNDED']);
     });
 
+    it('DELETE de una cita con pagos (aunque estén reembolsados): 409 APPOINTMENT_PAID; sin pagos se borra (2.25)', async () => {
+      const { id, total } = await newAppointment();
+      const paid = await pay(id, total);
+      expect(paid.status).toBe(201);
+      const denied = await http
+        .delete(`/api/appointments/${id}`)
+        .set(auth(ownerToken));
+      expect(denied.status).toBe(409);
+      expect(denied.body.code).toBe('APPOINTMENT_PAID');
+      await http
+        .post(`/api/payments/${paid.body.id}/refund`)
+        .set(auth(ownerToken))
+        .send({ refund_amount: total, refund_reason: 'todo' });
+      const refunded = await http
+        .delete(`/api/appointments/${id}`)
+        .set(auth(ownerToken));
+      expect(refunded.status).toBe(409);
+      expect(refunded.body.code).toBe('APPOINTMENT_PAID');
+      expect(await statusOf(id)).toEqual(['CONFIRMED', 'REFUNDED']);
+
+      const free = await newAppointment();
+      const ok = await http
+        .delete(`/api/appointments/${free.id}`)
+        .set(auth(ownerToken));
+      expect(ok.status).toBe(200);
+      expect(
+        await ds.getRepository(Appointment).existsBy({ id: free.id }),
+      ).toBe(false);
+      const [{ count }] = await ds.query(
+        'SELECT count(*)::int AS count FROM appointment_services WHERE appointment_id = $1',
+        [free.id],
+      );
+      expect(count).toBe(0);
+    });
+
     it('carrera: pago y cancelación simultáneos → nunca una cita CANCELLED con pago COMPLETED', async () => {
       const payments = app.get(PaymentsService);
       const appointments = app.get(AppointmentsService);
@@ -440,6 +475,47 @@ describeWritable(
           ['CANCELLED', 0],
           ['CONFIRMED', 1],
         ]).toContainEqual([status, completed]);
+      }
+    });
+
+    it('carrera: pago y borrado simultáneos → o se borra sin pagos o queda pagada, nunca 500 (2.25)', async () => {
+      const payments = app.get(PaymentsService);
+      const appointments = app.get(AppointmentsService);
+      for (let i = 0; i < 5; i++) {
+        const { id, total } = await newAppointment();
+        const [paid, removed] = await Promise.allSettled([
+          payments.create(
+            {
+              appointment_id: id,
+              amount: total,
+              payment_method: 'CASH',
+            } as any,
+            owner.id,
+          ),
+          appointments.remove(id, owner.id),
+        ]);
+        const exists = await ds.getRepository(Appointment).existsBy({ id });
+        const count = await ds
+          .getRepository(Payment)
+          .count({ where: { appointment: { id } } });
+        // Gana uno de los dos; el perdedor falla con un error de negocio.
+        if (exists) {
+          expect([paid.status, removed.status, count]).toEqual([
+            'fulfilled',
+            'rejected',
+            1,
+          ]);
+          const reason = (removed as PromiseRejectedResult).reason;
+          expect(reason.getResponse().code).toBe('APPOINTMENT_PAID');
+        } else {
+          expect([paid.status, removed.status, count]).toEqual([
+            'rejected',
+            'fulfilled',
+            0,
+          ]);
+          const reason = (paid as PromiseRejectedResult).reason;
+          expect(reason.getStatus()).toBe(404);
+        }
       }
     });
 

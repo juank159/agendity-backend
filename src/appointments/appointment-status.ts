@@ -106,3 +106,18 @@ export function assertCancellable(hasCompletedPayment: boolean): void {
     );
   }
 }
+
+/**
+ * 2.25: una cita con pagos registrados (en cualquier estado, también los ya
+ * reembolsados) no se borra: el pago es historial financiero y su FK lo
+ * impediría (antes salía un 500). Si la cita no se va a atender, se cancela
+ * (y si está pagada, antes se reembolsa: `assertCancellable`).
+ */
+export function assertDeletable(hasPayments: boolean): void {
+  if (hasPayments) {
+    throw new BusinessException(
+      ErrorCode.APPOINTMENT_PAID,
+      'La cita tiene pagos registrados: no se puede eliminar. Si no se va a atender, cancélala (reembolsando antes lo pagado)',
+    );
+  }
+}

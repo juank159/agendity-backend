@@ -14,6 +14,7 @@ import {
   FindOptionsWhere,
   DataSource,
   EntityManager,
+  QueryFailedError,
 } from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
@@ -44,6 +45,7 @@ import {
 } from './appointment-slot';
 import {
   assertCancellable,
+  assertDeletable,
   assertTransition,
   statusAfterPayment,
 } from './appointment-status';
@@ -78,7 +80,9 @@ export class AppointmentsService {
       error?.message,
     );
 
-    if (error instanceof HttpException) {
+    // Los errores de negocio y los de BD (FK, unique, formato) los traduce el
+    // filtro global (409/400); el resto es un 500 sin detalle interno.
+    if (error instanceof HttpException || error instanceof QueryFailedError) {
       throw error;
     }
 
@@ -775,10 +779,25 @@ export class AppointmentsService {
     return appointment;
   }
 
+  /**
+   * Borrado físico (solo Owner). Pensado para corregir errores: una cita con
+   * pagos (de cualquier estado) no se borra → `APPOINTMENT_PAID` 409 (2.25);
+   * para no atenderla se cancela. Se comprueba con la cita bloqueada (crear un
+   * pago bloquea la misma fila), así que un pago y un borrado simultáneos no
+   * pasan los dos. Los servicios de la cita se borran en cascada (FK); otra
+   * referencia (reseña, bloqueo ligado) sale como 409 `CONFLICT` por el filtro.
+   * No devuelve el cupo del trial (igual que cancelar).
+   */
   async remove(id: string, tenantId: string): Promise<void> {
     try {
-      const appointment = await this.findOne(id, tenantId);
-      await this.appointmentRepository.remove(appointment);
+      await this.dataSource.transaction(async (manager) => {
+        const appointment = await this.lockAppointment(manager, id, tenantId);
+        const hasPayments = await manager.getRepository(Payment).exist({
+          where: { appointment: { id: appointment.id } },
+        });
+        assertDeletable(hasPayments);
+        await manager.getRepository(Appointment).delete({ id: appointment.id });
+      });
     } catch (error) {
       this.handleError(error, {
         entity: 'la cita',
