@@ -36,3 +36,12 @@ export enum PaymentMethod {
   TRANSFER = 'TRANSFER',
   ONLINE = 'ONLINE',
 }
+
+/**
+ * Origen de una cita (9.01, D-17): `APP` = la crea el negocio desde la app;
+ * `WEB` = reserva del cliente por el link público (entra `PENDING`, sin pago).
+ */
+export enum AppointmentSource {
+  APP = 'APP',
+  WEB = 'WEB',
+}

@@ -29,6 +29,12 @@ const PUBLIC_ROUTES = new Set<string>([
   'POST /api/auth/forgot-password',
   'POST /api/auth/reset-password',
   'POST /api/webhooks/wompi',
+  // Agenda pública por link (9.01, D-17): por slug, con throttle por IP.
+  'GET /api/public/businesses/{slug}',
+  'GET /api/public/businesses/{slug}/services',
+  'GET /api/public/businesses/{slug}/professionals',
+  'GET /api/public/businesses/{slug}/available-slots',
+  'POST /api/public/businesses/{slug}/bookings',
   // Solo existe con NODE_ENV=development (DemoPaymentModule).
   'GET /api/demo-payment',
 ]);

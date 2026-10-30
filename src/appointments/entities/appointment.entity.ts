@@ -21,6 +21,7 @@ import { Payment } from 'src/payments/entities/payment.entity';
 import { Review } from 'src/reviews/entities/review.entity';
 import {
   AppointmentPaymentStatus,
+  AppointmentSource,
   AppointmentStatus,
 } from 'src/common/enums/status.enum';
 
@@ -88,6 +89,15 @@ export class Appointment {
    */
   @Column({ type: 'varchar', length: 64, name: 'timezone' })
   timezone: string;
+
+  /** Origen (9.01): `APP` (el negocio) o `WEB` (reserva pública, D-17). */
+  @Column({
+    type: 'varchar',
+    length: 10,
+    name: 'source',
+    default: AppointmentSource.APP,
+  })
+  source: AppointmentSource;
 
   @Column('timestamptz', { name: 'date' })
   date: Date;

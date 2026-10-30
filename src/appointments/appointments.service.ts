@@ -35,9 +35,11 @@ import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import {
   AppointmentPaymentStatus,
+  AppointmentSource,
   AppointmentStatus,
   PaymentStatus,
 } from 'src/common/enums/status.enum';
+import { Client } from 'src/clients/entities/client.entity';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
 import { AppointmentScope, toAppointmentScope } from './appointment-scope';
@@ -78,6 +80,17 @@ import {
   fitsOpeningHours,
   openingHoursWindows,
 } from 'src/settings/opening-hours';
+
+/** Opciones de `AppointmentsService.create` (9.01). */
+export interface CreateAppointmentOptions {
+  /** Origen de la cita; por defecto `APP`. */
+  source?: AppointmentSource;
+  /**
+   * Busca o crea el cliente dentro de la transacción de la cita (reserva
+   * pública). Si se da, `client_id` del DTO se ignora.
+   */
+  resolveClient?: (manager: EntityManager) => Promise<Client>;
+}
 
 @Injectable()
 export class AppointmentsService {
@@ -153,6 +166,7 @@ export class AppointmentsService {
   async create(
     createAppointmentDto: CreateAppointmentDto,
     scope: AppointmentScope | string,
+    options: CreateAppointmentOptions = {},
   ): Promise<Appointment> {
     try {
       const { tenantId, professionalId: ownProfessionalId } =
@@ -178,12 +192,16 @@ export class AppointmentsService {
       );
       assertStartNotInPast(start);
 
+      // Reserva pública (9.01): el cliente se resuelve DENTRO de la
+      // transacción (si la cita no se guarda, no queda un cliente suelto).
       const [client, professional] = await Promise.all([
-        this.clientsService.findOne(client_id, tenantId),
+        options.resolveClient
+          ? null
+          : this.clientsService.findOne(client_id, tenantId),
         this.usersService.findTenantMember(professional_id, tenantId),
       ]);
 
-      if (!client || !professional) {
+      if ((!client && !options.resolveClient) || !professional) {
         throw new NotFoundException('Cliente o profesional no encontrado');
       }
       this.assertProfessionalSchedulable(professional, tenantId);
@@ -213,6 +231,7 @@ export class AppointmentsService {
         status: AppointmentStatus.PENDING,
         payment_status: AppointmentPaymentStatus.PENDING,
         notes: appointmentData.notes || '',
+        source: options.source ?? AppointmentSource.APP,
         client: client,
         professional: professional,
         // Se insertan con la cita (cascade 'insert').
@@ -240,6 +259,9 @@ export class AppointmentsService {
             services,
           });
 
+          if (options.resolveClient) {
+            appointmentToSave.client = await options.resolveClient(manager);
+          }
           return await manager
             .getRepository(Appointment)
             .save(appointmentToSave);
