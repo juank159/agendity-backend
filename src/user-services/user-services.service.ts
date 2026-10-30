@@ -77,8 +77,8 @@ export class UserServicesService {
         const newUserService = this.userServiceRepository.create({
           userId,
           ...assignServiceDto,
-          // Valor por defecto 0 si no se proporciona
-          commissionPercentage: assignServiceDto.commissionPercentage || 0,
+          // Sin excepción (8.02): `null` = usa la comisión general del profesional.
+          commissionPercentage: assignServiceDto.commissionPercentage ?? null,
         });
 
         return await this.userServiceRepository.save(newUserService);

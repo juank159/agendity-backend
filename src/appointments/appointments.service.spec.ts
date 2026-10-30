@@ -7,6 +7,7 @@ import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { AppointmentStatus } from 'src/common/enums/status.enum';
 import { AppointmentServiceLine } from './entities/appointment-service-line.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
+import { User } from 'src/users/entities/user.entity';
 
 const BOGOTA = 'America/Bogota';
 
@@ -18,8 +19,13 @@ const SERVICE = 'c0000000-0000-4000-8000-000000000002';
 function build() {
   // Zona de cada negocio (6.02): Bogotá salvo que el test diga otra.
   const zones: Record<string, string> = {};
+  const hours: Record<string, any[] | null> = {};
   const tenantSettings = {
     getTimezone: jest.fn(async (tenantId: string) => zones[tenantId] ?? BOGOTA),
+    // Horario del negocio (8.01): sin configurar salvo que el test lo ponga.
+    getOpeningHours: jest.fn(
+      async (tenantId: string) => hours[tenantId] ?? null,
+    ),
   };
   const repo = {
     find: jest.fn().mockResolvedValue([]),
@@ -61,15 +67,26 @@ function build() {
     blocks: [] as any[],
     overlaps: [] as any[],
     notOffered: [] as string[],
+    // Comisiones (8.02): general del profesional y excepciones por servicio.
+    generalCommission: '0.00' as string,
+    exceptions: {} as Record<string, string | null>,
   };
   const scheduleRepo = { find: jest.fn(async () => db.schedules) };
+  const userRepo = {
+    findOne: jest.fn(async () => ({
+      commission_percentage: db.generalCommission,
+    })),
+  };
   // Servicios asignados y activos del profesional (7.03): por defecto, todos
   // los pedidos salvo los de `db.notOffered`.
   const userServiceRepo = {
     find: jest.fn(async ({ where }) =>
       (where.serviceId.value as string[])
         .filter((id) => !db.notOffered.includes(id))
-        .map((serviceId) => ({ serviceId })),
+        .map((serviceId) => ({
+          serviceId,
+          commissionPercentage: db.exceptions[serviceId] ?? null,
+        })),
     ),
   };
   // Servicios guardados de cada cita, con su precio (2.29).
@@ -102,9 +119,11 @@ function build() {
         ? scheduleRepo
         : entity === UserService
           ? userServiceRepo
-          : entity === AppointmentServiceLine
-            ? lineRepo
-            : txRepo,
+          : entity === User
+            ? userRepo
+            : entity === AppointmentServiceLine
+              ? lineRepo
+              : txRepo,
     ),
     query: jest.fn<Promise<any[]>, [string, unknown[]?]>(async (sql) => {
       if (sql.includes('pg_advisory_xact_lock')) return [{}];
@@ -133,6 +152,7 @@ function build() {
   return {
     service,
     zones,
+    hours,
     tenantSettings,
     repo,
     clients,
@@ -1207,7 +1227,13 @@ describe('AppointmentsService: precio de cada servicio guardado en la cita (2.29
     expect(txRepo.save.mock.calls[0][0].total_price).toBe(38000);
     expect(lines).toEqual([
       { appointmentId: 'cita-1', serviceId: SERVICE, price: '30000.00' },
-      { appointmentId: 'cita-1', serviceId: NEW, price: '8000.00' },
+      // El nuevo congela también la comisión del profesional (8.02).
+      {
+        appointmentId: 'cita-1',
+        serviceId: NEW,
+        price: '8000.00',
+        commissionPercentage: '0.00',
+      },
     ]);
   });
 
@@ -1422,7 +1448,12 @@ describe('AppointmentsService: hallazgos de la prueba del salón (7.03)', () => 
       db.notOffered = [SERVICE];
       users.findTenantMember.mockResolvedValue({ id: TENANT, isActive: true });
       await service.create({ ...dto, professional_id: TENANT }, TENANT);
-      expect(userServiceRepo.find).not.toHaveBeenCalled();
+      // Sin consultar asignaciones para "¿lo hace?" (solo la de comisiones, 8.02).
+      expect(
+        userServiceRepo.find.mock.calls.every(
+          ([options]) => !('select' in options),
+        ),
+      ).toBe(true);
     });
 
     it('available-slots: 409 con un servicio que no hace', async () => {
@@ -1506,5 +1537,136 @@ describe('AppointmentsService: hallazgos de la prueba del salón (7.03)', () => 
       expect(codeOf(error)).toBe(ErrorCode.APPOINTMENT_NOT_STARTED);
       expect(txRepo.save).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('AppointmentsService: horario del negocio (8.01)', () => {
+  // Lunes 2030-01-07; negocio L-V 09:00-18:00, profesional 14:00-20:00.
+  const business = [1, 2, 3, 4, 5].map((day) => ({
+    day_of_week: day,
+    start_time: '09:00',
+    end_time: '18:00',
+  }));
+  const proSchedule = [
+    {
+      day_of_week: 1,
+      start_time: '14:00:00',
+      end_time: '20:00:00',
+      is_available: true,
+    },
+  ];
+  const at = (hhmm: string) => ({
+    ...dto,
+    date: `2030-01-07T${hhmm}:00-05:00`,
+  });
+  const codeOf = (error: any) => error?.getResponse?.().code;
+
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  it('intersección: dentro de los dos sí; fuera del negocio OUTSIDE_BUSINESS_HOURS; fuera del profesional SLOT_UNAVAILABLE', async () => {
+    const { service, hours, db, txRepo } = build();
+    hours[TENANT] = business;
+    db.schedules = proSchedule;
+    await expect(service.create(at('15:00'), TENANT)).resolves.toBeDefined();
+    const closed = await service.create(at('19:00'), TENANT).catch((e) => e);
+    expect(closed.getStatus()).toBe(409);
+    expect(codeOf(closed)).toBe(ErrorCode.OUTSIDE_BUSINESS_HOURS);
+    const notPro = await service.create(at('10:00'), TENANT).catch((e) => e);
+    expect(codeOf(notPro)).toBe(ErrorCode.SLOT_UNAVAILABLE);
+    expect(txRepo.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin horario configurado: como antes (solo el del profesional)', async () => {
+    const { service, db } = build();
+    db.schedules = proSchedule;
+    await expect(service.create(at('19:00'), TENANT)).resolves.toBeDefined();
+  });
+
+  it('el Owner (sin horario propio) usa el del negocio', async () => {
+    const { service, hours, users } = build();
+    hours[TENANT] = business;
+    users.findTenantMember.mockResolvedValue({ id: TENANT, isActive: true });
+    const owner = (hhmm: string) => ({ ...at(hhmm), professional_id: TENANT });
+    await expect(service.create(owner('09:00'), TENANT)).resolves.toBeDefined();
+    const error = await service.create(owner('08:30'), TENANT).catch((e) => e);
+    expect(codeOf(error)).toBe(ErrorCode.OUTSIDE_BUSINESS_HOURS);
+  });
+
+  it('available-slots: solo la intersección (14:00 a 18:00)', async () => {
+    const { service, hours, db } = build();
+    hours[TENANT] = business;
+    db.schedules = proSchedule;
+    const slots = await service.findAvailableSlots(
+      {
+        professionalId: EMPLOYEE,
+        date: '2030-01-07',
+        serviceIds: [SERVICE],
+        stepMinutes: 60,
+      },
+      TENANT,
+    );
+    expect(slots.map((d) => d.toISOString().slice(11, 16))).toEqual([
+      '19:00', // 14:00 Bogotá
+      '20:00',
+      '21:00',
+      '22:00', // 17:00 Bogotá (cita de 30 min, cierra a las 18:00)
+    ]);
+  });
+});
+
+describe('AppointmentsService: comisión congelada en la cita (8.02)', () => {
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  it('al crear: la excepción del servicio si existe; si no, la general', async () => {
+    const { service, db, txRepo } = build();
+    db.generalCommission = '30.00';
+    await service.create(dto, TENANT);
+    expect(txRepo.save.mock.calls[0][0].serviceLines[0]).toMatchObject({
+      serviceId: SERVICE,
+      commissionPercentage: '30.00',
+    });
+    db.exceptions[SERVICE] = '45.00';
+    await service.create(dto, TENANT);
+    expect(
+      txRepo.save.mock.calls[1][0].serviceLines[0].commissionPercentage,
+    ).toBe('45.00');
+  });
+
+  it('cambiar de profesional recalcula el % de las líneas que se quedan', async () => {
+    const OTHER_PRO = 'c0000000-0000-4000-8000-000000000077';
+    const { service, repo, db, lineRepo, lines, users } = build();
+    users.findTenantMember.mockResolvedValue({
+      id: OTHER_PRO,
+      isActive: true,
+      is_email_verified: true,
+    });
+    repo.findOne.mockResolvedValue({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+      date: new Date('2030-01-01T10:00:00-05:00'),
+      timezone: BOGOTA,
+      status: AppointmentStatus.PENDING,
+      services: [{ id: SERVICE, duration: 30, price: '10' }],
+    });
+    lines.push({
+      appointmentId: 'cita-1',
+      serviceId: SERVICE,
+      price: '10.00',
+      commissionPercentage: '30.00',
+    } as any);
+    (lineRepo as any).update = jest.fn(async () => ({}));
+    db.generalCommission = '50.00';
+    await service.update(
+      'cita-1',
+      { professional_id: OTHER_PRO } as any,
+      TENANT,
+    );
+    expect((lineRepo as any).update).toHaveBeenCalledWith(
+      { appointmentId: 'cita-1', serviceId: SERVICE },
+      { commissionPercentage: '50.00' },
+    );
   });
 });

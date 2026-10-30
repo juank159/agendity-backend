@@ -66,6 +66,7 @@ import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { User } from 'src/users/entities/user.entity';
 import { canBeScheduled } from 'src/users/user-access';
 import { UserService } from 'src/user-services/entities/user-service.entity';
+import { effectiveCommission } from './appointment-commission';
 import {
   endOfBusinessDay,
   isValidDate,
@@ -73,6 +74,10 @@ import {
   startOfBusinessDay,
 } from 'src/common/utils/date.util';
 import { TenantSettingsService } from 'src/settings/tenant-settings.service';
+import {
+  fitsOpeningHours,
+  openingHoursWindows,
+} from 'src/settings/opening-hours';
 
 @Injectable()
 export class AppointmentsService {
@@ -191,6 +196,12 @@ export class AppointmentsService {
       );
       // Precio de cada servicio guardado en la cita (2.29); total = su suma.
       const priceLines = priceLinesFor(services);
+      // % de comisión del profesional por servicio, congelado en la línea (8.02).
+      const commissions = await this.commissionRates(
+        this.dataSource.manager,
+        professional_id,
+        services.map((service) => service.id),
+      );
 
       const appointmentToSave = {
         ownerId: tenantId,
@@ -206,7 +217,9 @@ export class AppointmentsService {
         professional: professional,
         // Se insertan con la cita (cascade 'insert').
         serviceLines: priceLines.map((line) =>
-          Object.assign(new AppointmentServiceLine(), line),
+          Object.assign(new AppointmentServiceLine(), line, {
+            commissionPercentage: commissions.get(line.serviceId),
+          }),
         ),
       };
 
@@ -299,6 +312,49 @@ export class AppointmentsService {
     }
   }
 
+  /**
+   * % de comisión efectivo del profesional por servicio (8.02, D-16): su
+   * excepción activa en `user_services` si existe; si no, su comisión general
+   * (`users.commission_percentage`); si no, 0. Para congelarlo en la línea.
+   */
+  private async commissionRates(
+    manager: EntityManager,
+    professionalId: string,
+    serviceIds: string[],
+  ): Promise<Map<string, string>> {
+    const [professional, exceptions] = await Promise.all([
+      manager.getRepository(User).findOne({
+        where: { id: professionalId },
+        select: { id: true, commission_percentage: true },
+        withDeleted: true,
+      }),
+      serviceIds.length
+        ? manager.getRepository(UserService).find({
+            where: {
+              userId: professionalId,
+              serviceId: In(serviceIds),
+              isActive: true,
+            },
+          })
+        : [],
+    ]);
+    const byService = new Map<string, number | string | null>(
+      (exceptions as UserService[]).map((row) => [
+        row.serviceId,
+        row.commissionPercentage,
+      ]),
+    );
+    return new Map(
+      serviceIds.map((id) => [
+        id,
+        effectiveCommission(
+          byService.get(id),
+          professional?.commission_percentage,
+        ),
+      ]),
+    );
+  }
+
   private async loadTenantServices(serviceIds: string[], tenantId: string) {
     const services = await Promise.all(
       serviceIds.map((id) => this.servicesService.findOne(id, tenantId)),
@@ -354,6 +410,7 @@ export class AppointmentsService {
     const durationMinutes = appointmentDurationMinutes(services);
 
     const timeZone = await this.tenantSettings.getTimezone(tenantId);
+    const openingHours = await this.tenantSettings.getOpeningHours(tenantId);
     const day = parseBusinessDate(query.date, timeZone);
     if (!isValidDate(day)) {
       throw new BusinessException(ErrorCode.VALIDATION_ERROR, 'Fecha inválida');
@@ -384,6 +441,8 @@ export class AppointmentsService {
       schedules,
       busy: [...blocks, ...appointments],
       timeZone,
+      // 8.01: también dentro del horario del negocio.
+      businessWindows: openingHours && openingHoursWindows(openingHours),
       now: new Date(), // horas ya pasadas de hoy, fuera (2.21)
     });
   }
@@ -447,6 +506,15 @@ export class AppointmentsService {
     const schedules = await this.loadSchedules(manager, professionalId);
     // Horario del profesional en la zona de SU negocio (6.02).
     const timeZone = await this.tenantSettings.getTimezone(tenantId);
+    // 8.01: primero el horario del negocio (sin configurar = sin límite);
+    // la cita debe caber en él Y en el del profesional (intersección).
+    const openingHours = await this.tenantSettings.getOpeningHours(tenantId);
+    if (!fitsOpeningHours(start, end, openingHours, timeZone)) {
+      throw new BusinessException(
+        ErrorCode.OUTSIDE_BUSINESS_HOURS,
+        'El negocio está cerrado a esa hora',
+      );
+    }
     if (!fitsSchedule(start, end, schedules, timeZone)) {
       this.slotUnavailable('fuera del horario del profesional');
     }
@@ -732,11 +800,19 @@ export class AppointmentsService {
           updateData,
           manualReminderResetOnReschedule(current.date, updateData.date),
         );
-        if (nextServices) {
+        // 8.02: cambiar de profesional recalcula la comisión de TODAS las
+        // líneas (la comisión es del nuevo); cambiar servicios, solo la de
+        // los nuevos (los que se quedan conservan precio y %).
+        const professionalChanged =
+          !!updateAppointmentDto.professional_id &&
+          updateAppointmentDto.professional_id !== current.professionalId;
+        if (nextServices || professionalChanged) {
           updateData.total_price = await this.replaceServiceLines(
             manager,
             id,
-            nextServices,
+            nextServices ?? appointment.services,
+            professionalId,
+            professionalChanged,
           );
         }
         await manager.getRepository(Appointment).save(updateData);
@@ -763,12 +839,19 @@ export class AppointmentsService {
     manager: EntityManager,
     appointmentId: string,
     services: { id: string; price: number | string }[],
+    professionalId: string,
+    professionalChanged = false,
   ): Promise<number> {
     const repo = manager.getRepository(AppointmentServiceLine);
     const current = await repo.find({ where: { appointmentId } });
     const lines = priceLinesFor(
       services,
       new Map(current.map((line) => [line.serviceId, line.price])),
+    );
+    const commissions = await this.commissionRates(
+      manager,
+      professionalId,
+      lines.map((line) => line.serviceId),
     );
     const keep = new Set(lines.map((line) => line.serviceId));
     const removed = current.filter((line) => !keep.has(line.serviceId));
@@ -781,7 +864,21 @@ export class AppointmentsService {
     const existing = new Set(current.map((line) => line.serviceId));
     const added = lines.filter((line) => !existing.has(line.serviceId));
     if (added.length) {
-      await repo.insert(added.map((line) => ({ appointmentId, ...line })));
+      await repo.insert(
+        added.map((line) => ({
+          appointmentId,
+          ...line,
+          commissionPercentage: commissions.get(line.serviceId),
+        })),
+      );
+    }
+    if (professionalChanged) {
+      for (const line of current.filter((l) => keep.has(l.serviceId))) {
+        await repo.update(
+          { appointmentId, serviceId: line.serviceId },
+          { commissionPercentage: commissions.get(line.serviceId) },
+        );
+      }
     }
     return priceLinesTotal(lines);
   }

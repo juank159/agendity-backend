@@ -10,7 +10,10 @@ function build(user: Record<string, any> | null) {
   const userRepository = { findOne: jest.fn().mockResolvedValue(user) };
   // 6.01: la zona del negocio sale de TenantSettingsService (cacheada).
   const tenantSettings = {
-    getTimezone: jest.fn().mockResolvedValue('America/Caracas'),
+    getCachedSettings: jest.fn().mockResolvedValue({
+      timezone: 'America/Caracas',
+      name: 'Estudio Cejas & Pestañas',
+    }),
   };
   const service = new AuthService(
     userRepository as any,
@@ -50,7 +53,7 @@ describe('AuthService.me: usuario de la sesión (2.35)', () => {
     });
 
     const me = await service.me(EMPLOYEE);
-    expect(tenantSettings.getTimezone).toHaveBeenCalledWith(OWNER);
+    expect(tenantSettings.getCachedSettings).toHaveBeenCalledWith(OWNER);
 
     expect(me).toEqual({
       id: EMPLOYEE,
@@ -62,6 +65,7 @@ describe('AuthService.me: usuario de la sesión (2.35)', () => {
       roles: [{ name: 'Employee' }],
       tenantId: OWNER,
       timezone: 'America/Caracas',
+      business_name: 'Estudio Cejas & Pestañas',
       isActive: true,
       is_email_verified: false,
     });
@@ -87,7 +91,7 @@ describe('AuthService.me: usuario de la sesión (2.35)', () => {
     const me = await service.me(OWNER);
     expect(me.tenantId).toBe(OWNER);
     expect(me.timezone).toBe('America/Caracas');
-    expect(tenantSettings.getTimezone).toHaveBeenCalledWith(OWNER);
+    expect(tenantSettings.getCachedSettings).toHaveBeenCalledWith(OWNER);
   });
 
   it('sin fila: 404', async () => {

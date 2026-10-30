@@ -90,6 +90,7 @@ describe('AuthUser y tenant (e2e)', () => {
 
   it('GET /auth/me: Owner y Employee reciben su usuario (campos fijos, sin secretos) con su tenant (2.35)', async () => {
     const fields = [
+      'business_name', // 8.00: nombre del negocio
       'email',
       'id',
       'image',

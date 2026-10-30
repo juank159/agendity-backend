@@ -93,7 +93,21 @@ export function fitsSchedule(
   timeZone: string,
 ): boolean {
   if (!schedules?.length) return true;
+  return fitsWindows(start, end, schedules, timeZone);
+}
 
+/**
+ * ¿La cita [start, end) cae entera en alguna ventana disponible de su día? A
+ * diferencia de `fitsSchedule`, una lista vacía NO es "sin restricción": no
+ * hay ninguna ventana (la usa el horario del negocio, 8.01, donde `null` es
+ * "sin configurar" y `[]` es "cerrado todos los días").
+ */
+export function fitsWindows(
+  start: Date,
+  end: Date,
+  schedules: ScheduleWindow[],
+  timeZone: string,
+): boolean {
   const day = isoWeekday(start, timeZone);
   const from = businessMinutesOfDay(start, timeZone);
   const to = from + (end.getTime() - start.getTime()) / 60_000;
@@ -212,6 +226,11 @@ export function freeSlotStarts(options: {
   busy: SlotInterval[];
   /** Zona del tenant (6.02): día y horario del profesional. */
   timeZone: string;
+  /**
+   * Horario del negocio (8.01) como ventanas: el inicio debe caber también en
+   * él (intersección con el del profesional). `null`/ausente = sin límite.
+   */
+  businessWindows?: ScheduleWindow[] | null;
   /** Inicios anteriores a `now` no se ofrecen (2.21, `startsInPast`). */
   now?: Date;
 }): Date[] {
@@ -231,6 +250,8 @@ export function freeSlotStarts(options: {
     if (
       !(options.now && startsInPast(slot.start, options.now)) &&
       fitsSchedule(slot.start, slot.end, options.schedules, timeZone) &&
+      (options.businessWindows == null ||
+        fitsWindows(slot.start, slot.end, options.businessWindows, timeZone)) &&
       !options.busy.some((busy) => intervalsOverlap(slot, busy))
     ) {
       starts.push(slot.start);

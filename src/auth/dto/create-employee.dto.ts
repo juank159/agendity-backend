@@ -1,5 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsObject, IsOptional, IsUUID } from 'class-validator';
+import {
+  IsArray,
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsUUID,
+  Max,
+  Min,
+} from 'class-validator';
 import { CreateAuthDto } from './create-auth.dto';
 
 export class CreateEmployeeDto extends CreateAuthDto {
@@ -22,4 +30,22 @@ export class CreateEmployeeDto extends CreateAuthDto {
   @IsObject()
   @IsOptional()
   schedule?: Record<string, { start: string; end: string }>;
+
+  /**
+   * Comisión general del empleado (8.02, D-16): % de cada servicio que
+   * atiende, salvo excepción por servicio. 0 a 100; si no llega, 0.
+   */
+  @ApiProperty({
+    description: 'Comisión general del empleado (0 a 100 %)',
+    example: 30,
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber(
+    { maxDecimalPlaces: 2 },
+    { message: 'La comisión debe ser un número' },
+  )
+  @Min(0, { message: 'La comisión no puede ser menor que 0 %' })
+  @Max(100, { message: 'La comisión no puede ser mayor que 100 %' })
+  commission_percentage?: number;
 }

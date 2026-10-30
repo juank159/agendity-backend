@@ -1,4 +1,5 @@
 import { SettingsModule } from 'src/settings/settings.module';
+import { CommissionSettlementService } from './commission-settlement.service';
 import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentStatsService } from './payment-stats.service';
@@ -22,6 +23,7 @@ import { CustomPaymentMethodsService } from './custom-payment-methods.service';
   providers: [
     PaymentsService,
     PaymentStatsService,
+    CommissionSettlementService,
     CustomPaymentMethodsService,
   ],
   exports: [PaymentsService, CustomPaymentMethodsService],

@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentStatsService } from './payment-stats.service';
+import { CommissionSettlementService } from './commission-settlement.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -26,6 +27,7 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly paymentStatsService: PaymentStatsService,
+    private readonly commissionSettlement: CommissionSettlementService,
   ) {}
 
   @Post()
@@ -104,6 +106,32 @@ export class PaymentsController {
       startDate,
       endDate,
       tenantId,
+    );
+  }
+
+  /**
+   * Liquidación de comisiones (8.02, D-16): por profesional, precio de las
+   * líneas de las citas COMPLETED del periodo, comisión del profesional y
+   * parte del negocio, con el detalle por cita. Owner: todos (o
+   * `professionalId`); Employee: solo lo suyo.
+   */
+  @Get('stats/commissions')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  getCommissions(
+    @QueryDate('startDate') startDate: Date,
+    @QueryDate('endDate') endDate: Date,
+    @Query('professionalId', new ParseUUIDPipe({ optional: true }))
+    professionalId: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.commissionSettlement.settle(
+      tenantIdFrom(user),
+      startDate,
+      endDate,
+      {
+        professionalId,
+        onlyProfessionalId: isOnlyEmployee(user) ? user.id : undefined,
+      },
     );
   }
 

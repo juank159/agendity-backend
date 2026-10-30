@@ -30,6 +30,20 @@ export class AppointmentServiceLine {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   price: string;
 
+  /**
+   * % de comisión del profesional congelado en esta línea (8.02, D-16): al
+   * agendar o cambiar los servicios (o el profesional) de la cita. Cambiar
+   * después la comisión no toca las citas ya creadas. Reglas en
+   * `appointment-commission.ts`.
+   */
+  @Column({
+    name: 'commission_percentage',
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+  })
+  commissionPercentage: string;
+
   @ManyToOne(() => Appointment, (appointment) => appointment.serviceLines, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',

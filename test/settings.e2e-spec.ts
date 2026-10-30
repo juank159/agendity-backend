@@ -74,7 +74,13 @@ describe('Configuración del negocio 6.01 (e2e, solo lectura)', () => {
       .get('/api/settings')
       .set(auth(signToken(owner, ['Owner'])));
     expect(asOwner.status).toBe(200);
-    expect(Object.keys(asOwner.body)).toEqual(['timezone']);
+    // 8.00/8.01: también nombre, slug y horario del negocio.
+    expect(Object.keys(asOwner.body).sort()).toEqual([
+      'name',
+      'opening_hours',
+      'slug',
+      'timezone',
+    ]);
     expect(
       new Intl.DateTimeFormat('en-US', {
         timeZone: asOwner.body.timezone,
@@ -207,10 +213,8 @@ describeWritable(
         .patch('/api/settings')
         .set(ownerToken)
         .send({ timezone: 'america/caracas' });
-      expect([res.status, res.body]).toEqual([
-        200,
-        { timezone: 'America/Caracas' },
-      ]);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ timezone: 'America/Caracas' });
       expect(await zoneOf(owner.id)).toBe('America/Caracas');
 
       const me = await http.get('/api/auth/me').set(ownerToken);
@@ -219,14 +223,14 @@ describeWritable(
         const asEmployee = await http
           .get('/api/settings')
           .set(auth(signToken(employee, ['Employee'])));
-        expect(asEmployee.body).toEqual({ timezone: 'America/Caracas' });
+        expect(asEmployee.body).toMatchObject({ timezone: 'America/Caracas' });
       }
 
       const madrid = await http
         .patch('/api/settings')
         .set(ownerToken)
         .send({ timezone: 'Europe/Madrid' });
-      expect(madrid.body).toEqual({ timezone: 'Europe/Madrid' });
+      expect(madrid.body).toMatchObject({ timezone: 'Europe/Madrid' });
     });
 
     it('alta por email con la zona del dispositivo: fila en business_settings con esa zona; sin zona o inválida: BUSINESS_TIMEZONE', async () => {
@@ -254,7 +258,7 @@ describeWritable(
         const settings = await http
           .get('/api/settings')
           .set(auth(res.body.token));
-        expect(settings.body).toEqual({ timezone: expected });
+        expect(settings.body).toMatchObject({ timezone: expected });
       }
     });
 
@@ -274,8 +278,8 @@ describeWritable(
         http.get('/api/settings').set(auth(a.body.token)),
         http.get('/api/settings').set(auth(b.body.token)),
       ]);
-      expect(settingsA.body).toEqual({ timezone: 'America/Caracas' });
-      expect(settingsB.body).toEqual({ timezone: 'America/Bogota' });
+      expect(settingsA.body).toMatchObject({ timezone: 'America/Caracas' });
+      expect(settingsB.body).toMatchObject({ timezone: 'America/Bogota' });
     });
 
     it('alta nueva por Google con la zona del dispositivo', async () => {

@@ -14,6 +14,7 @@ import {
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { Role } from 'src/roles/entities/role.entity';
+import { percentToDecimal } from 'src/appointments/appointment-commission';
 import { UserService } from 'src/user-services/entities/user-service.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { BusinessException } from 'src/common/exceptions/business.exception';
@@ -83,7 +84,8 @@ export class EmployeesService {
           schedules = withDetailsDto.schedules || [];
         }
 
-        const { password, schedule, ...userData } = createEmployeeDto;
+        const { password, schedule, commission_percentage, ...userData } =
+          createEmployeeDto;
 
         const newEmployee = manager.create(User, {
           ...userData,
@@ -92,6 +94,8 @@ export class EmployeesService {
           owner: { id: owner.id } as User,
           // Hereda el tenant del Owner (antes quedaba NULL: el JWT no lo traía).
           tenant_id: owner.tenantId,
+          // Comisión general (8.02); si no llega, 0.
+          commission_percentage: percentToDecimal(commission_percentage ?? 0),
           ...initialEmployeeState(),
         });
 
@@ -221,6 +225,11 @@ export class EmployeesService {
         }
         if (updateData.email) employee.email = updateData.email;
         if (updateData.phone) employee.phone = updateData.phone;
+        if (updateData.commission_percentage !== undefined) {
+          employee.commission_percentage = percentToDecimal(
+            updateData.commission_percentage,
+          );
+        }
 
         await manager.save(employee);
 
@@ -585,7 +594,7 @@ function userServiceRows(
   services: {
     serviceId: string;
     customPrice?: number;
-    commissionPercentage?: number;
+    commissionPercentage?: number | null;
     isActive?: boolean;
   }[],
 ): UserService[] {
@@ -594,7 +603,8 @@ function userServiceRows(
       userId: employeeId,
       serviceId: service.serviceId,
       customPrice: service.customPrice,
-      commissionPercentage: service.commissionPercentage || 0,
+      // 8.02: sin excepción = null (usa la comisión general del empleado).
+      commissionPercentage: service.commissionPercentage ?? null,
       isActive: service.isActive !== undefined ? service.isActive : true,
     }),
   );
@@ -619,7 +629,11 @@ function employeeResponse(user: User) {
       user.userServices?.map((us) => ({
         id: us.service.id,
         name: us.service.name,
-        commissionPercentage: us.commissionPercentage || 0,
+        // 8.02: null = sin excepción (la app lee null como 0 hasta la 8.03).
+        commissionPercentage:
+          us.commissionPercentage == null
+            ? null
+            : Number(us.commissionPercentage),
         customPrice: us.customPrice,
         originalPrice: us.service.price,
         isActive: us.isActive,

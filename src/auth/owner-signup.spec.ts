@@ -78,7 +78,7 @@ describe('Alta del Owner con zona horaria (6.01)', () => {
       );
       expect(tenantSettings.createForTenant).toHaveBeenCalledWith(
         id,
-        timezone,
+        { timezone, name: undefined },
         manager,
       );
       expect(result.user).not.toHaveProperty('timezone');
@@ -107,8 +107,22 @@ describe('Alta del Owner con zona horaria (6.01)', () => {
     const result = await service.googleLogin('id-token', 'Europe/Madrid');
     expect(tenantSettings.createForTenant).toHaveBeenCalledWith(
       result.user.id,
-      'Europe/Madrid',
+      { timezone: 'Europe/Madrid' },
       manager,
     );
+  });
+
+  it('8.00: el nombre del negocio va a la configuración, no a users', async () => {
+    const { service, tenantSettings, manager } = build();
+    const result = await service.createOwner({
+      ...DTO,
+      business_name: 'Estudio Cejas & Pestañas',
+    });
+    expect(tenantSettings.createForTenant).toHaveBeenCalledWith(
+      result.user.id,
+      { timezone: undefined, name: 'Estudio Cejas & Pestañas' },
+      manager,
+    );
+    expect(result.user).not.toHaveProperty('business_name');
   });
 });

@@ -140,7 +140,7 @@ describe('TenantSettingsService (6.01)', () => {
       const { service, rows } = build({ [TENANT]: 'America/Bogota' });
       expect(
         await service.updateSettings(TENANT, { timezone: 'america/caracas' }),
-      ).toEqual({ timezone: 'America/Caracas' });
+      ).toMatchObject({ timezone: 'America/Caracas' });
       expect(rows[TENANT]).toBe('America/Caracas');
     });
 
@@ -171,10 +171,16 @@ describe('TenantSettingsService (6.01)', () => {
     it('con la zona del dispositivo: la guarda (canónica) con el manager de la transacción', async () => {
       const { service } = build();
       const m = manager();
-      await service.createForTenant(TENANT, 'America/Caracas', m as any);
+      await service.createForTenant(
+        TENANT,
+        { timezone: 'America/Caracas' },
+        m as any,
+      );
       expect(m.save).toHaveBeenCalledWith({
         tenant_id: TENANT,
         timezone: 'America/Caracas',
+        name: null,
+        slug: null,
       });
     });
 
@@ -184,10 +190,16 @@ describe('TenantSettingsService (6.01)', () => {
         process.env.BUSINESS_TIMEZONE = 'Europe/Madrid';
         const { service } = build();
         const m = manager();
-        await service.createForTenant(TENANT, requested, m as any);
+        await service.createForTenant(
+          TENANT,
+          { timezone: requested },
+          m as any,
+        );
         expect(m.save).toHaveBeenCalledWith({
           tenant_id: TENANT,
           timezone: 'Europe/Madrid',
+          name: null,
+          slug: null,
         });
       },
     );
@@ -203,11 +215,144 @@ describe('TenantSettingsService (6.01)', () => {
       rows[TENANT] = 'America/Caracas';
       await service.createForTenant(
         TENANT,
-        'America/Caracas',
+        { timezone: 'America/Caracas' },
         manager() as any,
       );
       expect(await service.getTimezone(TENANT)).toBe('America/Caracas');
       expect(repo.findOne).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe('TenantSettingsService: nombre, slug y horario (8.00 y 8.01)', () => {
+  /** Repositorio en memoria con filas completas. */
+  function buildFull(initial: Partial<BusinessSettings>[] = []) {
+    const rows = new Map<string, BusinessSettings>(
+      initial.map((row) => [
+        row.tenant_id as string,
+        {
+          timezone: 'America/Bogota',
+          name: null,
+          slug: null,
+          opening_hours: null,
+          ...row,
+        } as BusinessSettings,
+      ]),
+    );
+    const repo = {
+      findOne: jest.fn(async ({ where }) => rows.get(where.tenant_id) ?? null),
+      find: jest.fn(async ({ where }) => {
+        const prefix = String(where.slug.value).replace('%', '');
+        return [...rows.values()]
+          .filter((row) => row.slug?.startsWith(prefix))
+          .map((row) => ({ slug: row.slug }));
+      }),
+      save: jest.fn(async (row: BusinessSettings) => {
+        rows.set(row.tenant_id, { ...row });
+        return row;
+      }),
+      insert: jest.fn(),
+    };
+    return { service: new TenantSettingsService(repo as any), repo, rows };
+  }
+
+  it('PATCH name: guarda el nombre y genera el slug la primera vez (libre)', async () => {
+    const { service, rows } = buildFull([
+      {
+        tenant_id: OTHER,
+        name: 'Estudio Cejas',
+        slug: 'estudio-cejas-pestanas',
+      },
+      { tenant_id: TENANT },
+    ]);
+    const view = await service.updateSettings(TENANT, {
+      name: 'Estudio Cejas & Pestañas',
+    });
+    expect(view).toMatchObject({
+      name: 'Estudio Cejas & Pestañas',
+      slug: 'estudio-cejas-pestanas-2',
+    });
+    // Renombrar no cambia el slug (el link público sigue igual).
+    await service.updateSettings(TENANT, { name: 'Otro nombre' });
+    expect(rows.get(TENANT)).toMatchObject({
+      name: 'Otro nombre',
+      slug: 'estudio-cejas-pestanas-2',
+    });
+  });
+
+  it('PATCH opening_hours: ordena y guarda; null lo quita; cierre ≤ apertura → VALIDATION_ERROR sin escribir', async () => {
+    const { service, repo } = buildFull([{ tenant_id: TENANT }]);
+    const view = await service.updateSettings(TENANT, {
+      opening_hours: [
+        { day_of_week: 2, start_time: '09:00', end_time: '18:00' },
+        { day_of_week: 1, start_time: '09:00', end_time: '18:00' },
+      ],
+    });
+    expect(view.opening_hours?.map((r) => r.day_of_week)).toEqual([1, 2]);
+    expect(await service.getOpeningHours(TENANT)).toHaveLength(2);
+
+    repo.save.mockClear();
+    const error = await service
+      .updateSettings(TENANT, {
+        opening_hours: [
+          { day_of_week: 1, start_time: '18:00', end_time: '09:00' },
+        ],
+      })
+      .catch((e) => e);
+    expect(error.getResponse()).toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(repo.save).not.toHaveBeenCalled();
+
+    expect(
+      (await service.updateSettings(TENANT, { opening_hours: null }))
+        .opening_hours,
+    ).toBeNull();
+  });
+
+  it('alta con nombre: slug generado dentro de la transacción', async () => {
+    const { service } = buildFull();
+    const saved: any[] = [];
+    const manager = {
+      create: (_e: unknown, data: any) => data,
+      save: jest.fn(async (row) => (saved.push(row), row)),
+      getRepository: () => ({ find: jest.fn(async () => []) }),
+    };
+    await service.createForTenant(
+      TENANT,
+      { timezone: 'America/Bogota', name: ' Barbería Él ' },
+      manager as any,
+    );
+    expect(saved[0]).toMatchObject({
+      name: 'Barbería Él',
+      slug: 'barberia-el',
+    });
+  });
+});
+
+describe('UpdateSettingsDto: nombre y horario (8.00 y 8.01)', () => {
+  const errorsFor = async (body: object) =>
+    validate(plainToInstance(UpdateSettingsDto, body));
+
+  it('nombre libre de 2 a 100 caracteres (con & y tildes)', async () => {
+    expect(await errorsFor({ name: 'Estudio Cejas & Pestañas' })).toEqual([]);
+    expect(await errorsFor({ name: 'x' })).toHaveLength(1);
+    expect(await errorsFor({ name: 'x'.repeat(101) })).toHaveLength(1);
+  });
+
+  it('franjas: día 1-7 y HH:mm', async () => {
+    expect(
+      await errorsFor({
+        opening_hours: [
+          { day_of_week: 1, start_time: '09:00', end_time: '18:00' },
+        ],
+      }),
+    ).toEqual([]);
+    for (const bad of [
+      { day_of_week: 8, start_time: '09:00', end_time: '18:00' },
+      { day_of_week: 1, start_time: '9:00', end_time: '18:00' },
+      { day_of_week: 1, start_time: '09:00', end_time: '24:00' },
+    ]) {
+      expect(await errorsFor({ opening_hours: [bad] })).toHaveLength(1);
+    }
+    expect(await errorsFor({ opening_hours: null })).toEqual([]);
   });
 });

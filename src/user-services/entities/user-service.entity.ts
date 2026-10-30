@@ -22,9 +22,13 @@ export class UserService {
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   customPrice: number;
 
-  // Este es el nuevo campo que debes añadir
-  @Column({ type: 'decimal', precision: 5, scale: 2, default: 0 })
-  commissionPercentage: number;
+  /**
+   * Excepción de comisión del profesional en ESTE servicio (8.02, D-16).
+   * `null` = sin excepción: se usa su comisión general
+   * (`users.commission_percentage`). `0` = 0 % de verdad.
+   */
+  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
+  commissionPercentage: number | null;
 
   @Column({ default: true })
   isActive: boolean;

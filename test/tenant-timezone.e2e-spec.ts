@@ -138,7 +138,7 @@ describeWritable(
     it('cada negocio tiene su zona en /settings y en /auth/me', async () => {
       for (const b of [bogota, caracas]) {
         const settings = await http.get('/api/settings').set(auth(b.token));
-        expect(settings.body).toEqual({ timezone: b.zone });
+        expect(settings.body).toMatchObject({ timezone: b.zone });
         const me = await http.get('/api/auth/me').set(auth(b.token));
         expect(me.body.timezone).toBe(b.zone);
       }

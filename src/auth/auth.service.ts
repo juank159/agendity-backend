@@ -20,7 +20,10 @@ import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import { EmailService } from 'src/email/email.service';
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
-import { TenantSettingsService } from 'src/settings/tenant-settings.service';
+import {
+  NewBusinessSettings,
+  TenantSettingsService,
+} from 'src/settings/tenant-settings.service';
 import { LoginAuthDto, RegisterOwnerDto } from './dto';
 import { assertAccountCanLogin } from './account-access';
 import { JwtPayload, tenantOf } from './interfaces';
@@ -107,11 +110,11 @@ export class AuthService {
    * `roles` que traiga el DTO se ignoran, como antes).
    * 6.01: en la misma transacción, su configuración (`business_settings`) con
    * la zona que manda la app (la del dispositivo) o, si no llega o no es
-   * válida, `BUSINESS_TIMEZONE`.
+   * válida, `BUSINESS_TIMEZONE`; 8.00: y el nombre del negocio, si llega.
    */
   private async createOwnerAccount(
     data: Omit<Partial<User>, 'roles'>,
-    timezone?: unknown,
+    business: NewBusinessSettings = {},
   ): Promise<User> {
     const ownerRole = await findRole(this.roleRepository, 'Owner');
     const id = uuid();
@@ -121,7 +124,7 @@ export class AuthService {
         users.create({ ...data, id, tenant_id: id, roles: [ownerRole] }),
       );
       await this.subscriptionsService.createTrialSubscription(id, manager);
-      await this.tenantSettings.createForTenant(id, timezone, manager);
+      await this.tenantSettings.createForTenant(id, business, manager);
       return owner;
     });
   }
@@ -133,11 +136,11 @@ export class AuthService {
       createAuthDto.phone,
     );
 
-    // `timezone` va a la configuración del negocio, no a `users`.
-    const { password, timezone, ...userData } = createAuthDto;
+    // `timezone` y `business_name` van a la configuración del negocio, no a `users`.
+    const { password, timezone, business_name, ...userData } = createAuthDto;
     const newUser = await this.createOwnerAccount(
       { ...userData, password: await hashPassword(password) },
-      timezone,
+      { timezone, name: business_name },
     );
 
     return {
@@ -187,6 +190,7 @@ export class AuthService {
     }
     const data = toUserResponse(user);
     const tenantId = tenantOf(user);
+    const business = await this.tenantSettings.getCachedSettings(tenantId);
     return {
       id: data.id,
       name: data.name,
@@ -196,7 +200,8 @@ export class AuthService {
       image: data.image ?? null,
       roles: data.roles,
       tenantId,
-      timezone: await this.tenantSettings.getTimezone(tenantId),
+      timezone: business.timezone,
+      business_name: business.name,
       isActive: data.isActive,
       is_email_verified: data.is_email_verified,
     };
@@ -265,7 +270,7 @@ export class AuthService {
             is_google_account: true,
             is_email_verified: true, // Los emails de Google ya están verificados
           },
-          timezone,
+          { timezone },
         );
       }
 
@@ -432,6 +437,8 @@ export interface SessionUser {
   tenantId: string;
   /** Zona IANA del negocio (6.01). */
   timezone: string;
+  /** Nombre del negocio (8.00); `null` si no lo ha puesto. */
+  business_name: string | null;
   isActive: boolean;
   is_email_verified: boolean;
 }

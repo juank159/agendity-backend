@@ -140,6 +140,20 @@ export class User {
   @DeleteDateColumn({ type: 'timestamptz' })
   deletedAt?: Date;
 
+  /**
+   * Comisión general del profesional (8.02, D-16): % de cada servicio que
+   * atiende, salvo excepción por servicio (`user_services.commissionPercentage`).
+   * 0 a 100; por defecto 0 (el Owner no la usa: todo es del negocio).
+   */
+  @Column({
+    name: 'commission_percentage',
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    default: 0,
+  })
+  commission_percentage: string;
+
   // 🆕 NUEVO: Razón de la eliminación (opcional)
   @Column({ nullable: true })
   deletionReason?: string;
