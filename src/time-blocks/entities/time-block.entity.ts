@@ -1,11 +1,49 @@
 import { BadRequestException } from '@nestjs/common';
 import { Appointment } from 'src/appointments/entities/appointment.entity';
 import { User } from 'src/users/entities/user.entity';
-import { Column, Entity, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  Index,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { ERROR_MESSAGES } from '../constants/time-block.constants';
 
 @Entity()
+@Index('IDX_sync_time_block', ['ownerId', 'syncVersion'])
 export class TimeBlock {
+  /**
+   * Negocio de la fila (10.01a): lo rellena un trigger de Postgres desde el profesional (`userId`).
+   * Solo lo usa la sincronización.
+   */
+  @Column({
+    name: 'owner_id',
+    type: 'uuid',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  ownerId?: string;
+
+  /**
+   * Versión de sincronización (10.01a, D-18): la pone un trigger de Postgres
+   * (`sync_bump`) en cada INSERT/UPDATE; el código nunca la escribe ni la lee
+   * fuera de `SyncService`.
+   */
+  @Column({
+    name: 'sync_version',
+    type: 'bigint',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  syncVersion?: string;
+
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -25,6 +63,13 @@ export class TimeBlock {
 
   @Column({ nullable: true })
   notes?: string;
+
+  /** Desde 10.01a (D-18): el bloqueo no tenía fechas de alta ni de cambio. */
+  @CreateDateColumn({ type: 'timestamptz' })
+  created_at: Date;
+
+  @UpdateDateColumn({ type: 'timestamptz' })
+  updated_at: Date;
 
   @ManyToOne(() => User)
   user: User;

@@ -12,8 +12,24 @@ import { ApiProperty } from '@nestjs/swagger';
 import { User } from 'src/users/entities/user.entity';
 
 @Entity('categories')
+@Index('IDX_sync_categories', ['ownerId', 'syncVersion'])
 @Index(['name', 'ownerId'], { unique: true }) // Índice compuesto para unicidad por dueño
 export class Category {
+  /**
+   * Versión de sincronización (10.01a, D-18): la pone un trigger de Postgres
+   * (`sync_bump`) en cada INSERT/UPDATE; el código nunca la escribe ni la lee
+   * fuera de `SyncService`.
+   */
+  @Column({
+    name: 'sync_version',
+    type: 'bigint',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  syncVersion?: string;
+
   @ApiProperty({
     description: 'ID único de la categoría',
     example: 'e7cd5752-9c12-4d4b-9c9f-3c0b93b9c467',

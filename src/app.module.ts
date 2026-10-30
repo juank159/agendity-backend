@@ -21,6 +21,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { SettingsModule } from './settings/settings.module';
 import { PublicBookingModule } from './public-booking/public-booking.module';
+import { SyncModule } from './sync/sync.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
@@ -79,6 +80,8 @@ import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
     SettingsModule,
 
     PublicBookingModule,
+
+    SyncModule,
   ],
   providers: [
     // El orden importa: primero se autentica (JWT) y después se comprueban los roles.

@@ -36,9 +36,25 @@ export function withAppointmentPrice(
 }
 
 @Entity('appointments')
+@Index('IDX_sync_appointments', ['ownerId', 'syncVersion'])
 // Lo usa el cron de recordatorios (2.09a) y cualquier consulta por rango de fechas.
 @Index('IDX_appointments_date', ['date'])
 export class Appointment {
+  /**
+   * Versión de sincronización (10.01a, D-18): la pone un trigger de Postgres
+   * (`sync_bump`) en cada INSERT/UPDATE; el código nunca la escribe ni la lee
+   * fuera de `SyncService`.
+   */
+  @Column({
+    name: 'sync_version',
+    type: 'bigint',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  syncVersion?: string;
+
   @PrimaryGeneratedColumn('uuid')
   id: string;
 

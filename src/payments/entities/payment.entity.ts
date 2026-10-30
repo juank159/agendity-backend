@@ -7,13 +7,30 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Appointment } from '../../appointments/entities/appointment.entity';
 import { PaymentMethod, PaymentStatus } from 'src/common/enums/status.enum';
 import { CustomPaymentMethod } from './custom-payment-method.entity';
 
 @Entity('payments')
+@Index('IDX_sync_payments', ['ownerId', 'syncVersion'])
 export class Payment {
+  /**
+   * Versión de sincronización (10.01a, D-18): la pone un trigger de Postgres
+   * (`sync_bump`) en cada INSERT/UPDATE; el código nunca la escribe ni la lee
+   * fuera de `SyncService`.
+   */
+  @Column({
+    name: 'sync_version',
+    type: 'bigint',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  syncVersion?: string;
+
   @PrimaryGeneratedColumn('uuid')
   id: string;
 

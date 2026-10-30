@@ -6,6 +6,7 @@ import {
   OneToOne,
   PrimaryColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { OpeningHoursRange } from '../opening-hours';
@@ -16,7 +17,23 @@ import { OpeningHoursRange } from '../opening-hours';
  * como columnas nuevas (con su migración), no en `users`.
  */
 @Entity({ name: 'business_settings' })
+@Index('IDX_sync_business_settings', ['tenant_id', 'syncVersion'])
 export class BusinessSettings {
+  /**
+   * Versión de sincronización (10.01a, D-18): la pone un trigger de Postgres
+   * (`sync_bump`) en cada INSERT/UPDATE; el código nunca la escribe ni la lee
+   * fuera de `SyncService`.
+   */
+  @Column({
+    name: 'sync_version',
+    type: 'bigint',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  syncVersion?: string;
+
   /** Id del Owner (tenant). Si se borra el Owner, se borra su configuración. */
   @PrimaryColumn('uuid')
   tenant_id: string;

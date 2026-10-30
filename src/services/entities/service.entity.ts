@@ -14,8 +14,24 @@ import { User } from 'src/users/entities/user.entity';
 
 /** Nombre único por negocio (2.08; antes era único en toda la app). */
 @Entity('services')
+@Index('IDX_sync_services', ['ownerId', 'syncVersion'])
 @Index('UQ_services_owner_name', ['ownerId', 'name'], { unique: true })
 export class Service {
+  /**
+   * Versión de sincronización (10.01a, D-18): la pone un trigger de Postgres
+   * (`sync_bump`) en cada INSERT/UPDATE; el código nunca la escribe ni la lee
+   * fuera de `SyncService`.
+   */
+  @Column({
+    name: 'sync_version',
+    type: 'bigint',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  syncVersion?: string;
+
   @ApiProperty({
     description: 'ID único del servicio',
     example: 'e7cd5752-9c12-4d4b-9c9f-3c0b93b9c467',

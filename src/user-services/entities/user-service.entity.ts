@@ -4,12 +4,43 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { Service } from 'src/services/entities/service.entity';
 
 @Entity('user_services')
+@Index('IDX_sync_user_services', ['ownerId', 'syncVersion'])
 export class UserService {
+  /**
+   * Negocio de la fila (10.01a): lo rellena un trigger de Postgres desde el profesional (`user_id`).
+   * Solo lo usa la sincronización.
+   */
+  @Column({
+    name: 'owner_id',
+    type: 'uuid',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  ownerId?: string;
+
+  /**
+   * Versión de sincronización (10.01a, D-18): la pone un trigger de Postgres
+   * (`sync_bump`) en cada INSERT/UPDATE; el código nunca la escribe ni la lee
+   * fuera de `SyncService`.
+   */
+  @Column({
+    name: 'sync_version',
+    type: 'bigint',
+    nullable: true,
+    select: false,
+    insert: false,
+    update: false,
+  })
+  syncVersion?: string;
+
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
