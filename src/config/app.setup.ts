@@ -5,6 +5,7 @@ import {
   defaultBusinessTimeZone,
 } from '../common/utils/date.util';
 import { requestTimeZoneMiddleware } from '../common/context/request-time-zone';
+import { setupBookingPage } from '../web/booking-page';
 
 /**
  * Configuración HTTP común de la app (prefijo, validación, fechas y Swagger).
@@ -21,6 +22,9 @@ export function setupApp(app: INestApplication): OpenAPIObject {
   // `TenantTimeZoneInterceptor` fija la zona; sin sesión, UTC.
   app.use(requestTimeZoneMiddleware);
   app.getHttpAdapter().getInstance().set('json replacer', businessJsonReplacer);
+
+  // Página web de reservas (9.02): `/reservar/:slug`, fuera de `/api`.
+  setupBookingPage(app);
 
   app.useGlobalPipes(
     new ValidationPipe({

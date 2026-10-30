@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Reservar cita</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/reservar/_/styles.css" />
+    <script type="module" src="/reservar/_/app.mjs"></script>
+  </head>
+  <body>
+    <main id="app" class="page" aria-busy="true">
+      <header class="header">
+        <p class="eyebrow">Reserva en línea</p>
+        <h1 id="business-name">Cargando…</h1>
+        <p id="business-zone" class="muted"></p>
+      </header>
+
+      <p id="status" class="notice" role="status" aria-live="polite"></p>
+      <p id="error" class="notice notice--error" role="alert" hidden></p>
+
+      <section id="step-services" class="step" aria-labelledby="h-services" hidden>
+        <h2 id="h-services"><span class="step-number">1</span> Elige tus servicios</h2>
+        <div id="services"></div>
+        <p id="services-total" class="summary" aria-live="polite"></p>
+      </section>
+
+      <section id="step-professional" class="step" aria-labelledby="h-professional" hidden>
+        <h2 id="h-professional"><span class="step-number">2</span> ¿Con quién?</h2>
+        <div id="professionals" class="chips" role="group" aria-labelledby="h-professional"></div>
+      </section>
+
+      <section id="step-day" class="step" aria-labelledby="h-day" hidden>
+        <h2 id="h-day"><span class="step-number">3</span> Elige el día</h2>
+        <div id="days" class="days" role="group" aria-labelledby="h-day"></div>
+      </section>
+
+      <section id="step-time" class="step" aria-labelledby="h-time" hidden>
+        <h2 id="h-time"><span class="step-number">4</span> Elige la hora</h2>
+        <p class="legend">
+          <span class="legend-item"><span class="swatch swatch--free"></span>Disponible</span>
+          <span class="legend-item"><span class="swatch swatch--busy"></span>Ocupado</span>
+        </p>
+        <div id="times" class="times" role="group" aria-labelledby="h-time"></div>
+      </section>
+
+      <section id="step-client" class="step" aria-labelledby="h-client" hidden>
+        <h2 id="h-client"><span class="step-number">5</span> Tus datos</h2>
+        <p id="choice-summary" class="summary"></p>
+        <form id="client-form" novalidate>
+          <label for="client-name">Nombre</label>
+          <input id="client-name" name="name" autocomplete="given-name" required minlength="2" maxlength="50" />
+
+          <label for="client-lastname">Apellido <span class="muted">(opcional)</span></label>
+          <input id="client-lastname" name="lastname" autocomplete="family-name" maxlength="50" />
+
+          <label for="client-phone">Teléfono</label>
+          <input id="client-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" required />
+
+          <label for="client-email">Correo <span class="muted">(opcional)</span></label>
+          <input id="client-email" name="email" type="email" autocomplete="email" maxlength="100" />
+
+          <label for="client-notes">Notas <span class="muted">(opcional)</span></label>
+          <textarea id="client-notes" name="notes" rows="3" maxlength="300"></textarea>
+
+          <div class="hp" aria-hidden="true">
+            <label for="website">No llenes este campo</label>
+            <input id="website" name="website" tabindex="-1" autocomplete="off" />
+          </div>
+
+          <button id="submit" type="submit" class="button button--primary">Reservar</button>
+        </form>
+      </section>
+
+      <section id="step-done" class="step step--done" aria-labelledby="h-done" hidden tabindex="-1">
+        <h2 id="h-done">¡Listo!</h2>
+        <p class="lead">Tu reserva quedó pendiente de confirmación por el negocio.</p>
+        <dl id="done-summary" class="done-summary"></dl>
+        <button id="again" type="button" class="button">Hacer otra reserva</button>
+      </section>
+    </main>
+  </body>
+</html>
