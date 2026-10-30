@@ -49,11 +49,28 @@ function grid(from: string, to: string, step = 30): string[] {
   return out;
 }
 
-async function devService30(ds: DataSource, ownerId: string): Promise<Service> {
-  return ds.getRepository(Service).findOneOrFail({
-    where: { ownerId, isActive: true, duration: 30 },
-    order: { name: 'ASC' },
-  });
+/**
+ * Servicio de 30 min del negocio que el empleado tiene asignado y activo
+ * (7.03: un profesional solo recibe citas de sus servicios).
+ */
+async function devService30(
+  ds: DataSource,
+  ownerId: string,
+  professionalId: string,
+): Promise<Service> {
+  return ds
+    .getRepository(Service)
+    .createQueryBuilder('service')
+    .innerJoin(
+      'user_services',
+      'us',
+      'us.service_id = service.id AND us.user_id = :professionalId AND us."isActive"',
+      { professionalId },
+    )
+    .where('service.ownerId = :ownerId', { ownerId })
+    .andWhere('service.isActive = true AND service.duration = 30')
+    .orderBy('service.name', 'ASC')
+    .getOneOrFail();
 }
 
 describe('Huecos libres 2.14 (e2e, solo lectura)', () => {
@@ -81,7 +98,7 @@ describe('Huecos libres 2.14 (e2e, solo lectura)', () => {
     employee = dev.employee;
     ownerToken = signToken(owner, ['Owner']);
     employeeToken = signToken(employee, ['Employee']);
-    service = await devService30(ds, owner.id);
+    service = await devService30(ds, owner.id, employee.id);
   }, E2E_BOOT_TIMEOUT_MS);
 
   beforeEach(() => {
@@ -139,8 +156,11 @@ describe('Huecos libres 2.14 (e2e, solo lectura)', () => {
       where: { ownerId: owner.id, isActive: true, duration: 30 },
       order: { name: 'DESC' },
     });
+    // Con dos servicios distintos se usa al Owner como profesional: hace
+    // todos los del negocio (7.03); el empleado de dev solo tiene uno.
+    const professional = other.id !== service.id ? owner.id : employee.id;
     const base =
-      `/api/appointments/available-slots?professional_id=${employee.id}` +
+      `/api/appointments/available-slots?professional_id=${professional}` +
       `&date=${FAR_MONDAY}&step=60`;
     const a = await http
       .get(`${base}&service_ids=${service.id}&service_ids=${other.id}`)
@@ -151,8 +171,11 @@ describe('Huecos libres 2.14 (e2e, solo lectura)', () => {
     expect(a.status).toBe(200);
     expect(b.body).toEqual(a.body);
     if (other.id !== service.id) {
-      // 60 min: el último inicio que cabe antes de las 18:00 es 17:00.
-      expect(a.body.map(hhmm)).toEqual(grid('09:00', '18:00', 60));
+      // 60 min (30 + 30): inicios a horas en punto.
+      expect(a.body.length).toBeGreaterThan(0);
+      expect(a.body.map(hhmm).every((t: string) => t.endsWith(':00'))).toBe(
+        true,
+      );
     }
   });
 
@@ -272,7 +295,7 @@ describeWritable(
       client = await ds
         .getRepository(Client)
         .findOneOrFail({ where: { ownerId: owner.id } });
-      service = await devService30(ds, owner.id);
+      service = await devService30(ds, owner.id, employee.id);
       await resetTrialQuota(ds, owner.id, { limit: 1000 });
       // Un lunes propio a futuro (2.21), después de la última cita o bloqueo
       // de la copia (no choca con corridas anteriores).

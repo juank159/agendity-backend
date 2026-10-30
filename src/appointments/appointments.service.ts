@@ -43,6 +43,7 @@ import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.s
 import { AppointmentScope, toAppointmentScope } from './appointment-scope';
 import { manualReminderResetOnReschedule } from './appointment-reminder.service';
 import {
+  assertAppointmentStarted,
   assertStartNotInPast,
   isRescheduled,
   appointmentDurationMinutes,
@@ -64,6 +65,7 @@ import { Payment } from 'src/payments/entities/payment.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { User } from 'src/users/entities/user.entity';
 import { canBeScheduled } from 'src/users/user-access';
+import { UserService } from 'src/user-services/entities/user-service.entity';
 import {
   endOfBusinessDay,
   isValidDate,
@@ -182,6 +184,11 @@ export class AppointmentsService {
       this.assertProfessionalSchedulable(professional, tenantId);
 
       const services = await this.loadTenantServices(service_ids, tenantId);
+      await this.assertProfessionalOffers(
+        professional_id,
+        tenantId,
+        services.map((service) => service.id),
+      );
       // Precio de cada servicio guardado en la cita (2.29); total = su suma.
       const priceLines = priceLinesFor(services);
 
@@ -259,6 +266,39 @@ export class AppointmentsService {
   }
 
   /** Servicios pedidos, todos del negocio (si alguno no lo es, 404). */
+  /**
+   * 7.03: un profesional solo recibe citas de servicios que tiene asignados y
+   * activos en `user_services`; si no, 409 `SERVICE_NOT_OFFERED_BY_PROFESSIONAL`.
+   * Lo comprueban crear, editar (mover, cambiar de profesional o de servicios)
+   * y `available-slots`.
+   * El Owner como profesional queda fuera: es el negocio y hace todos sus
+   * servicios (la app no le asigna servicios; hoy no tiene filas en
+   * `user_services`).
+   */
+  private async assertProfessionalOffers(
+    professionalId: string,
+    tenantId: string,
+    serviceIds: string[],
+    manager: EntityManager = this.dataSource.manager,
+  ): Promise<void> {
+    if (professionalId === tenantId || !serviceIds.length) return;
+    const offered = await manager.getRepository(UserService).find({
+      where: {
+        userId: professionalId,
+        serviceId: In(serviceIds),
+        isActive: true,
+      },
+      select: { serviceId: true },
+    });
+    const ids = new Set(offered.map((row) => row.serviceId));
+    if (serviceIds.some((id) => !ids.has(id))) {
+      throw new BusinessException(
+        ErrorCode.SERVICE_NOT_OFFERED_BY_PROFESSIONAL,
+        'El profesional no realiza uno o más de los servicios elegidos',
+      );
+    }
+  }
+
   private async loadTenantServices(serviceIds: string[], tenantId: string) {
     const services = await Promise.all(
       serviceIds.map((id) => this.servicesService.findOne(id, tenantId)),
@@ -306,6 +346,11 @@ export class AppointmentsService {
     );
     this.assertProfessionalSchedulable(professional, tenantId);
     const services = await this.loadTenantServices(serviceIds, tenantId);
+    await this.assertProfessionalOffers(
+      professionalId,
+      tenantId,
+      services.map((service) => service.id),
+    );
     const durationMinutes = appointmentDurationMinutes(services);
 
     const timeZone = await this.tenantSettings.getTimezone(tenantId);
@@ -638,6 +683,10 @@ export class AppointmentsService {
               updateData.cancellation_reason =
                 updateAppointmentDto.cancellation_reason ?? null;
             }
+            if (nextStatus === AppointmentStatus.COMPLETED) {
+              // 7.03: con la fecha final (si se mueve en la misma petición).
+              assertAppointmentStarted(updateData.date ?? current.date);
+            }
           }
         }
 
@@ -663,6 +712,12 @@ export class AppointmentsService {
               tenantId,
             ));
           this.assertProfessionalSchedulable(professional, tenantId);
+          await this.assertProfessionalOffers(
+            professionalId,
+            tenantId,
+            (nextServices ?? appointment.services).map((service) => service.id),
+            manager,
+          );
           await this.assertSlotAvailable(manager, {
             tenantId,
             professionalId,
@@ -784,6 +839,9 @@ export class AppointmentsService {
       if (!assertTransition(current.status, to)) return; // ya estaba: no-op
       if (to === AppointmentStatus.CANCELLED) {
         await this.assertCancellable(manager, current.id);
+      }
+      if (to === AppointmentStatus.COMPLETED) {
+        assertAppointmentStarted(current.date); // 7.03
       }
       await manager
         .getRepository(Appointment)

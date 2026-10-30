@@ -6,6 +6,7 @@ import { AppointmentsService } from './appointments.service';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { AppointmentStatus } from 'src/common/enums/status.enum';
 import { AppointmentServiceLine } from './entities/appointment-service-line.entity';
+import { UserService } from 'src/user-services/entities/user-service.entity';
 
 const BOGOTA = 'America/Bogota';
 
@@ -59,8 +60,18 @@ function build() {
     schedules: [] as any[],
     blocks: [] as any[],
     overlaps: [] as any[],
+    notOffered: [] as string[],
   };
   const scheduleRepo = { find: jest.fn(async () => db.schedules) };
+  // Servicios asignados y activos del profesional (7.03): por defecto, todos
+  // los pedidos salvo los de `db.notOffered`.
+  const userServiceRepo = {
+    find: jest.fn(async ({ where }) =>
+      (where.serviceId.value as string[])
+        .filter((id) => !db.notOffered.includes(id))
+        .map((serviceId) => ({ serviceId })),
+    ),
+  };
   // Servicios guardados de cada cita, con su precio (2.29).
   const lines: { appointmentId: string; serviceId: string; price: string }[] =
     [];
@@ -89,9 +100,11 @@ function build() {
     getRepository: jest.fn((entity) =>
       entity === Schedule
         ? scheduleRepo
-        : entity === AppointmentServiceLine
-          ? lineRepo
-          : txRepo,
+        : entity === UserService
+          ? userServiceRepo
+          : entity === AppointmentServiceLine
+            ? lineRepo
+            : txRepo,
     ),
     query: jest.fn<Promise<any[]>, [string, unknown[]?]>(async (sql) => {
       if (sql.includes('pg_advisory_xact_lock')) return [{}];
@@ -132,6 +145,7 @@ function build() {
     events,
     db,
     scheduleRepo,
+    userServiceRepo,
     lines,
     lineRepo,
   };
@@ -1378,5 +1392,119 @@ describe('AppointmentsService: zona guardada en la cita (6.03)', () => {
     const [saved] = txRepo.save.mock.calls[0];
     expect(saved.timezone).toBe('America/Caracas');
     expect(saved.date.toISOString()).toBe('2030-01-02T14:00:00.000Z');
+  });
+});
+
+describe('AppointmentsService: hallazgos de la prueba del salón (7.03)', () => {
+  const NOT_OFFERED = ErrorCode.SERVICE_NOT_OFFERED_BY_PROFESSIONAL;
+  const codeOf = (error: any) => error?.getResponse?.().code;
+
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  describe('(b) servicio que el profesional no hace', () => {
+    it('crear: 409 sin consumir el cupo; la consulta pide asignaciones ACTIVAS del profesional', async () => {
+      const { service, db, subscriptions, userServiceRepo, txRepo } = build();
+      db.notOffered = [SERVICE];
+      const error = await service.create(dto, TENANT).catch((e) => e);
+      expect(error.getStatus()).toBe(409);
+      expect(codeOf(error)).toBe(NOT_OFFERED);
+      expect(subscriptions.consumeAppointmentQuota).not.toHaveBeenCalled();
+      expect(txRepo.save).not.toHaveBeenCalled();
+      expect(userServiceRepo.find.mock.calls[0][0].where).toMatchObject({
+        userId: EMPLOYEE,
+        isActive: true,
+      });
+    });
+
+    it('el Owner como profesional no necesita asignaciones', async () => {
+      const { service, db, users, userServiceRepo } = build();
+      db.notOffered = [SERVICE];
+      users.findTenantMember.mockResolvedValue({ id: TENANT, isActive: true });
+      await service.create({ ...dto, professional_id: TENANT }, TENANT);
+      expect(userServiceRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('available-slots: 409 con un servicio que no hace', async () => {
+      const { service, db } = build();
+      db.notOffered = [SERVICE];
+      const error = await service
+        .findAvailableSlots(
+          {
+            professionalId: EMPLOYEE,
+            date: '2030-01-07',
+            serviceIds: [SERVICE],
+            stepMinutes: 30,
+          },
+          TENANT,
+        )
+        .catch((e) => e);
+      expect(codeOf(error)).toBe(NOT_OFFERED);
+    });
+
+    it('editar: mover o cambiar servicios a uno que no hace → 409 sin guardar', async () => {
+      const { service, repo, db, txRepo } = build();
+      repo.findOne.mockResolvedValue({
+        id: 'cita-1',
+        ownerId: TENANT,
+        professionalId: EMPLOYEE,
+        date: new Date('2030-01-01T10:00:00-05:00'),
+        timezone: BOGOTA,
+        status: AppointmentStatus.PENDING,
+        services: [{ id: SERVICE, duration: 30 }],
+      });
+      db.notOffered = [SERVICE];
+      for (const change of [
+        { date: '2030-01-02T10:00:00' },
+        { service_ids: [SERVICE] },
+      ]) {
+        const error = await service
+          .update('cita-1', change as any, TENANT)
+          .catch((e) => e);
+        expect(codeOf(error)).toBe(NOT_OFFERED);
+      }
+      expect(txRepo.save).not.toHaveBeenCalled();
+      // Cambios que no tocan el hueco (notas) no se bloquean.
+      await service.update('cita-1', { notes: 'x' } as any, TENANT);
+      expect(txRepo.save).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('(d) no se completa una cita que aún no empieza', () => {
+    const appointment = (date: string) => ({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+      date: new Date(date),
+      status: AppointmentStatus.CONFIRMED,
+    });
+
+    it('cita futura: 409 APPOINTMENT_NOT_STARTED y no escribe; ya empezada: se completa', async () => {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue(appointment('2099-01-01T10:00:00Z'));
+      const error = await service
+        .complete('cita-1', { tenantId: TENANT })
+        .catch((e) => e);
+      expect(error.getStatus()).toBe(409);
+      expect(codeOf(error)).toBe(ErrorCode.APPOINTMENT_NOT_STARTED);
+      expect(txRepo.update).not.toHaveBeenCalled();
+
+      repo.findOne.mockResolvedValue(appointment('2020-01-01T10:00:00Z'));
+      await service.complete('cita-1', { tenantId: TENANT });
+      expect(txRepo.update).toHaveBeenCalledWith(
+        { id: 'cita-1' },
+        { status: AppointmentStatus.COMPLETED },
+      );
+    });
+
+    it('PATCH con status COMPLETED de una cita futura: el mismo 409', async () => {
+      const { service, repo, txRepo } = build();
+      repo.findOne.mockResolvedValue(appointment('2099-01-01T10:00:00Z'));
+      const error = await service
+        .update('cita-1', { status: 'COMPLETED' } as any, TENANT)
+        .catch((e) => e);
+      expect(codeOf(error)).toBe(ErrorCode.APPOINTMENT_NOT_STARTED);
+      expect(txRepo.save).not.toHaveBeenCalled();
+    });
   });
 });

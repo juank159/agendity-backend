@@ -110,9 +110,23 @@ describe('Aislamiento por tenant (e2e)', () => {
     client = await ds
       .getRepository(Client)
       .findOneOrFail({ where: { ownerId: owner.id }, order: { name: 'ASC' } });
+    // Activo y, si hay empleado, uno que él hace (7.03: el Employee real
+    // agenda para sí mismo solo servicios suyos).
     service = await ds
       .getRepository(Service)
-      .findOneOrFail({ where: { ownerId: owner.id, isActive: true } });
+      .createQueryBuilder('service')
+      .leftJoin(
+        'user_services',
+        'us',
+        'us.service_id = service.id AND us."isActive" AND us.user_id = :employeeId',
+        { employeeId: employee?.id ?? owner.id },
+      )
+      .where('service.ownerId = :ownerId AND service.isActive = true', {
+        ownerId: owner.id,
+      })
+      .orderBy('us.id IS NULL', 'ASC')
+      .addOrderBy('service.name', 'ASC')
+      .getOneOrFail();
     category = await ds
       .getRepository(Category)
       .findOneOrFail({ where: { ownerId: owner.id } });

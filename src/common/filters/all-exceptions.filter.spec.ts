@@ -140,4 +140,27 @@ describe('AllExceptionsFilter (formato §3)', () => {
     });
     expect(JSON.stringify(body)).not.toMatch(/email|secreto/);
   });
+
+  it('7.03: un error de negocio 5xx con código propio (503 EMAIL_DELIVERY_FAILED) conserva su texto; un 500 cualquiera sigue genérico', () => {
+    const text =
+      'No pudimos enviar el correo con el código. Intenta de nuevo en unos minutos.';
+    expect(
+      filter.toBody(
+        new BusinessException(ErrorCode.EMAIL_DELIVERY_FAILED, text),
+      ),
+    ).toEqual({
+      statusCode: 503,
+      code: ErrorCode.EMAIL_DELIVERY_FAILED,
+      message: text,
+    });
+    const generic = filter.toBody(
+      new InternalServerErrorException('detalle interno de SMTP'),
+    );
+    expect(generic.code).toBe(ErrorCode.INTERNAL_ERROR);
+    expect(generic.message).not.toContain('SMTP');
+    const internal = filter.toBody(
+      new BusinessException(ErrorCode.INTERNAL_ERROR, 'detalle interno'),
+    );
+    expect(internal.message).not.toContain('detalle interno');
+  });
 });

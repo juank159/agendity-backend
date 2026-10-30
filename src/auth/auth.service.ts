@@ -308,22 +308,9 @@ export class AuthService {
       await this.userRepository.save(user);
       this.verificationAttempts.reset('verify', user.id);
 
-      let emailSent: boolean;
-      try {
-        emailSent = await this.emailService.sendVerificationCode(email, code);
-      } catch (emailError) {
-        this.logger.error(
-          `Error enviando el código de verificación: ${emailError.message}`,
-        );
-        throw new InternalServerErrorException(
-          'Error al enviar el código de verificación',
-        );
-      }
-      if (!emailSent) {
-        throw new InternalServerErrorException(
-          'Error al enviar el código de verificación',
-        );
-      }
+      await this.deliverCode(() =>
+        this.emailService.sendVerificationCode(email, code),
+      );
 
       return { message: 'Código de verificación enviado' };
     } catch (error) {
@@ -335,6 +322,29 @@ export class AuthService {
       );
       throw new InternalServerErrorException(
         'Error inesperado en generación de código',
+      );
+    }
+  }
+
+  /**
+   * Envía un correo con un código (verificación o recuperación). Si el
+   * servidor de correo falla, 503 `EMAIL_DELIVERY_FAILED` con un texto claro
+   * (7.03; antes 500 genérico): no es culpa de la petición (no es 4xx) y es
+   * temporal, así que la app puede ofrecer reintentar (pedir otro código
+   * reinicia el código y sus intentos). El código guardado no se usa: nadie
+   * lo recibió.
+   */
+  private async deliverCode(send: () => Promise<boolean>): Promise<void> {
+    let sent = false;
+    try {
+      sent = await send();
+    } catch (error) {
+      this.logger.error(`Error enviando el correo: ${error?.message}`);
+    }
+    if (!sent) {
+      throw new BusinessException(
+        ErrorCode.EMAIL_DELIVERY_FAILED,
+        'No pudimos enviar el correo con el código. Intenta de nuevo en unos minutos.',
       );
     }
   }
@@ -375,16 +385,9 @@ export class AuthService {
       await this.userRepository.save(user);
       this.verificationAttempts.reset('reset', user.id);
 
-      const emailSent = await this.emailService.sendPasswordResetCode(
-        email,
-        code,
+      await this.deliverCode(() =>
+        this.emailService.sendPasswordResetCode(email, code),
       );
-
-      if (!emailSent) {
-        throw new InternalServerErrorException(
-          'Error al enviar el código de recuperación',
-        );
-      }
 
       return { message: 'Código de recuperación enviado' };
     } catch (error) {

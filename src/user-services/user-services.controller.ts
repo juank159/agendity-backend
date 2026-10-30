@@ -6,6 +6,7 @@ import {
   Param,
   Delete,
   ParseUUIDPipe,
+  ParseArrayPipe,
 } from '@nestjs/common';
 import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
@@ -71,7 +72,16 @@ export class UserServicesController {
   })
   assignMultipleServices(
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Body() assignServicesDto: AssignServiceDto[],
+    // El ValidationPipe global no valida arrays: cada elemento con su DTO
+    // (7.03; antes aceptó una comisión de 150 %). Mismo patrón que schedules.
+    @Body(
+      new ParseArrayPipe({
+        items: AssignServiceDto,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    assignServicesDto: AssignServiceDto[],
     @Tenant() tenantId: string,
   ) {
     return this.userServicesService.assignMultipleServices(

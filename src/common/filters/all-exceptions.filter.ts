@@ -9,6 +9,7 @@ import {
 import { Response } from 'express';
 import { EntityNotFoundError, QueryFailedError } from 'typeorm';
 import { ErrorCode, isErrorCode } from '../constants/error-codes';
+import { BusinessException } from '../exceptions/business.exception';
 
 /** Cuerpo de todo error HTTP (ARQUITECTURA.md §3). */
 export interface ErrorResponseBody {
@@ -110,13 +111,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   private fromHttpException(exception: HttpException): ErrorResponseBody {
     const statusCode = exception.getStatus();
-    if (statusCode >= 500) return this.internal(statusCode);
-
     const raw = exception.getResponse();
     const payload =
       typeof raw === 'object' && raw !== null
         ? (raw as Record<string, unknown>)
         : { message: raw };
+    // 5xx: mensaje genérico, salvo un error de negocio con código propio del
+    // §3 (p. ej. 503 `EMAIL_DELIVERY_FAILED`, 7.03): su texto lo escribimos
+    // nosotros y no expone nada interno.
+    const deliberate =
+      exception instanceof BusinessException &&
+      isErrorCode(payload.code) &&
+      payload.code !== ErrorCode.INTERNAL_ERROR;
+    if (statusCode >= 500 && !deliberate) return this.internal(statusCode);
     const rawMessage = payload.message ?? exception.message;
 
     if (Array.isArray(rawMessage)) {

@@ -1,5 +1,6 @@
 import { AppointmentStatus } from 'src/common/enums/status.enum';
 import {
+  assertAppointmentStarted,
   appointmentDurationMinutes,
   appointmentDurationSql,
   appointmentEnd,
@@ -276,5 +277,26 @@ describe('solo a futuro (2.21)', () => {
     expect(isRescheduled('2099-01-05T15:00:00.000Z', date)).toBe(false);
     expect(isRescheduled(date, undefined)).toBe(false);
     expect(isRescheduled(date, new Date(date.getTime() + 60_000))).toBe(true);
+  });
+});
+
+describe('assertAppointmentStarted (7.03)', () => {
+  const start = new Date('2030-01-07T10:00:00Z');
+  it('antes del inicio: 409 APPOINTMENT_NOT_STARTED; justo al inicio o después: sí', () => {
+    const before = new Date(start.getTime() - 1);
+    let error: any;
+    try {
+      assertAppointmentStarted(start, before);
+    } catch (e) {
+      error = e;
+    }
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: 'APPOINTMENT_NOT_STARTED',
+    });
+    expect(() => assertAppointmentStarted(start, start)).not.toThrow();
+    expect(() =>
+      assertAppointmentStarted(start, new Date(start.getTime() + 1)),
+    ).not.toThrow();
   });
 });

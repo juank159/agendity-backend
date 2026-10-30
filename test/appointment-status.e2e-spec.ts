@@ -181,9 +181,20 @@ describeWritable(
       client = await ds
         .getRepository(Client)
         .findOneOrFail({ where: { ownerId: owner.id } });
-      service = await ds.getRepository(Service).findOneOrFail({
-        where: { ownerId: owner.id },
-      });
+      // Un servicio que el empleado hace (7.03: si no, no se le puede agendar);
+      // el Owner como profesional hace todos.
+      service = await ds
+        .getRepository(Service)
+        .createQueryBuilder('service')
+        .innerJoin(
+          'user_services',
+          'us',
+          'us.service_id = service.id AND us."isActive" AND us.user_id = :employeeId',
+          { employeeId: employee?.id ?? owner.id },
+        )
+        .where('service.ownerId = :ownerId', { ownerId: owner.id })
+        .orderBy('service.name', 'ASC')
+        .getOneOrFail();
       // Precondiciones propias (no dependen de otros specs ni del orden):
       // cupo de trial de sobra y fechas después de todas las citas ya creadas
       // en la copia (cada corrida crea las suyas, sin cruzarse con las previas).
@@ -213,6 +224,17 @@ describeWritable(
       expect(res.status).toBe(201);
       return { id: res.body.id, total: Number(res.body.total_price) };
     }
+
+    /**
+     * 7.03: solo se completa una cita que ya empezó. Las de prueba son del
+     * año 2100; para completarlas se "adelanta" su inicio a hace una hora
+     * (escribe solo en la copia).
+     */
+    const markStarted = (appointmentId: string) =>
+      ds.query(
+        `UPDATE appointments SET date = now() - interval '1 hour' WHERE id = $1`,
+        [appointmentId],
+      );
 
     const pay = (appointmentId: string, amount: number) =>
       http.post('/api/payments').set(auth(ownerToken)).send({
@@ -244,6 +266,17 @@ describeWritable(
         'PAYMENT_ALREADY_EXISTS',
         'La cita ya está pagada por completo',
       ]);
+
+      // 7.03: antes de empezar no se completa.
+      const early = await http
+        .patch(`/api/appointments/${id}/complete`)
+        .set(auth(ownerToken));
+      expect([early.status, early.body.code]).toEqual([
+        409,
+        'APPOINTMENT_NOT_STARTED',
+      ]);
+      expect((await statusOf(id))[0]).toBe('CONFIRMED');
+      await markStarted(id);
 
       const done = await http
         .patch(`/api/appointments/${id}/complete`)
@@ -365,6 +398,7 @@ describeWritable(
 
     it('completar sin pagar (PENDING → COMPLETED) y pagar después: el estado no cambia (2.15)', async () => {
       const { id, total } = await newAppointment();
+      await markStarted(id);
       const done = await http
         .patch(`/api/appointments/${id}/complete`)
         .set(auth(ownerToken));

@@ -156,6 +156,26 @@ export function assertStartNotInPast(
   }
 }
 
+export const APPOINTMENT_NOT_STARTED_MESSAGE =
+  'No se puede completar una cita que aún no ha empezado';
+
+/**
+ * Regla 7.03 (decisión del orquestador): una cita solo se completa cuando ya
+ * empezó (`now >= inicio`; justo a la hora de inicio sí). Si no →
+ * `APPOINTMENT_NOT_STARTED` (409: el estado de la cita aún no lo permite).
+ */
+export function assertAppointmentStarted(
+  start: Date | string,
+  now: Date = new Date(),
+): void {
+  if (new Date(start).getTime() > now.getTime()) {
+    throw new BusinessException(
+      ErrorCode.APPOINTMENT_NOT_STARTED,
+      APPOINTMENT_NOT_STARTED_MESSAGE,
+    );
+  }
+}
+
 /**
  * ¿La cita cambia de fecha? (`next` distinto de `previous`, comparando
  * instantes). Mover reinicia el recordatorio manual (2.18) y exige una hora
