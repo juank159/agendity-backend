@@ -11,6 +11,14 @@ import {
 } from 'class-validator';
 
 export class CreateAppointmentDto {
+  /**
+   * Id generado por la app (UUID, 10.01b, D-18). Opcional: si no llega, lo
+   * genera el servidor. Si ya existe → 409 `CONFLICT`.
+   */
+  @IsOptional()
+  @IsUUID('all', { message: 'El id debe ser un UUID' })
+  id?: string;
+
   @ApiProperty({
     example: '123e4567-e89b-12d3-a456-426614174000',
     description: 'ID del cliente',

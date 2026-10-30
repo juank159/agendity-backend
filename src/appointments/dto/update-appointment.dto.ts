@@ -1,4 +1,4 @@
-import { ApiProperty, PartialType } from '@nestjs/swagger';
+import { ApiProperty, PartialType, OmitType } from '@nestjs/swagger';
 import { CreateAppointmentDto } from './create-appointment.dto';
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 import { AppointmentStatus } from 'src/common/enums/status.enum';
@@ -9,7 +9,10 @@ import { AppointmentStatus } from 'src/common/enums/status.enum';
  * INVALID_STATE_TRANSITION. `payment_status` ya no se acepta (2.06): sale de
  * los pagos (`POST /payments` y el reembolso), nunca a mano.
  */
-export class UpdateAppointmentDto extends PartialType(CreateAppointmentDto) {
+export class UpdateAppointmentDto extends PartialType(
+  // El id no se cambia nunca (10.01b: la app puede darlo solo al crear).
+  OmitType(CreateAppointmentDto, ['id'] as const),
+) {
   @ApiProperty({ enum: AppointmentStatus, required: false })
   @IsOptional()
   @IsEnum(AppointmentStatus)

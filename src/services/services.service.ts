@@ -1,3 +1,4 @@
+import { assertClientIdFree } from 'src/common/utils/client-id';
 import {
   Injectable,
   NotFoundException,
@@ -121,6 +122,12 @@ export class ServicesService {
   ): Promise<Service> {
     try {
       await this.assertNameAvailable(createServiceDto.name, tenantId);
+      // Id generado por la app (10.01b): no puede existir ya.
+      await assertClientIdFree(
+        this.serviceRepository.manager,
+        Service,
+        createServiceDto.id,
+      );
 
       // Validar que la categoría exista
       await this.categoriesService.findOne(

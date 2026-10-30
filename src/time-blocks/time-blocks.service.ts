@@ -1,3 +1,4 @@
+import { assertClientIdFree } from 'src/common/utils/client-id';
 import {
   Injectable,
   NotFoundException,
@@ -172,7 +173,9 @@ export class TimeBlocksService {
     createTimeBlockDto: CreateTimeBlockDto,
     tenantId: string,
   ): Promise<TimeBlockResponseDto> {
-    const { user_id, appointment_id, notes } = createTimeBlockDto;
+    const { user_id, appointment_id, notes, id } = createTimeBlockDto;
+    // Id generado por la app (10.01b): no puede existir ya.
+    await assertClientIdFree(this.dataSource.manager, TimeBlock, id);
     const timeZone = await this.tenantSettings.getTimezone(tenantId);
     const start = this.toDate(createTimeBlockDto.start_datetime, timeZone);
     const end = this.toDate(createTimeBlockDto.end_datetime, timeZone);
@@ -199,6 +202,7 @@ export class TimeBlocksService {
         const repository = manager.getRepository(TimeBlock);
         return repository.save(
           repository.create({
+            id,
             start_datetime: start,
             end_datetime: end,
             // Zona del negocio al crear (6.03): el bloqueo la conserva.

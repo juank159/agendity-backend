@@ -140,7 +140,8 @@ export class PublicBookingService {
       accepting_bookings: await this.acceptsBookings(business.tenantId),
       // 7.04-9: sin servicios activos con reserva en línea, la web dice
       // "Este negocio aún no tiene servicios para reservar en línea".
-      has_online_services: (await this.loadServices(business.tenantId)).length > 0,
+      has_online_services:
+        (await this.loadServices(business.tenantId)).length > 0,
     };
   }
 
@@ -369,7 +370,7 @@ export class PublicBookingService {
       await this.dataSource.query(
         `SELECT a.professional_id, count(*)::int AS load
            FROM appointments a
-          WHERE a.owner_id = $1 AND a.status <> 'CANCELLED'
+          WHERE a.owner_id = $1 AND a.status <> 'CANCELLED' AND NOT a.needs_reschedule
             AND a.professional_id = ANY($2::uuid[])
             AND (a."date" AT TIME ZONE $3)::date = (($4::timestamptz) AT TIME ZONE $3)::date
           GROUP BY a.professional_id`,

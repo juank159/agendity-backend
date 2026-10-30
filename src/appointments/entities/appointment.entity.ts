@@ -106,6 +106,24 @@ export class Appointment {
   @Column({ type: 'varchar', length: 64, name: 'timezone' })
   timezone: string;
 
+  /**
+   * Conflicto de sincronización (10.01b, D-18): la cita llegó de un
+   * dispositivo sin conexión y su hueco ya no estaba libre (`SLOT_UNAVAILABLE`,
+   * `OUTSIDE_BUSINESS_HOURS`, `PROFESSIONAL_INACTIVE`,
+   * `SERVICE_NOT_OFFERED_BY_PROFESSIONAL`). Se guarda igual (no se pierde) y
+   * `needs_reschedule` = hay que moverla; mientras tanto NO ocupa hueco.
+   */
+  @Column({
+    type: 'varchar',
+    length: 40,
+    name: 'sync_conflict',
+    nullable: true,
+  })
+  syncConflict: string | null;
+
+  @Column({ type: 'boolean', name: 'needs_reschedule', default: false })
+  needsReschedule: boolean;
+
   /** Origen (9.01): `APP` (el negocio) o `WEB` (reserva pública, D-17). */
   @Column({
     type: 'varchar',

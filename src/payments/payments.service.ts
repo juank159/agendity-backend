@@ -1,7 +1,21 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { TenantSettingsService } from 'src/settings/tenant-settings.service';
+import { assertClientIdFree } from 'src/common/utils/client-id';
+import { ErrorCode } from 'src/common/constants/error-codes';
+
+/** Motivos de un pago en revisión (10.01b). */
+export const PAYMENT_REVIEW = {
+  appointmentCancelled: 'APPOINTMENT_CANCELLED',
+  overpaid: 'OVERPAID',
+} as const;
+
+/** ¿Es un error de negocio con ese `code`? */
+function isCode(error: unknown, code: string): boolean {
+  const response = (error as { getResponse?: () => unknown })?.getResponse?.();
+  return (response as { code?: string } | undefined)?.code === code;
+}
 import { Payment } from './entities/payment.entity';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
@@ -60,7 +74,9 @@ export class PaymentsService {
       `SELECT COALESCE(SUM(${netAmountSql('p')}) FILTER (WHERE p.status = 'COMPLETED'), 0) AS paid,
               COALESCE(bool_or(p.status = 'REFUNDED' OR COALESCE(p.refund_amount, 0) > 0), false) AS has_refunds
          FROM payments p
-        WHERE p."appointmentId" = $1`,
+        WHERE p."appointmentId" = $1
+          -- 10.01b: un pago en revisión no cuenta hasta resolverlo.
+          AND p.review_required IS NULL`,
       [appointmentId],
     );
     return {
@@ -101,8 +117,15 @@ export class PaymentsService {
   async create(
     createPaymentDto: CreatePaymentDto,
     tenantId: string,
+    options: { reviewOnConflict?: boolean } = {},
   ): Promise<Payment> {
     try {
+      // Id generado por la app (10.01b): no puede existir ya.
+      await assertClientIdFree(
+        this.dataSource.manager,
+        Payment,
+        createPaymentDto.id,
+      );
       // Referencias del negocio validadas antes de abrir la transacción (404).
       const appointment = await this.appointmentsService.findOne(
         createPaymentDto.appointment_id,
@@ -124,17 +147,43 @@ export class PaymentsService {
             appointment.id,
             tenantId,
           );
-          statusAfterPayment(locked.status); // CANCELLED → 409, antes de escribir
+          // Pago hecho sin conexión (10.01b, D-18): si no cabe, se guarda en
+          // revisión en vez de perderlo (el dinero se recibió).
+          let review: string | null = null;
+          try {
+            statusAfterPayment(locked.status); // CANCELLED → 409, antes de escribir
+          } catch (error) {
+            if (
+              !options.reviewOnConflict ||
+              !isCode(error, ErrorCode.INVALID_STATE_TRANSITION)
+            ) {
+              throw error;
+            }
+            review = PAYMENT_REVIEW.appointmentCancelled;
+          }
           const paid = await this.loadPaidSummary(manager, locked.id);
-          assertPaymentAmount(
-            createPaymentDto.amount,
-            locked.total_price,
-            paid.paidCents,
-          );
+          if (!review) {
+            try {
+              assertPaymentAmount(
+                createPaymentDto.amount,
+                locked.total_price,
+                paid.paidCents,
+              );
+            } catch (error) {
+              const exceeds =
+                toCents(createPaymentDto.amount) > 0 &&
+                (isCode(error, ErrorCode.PAYMENT_ALREADY_EXISTS) ||
+                  isCode(error, ErrorCode.BAD_REQUEST));
+              if (!options.reviewOnConflict || !exceeds) throw error;
+              review = PAYMENT_REVIEW.overpaid;
+            }
+          }
 
           const repo = manager.getRepository(Payment);
           const payment = await repo.save(
             repo.create({
+              id: createPaymentDto.id,
+              reviewRequired: review,
               amount: createPaymentDto.amount,
               payment_method: createPaymentDto.payment_method,
               custom_payment_method_id:
@@ -147,6 +196,8 @@ export class PaymentsService {
               timezone: timeZone,
             }),
           );
+          // En revisión: no toca la cita hasta resolverlo.
+          if (review) return payment;
           // PENDING → CONFIRMED (máquina de estados) y PARTIAL/COMPLETED.
           await this.appointmentsService.applyPaymentStatus(
             manager,
@@ -193,6 +244,15 @@ export class PaymentsService {
         `No se pudo notificar el ${isRefund ? 'reembolso' : 'pago'} ${notification.payment_id}: ${error?.message}`,
       );
     }
+  }
+
+  /** Pagos con `review_required` del negocio (10.01b). */
+  findInReview(tenantId: string): Promise<Payment[]> {
+    return this.paymentRepository.find({
+      where: { ownerId: tenantId, reviewRequired: Not(IsNull()) },
+      relations: RELATIONS.APPOINTMENT_WITH_CUSTOM_METHOD,
+      order: { created_at: 'ASC' },
+    });
   }
 
   async findAll(tenantId: string): Promise<Payment[]> {
@@ -293,6 +353,20 @@ export class PaymentsService {
             refund_reason: refundDto.refund_reason,
           },
         );
+        // 10.01b: un pago en revisión se resuelve solo cuando, con este
+        // reembolso, ya cabe (cita cancelada: devuelto entero; de más: lo
+        // pagado de la cita con él no pasa del total).
+        if (current.reviewRequired) {
+          const netCents = toCents(current.amount) - refundedCents;
+          const others = await this.loadPaidSummary(manager, locked.id);
+          const fits =
+            current.reviewRequired === PAYMENT_REVIEW.appointmentCancelled
+              ? netCents <= 0
+              : others.paidCents + netCents <= toCents(locked.total_price);
+          if (fits) {
+            await repo.update({ id: current.id }, { reviewRequired: null });
+          }
+        }
         // Estado de pago de la cita con lo que queda pagado (incluye este
         // reembolso: misma transacción). El `status` de la cita no cambia.
         const appointmentStatus = appointmentPaymentStatus(

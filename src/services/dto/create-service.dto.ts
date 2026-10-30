@@ -18,6 +18,14 @@ import { ApiProperty } from '@nestjs/swagger';
  * con el valor por defecto. Los defaults del alta los pone `ServicesService.create`.
  */
 export class CreateServiceDto {
+  /**
+   * Id generado por la app (UUID, 10.01b, D-18). Opcional: si no llega, lo
+   * genera el servidor. Si ya existe → 409 `CONFLICT`.
+   */
+  @IsOptional()
+  @IsUUID('all', { message: 'El id debe ser un UUID' })
+  id?: string;
+
   @ApiProperty({
     description: 'Nombre del servicio',
     example: 'Pestañas pelo a pelo',

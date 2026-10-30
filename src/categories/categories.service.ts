@@ -1,3 +1,4 @@
+import { assertClientIdFree } from 'src/common/utils/client-id';
 import {
   Injectable,
   NotFoundException,
@@ -158,6 +159,12 @@ export class CategoriesService {
 
     try {
       await this.checkDuplicateCategory(createCategoryDto.name, tenantId);
+      // Id generado por la app (10.01b): no puede existir ya.
+      await assertClientIdFree(
+        this.categoryRepository.manager,
+        Category,
+        createCategoryDto.id,
+      );
 
       const newCategory = this.categoryRepository.create({
         ...createCategoryDto,

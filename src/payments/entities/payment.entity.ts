@@ -84,6 +84,21 @@ export class Payment {
   @Column({ type: 'varchar', length: 64, name: 'timezone' })
   timezone: string;
 
+  /**
+   * Pago en revisión (10.01b, D-18): llegó de un dispositivo sin conexión y
+   * no cabía (`APPOINTMENT_CANCELLED`: la cita ya estaba cancelada;
+   * `OVERPAID`: superaba lo que faltaba por pagar). Se guarda (el dinero se
+   * recibió) pero no cuenta en lo pagado de la cita hasta resolverlo con un
+   * reembolso (`refund` lo limpia solo cuando ya cabe).
+   */
+  @Column({
+    type: 'varchar',
+    length: 40,
+    name: 'review_required',
+    nullable: true,
+  })
+  reviewRequired: string | null;
+
   // Instantes reales (now() de la BD). Hasta 2.05 se guardaban desplazados
   // -5/-6 h por un "parche" de zona horaria; la migración 2.05 los corrigió.
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

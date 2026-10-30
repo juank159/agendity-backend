@@ -107,6 +107,18 @@ export class AppointmentsController {
    * quien llama (antes disparaba los de todos los negocios). Idempotente: lo ya
    * procesado no se repite. La app no la usa.
    */
+  /**
+   * Citas en conflicto de sincronización (10.01b, D-18): llegaron de un
+   * dispositivo sin conexión y su hueco ya no estaba libre. Se resuelven
+   * moviéndolas (`PATCH /appointments/:id` con la nueva fecha o profesional) o
+   * cancelándolas. Owner: las del negocio; Employee: las suyas.
+   */
+  @Get('conflicts')
+  @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
+  findConflicts(@CurrentUser() user: AuthUser) {
+    return this.appointmentsService.findConflicts(appointmentScopeOf(user));
+  }
+
   @Get('check-reminders')
   @hasRoles(JwtRoles.Owner)
   async checkReminders(@Tenant() tenantId: string) {

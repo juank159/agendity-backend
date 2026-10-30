@@ -135,6 +135,18 @@ export class PaymentsController {
     );
   }
 
+  /**
+   * Pagos en revisión (10.01b, D-18): llegaron sin conexión y no cabían (cita
+   * cancelada o más que el total). Se resuelven con un reembolso
+   * (`POST /payments/:id/refund`): cuando el pago ya cabe, la marca se quita
+   * sola y vuelve a contar en la cita.
+   */
+  @Get('review')
+  @hasRoles(JwtRoles.Owner)
+  findInReview(@Tenant() tenantId: string) {
+    return this.paymentsService.findInReview(tenantId);
+  }
+
   @Get('appointment/:id')
   @hasRoles(JwtRoles.Owner)
   findByAppointment(

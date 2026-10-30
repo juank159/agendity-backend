@@ -1,3 +1,4 @@
+import { assertClientIdFree } from 'src/common/utils/client-id';
 import {
   Injectable,
   NotFoundException,
@@ -146,6 +147,12 @@ export class ClientsService {
   ): Promise<Client> {
     try {
       await this.validateUniqueFields(createClientDto, tenantId);
+      // Id generado por la app (10.01b): no puede existir ya.
+      await assertClientIdFree(
+        this.clientRepository.manager,
+        Client,
+        createClientDto.id,
+      );
 
       const client = this.clientRepository.create({
         ...createClientDto,

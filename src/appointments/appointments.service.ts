@@ -1,3 +1,4 @@
+import { assertClientIdFree } from 'src/common/utils/client-id';
 import {
   BadRequestException,
   Injectable,
@@ -81,8 +82,37 @@ import {
   openingHoursWindows,
 } from 'src/settings/opening-hours';
 
-/** Opciones de `AppointmentsService.create` (9.01). */
-export interface CreateAppointmentOptions {
+/** Errores de hueco que una cita llegada sin conexión guarda como conflicto (10.01b). */
+export const SYNC_FLAGGABLE_CONFLICTS: readonly string[] = [
+  ErrorCode.SLOT_UNAVAILABLE,
+  ErrorCode.OUTSIDE_BUSINESS_HOURS,
+  ErrorCode.PROFESSIONAL_INACTIVE,
+  ErrorCode.SERVICE_NOT_OFFERED_BY_PROFESSIONAL,
+];
+
+function flaggableCode(error: unknown): string | null {
+  const code = (
+    error as { getResponse?: () => { code?: string } }
+  )?.getResponse?.()?.code;
+  return code && SYNC_FLAGGABLE_CONFLICTS.includes(code) ? code : null;
+}
+
+/** Opciones para citas que llegan de un dispositivo sin conexión (10.01b). */
+export interface SyncWriteOptions {
+  /**
+   * "Ahora" para la regla de solo a futuro: la hora del dispositivo cuando la
+   * creó o movió (acotada por quien llama). Por defecto, la del servidor.
+   */
+  now?: Date;
+  /**
+   * Si el hueco ya no está libre (`SYNC_FLAGGABLE_CONFLICTS`), guardar igual
+   * con `sync_conflict` y `needs_reschedule` (no ocupa hueco) en vez de fallar.
+   */
+  flagConflicts?: boolean;
+}
+
+/** Opciones de `AppointmentsService.create` (9.01, 10.01b). */
+export interface CreateAppointmentOptions extends SyncWriteOptions {
   /** Origen de la cita; por defecto `APP`. */
   source?: AppointmentSource;
   /**
@@ -190,7 +220,24 @@ export class AppointmentsService {
         date,
         tenantId,
       );
-      assertStartNotInPast(start);
+      assertStartNotInPast(start, options.now);
+      // Id generado por la app (10.01b): no puede existir ya.
+      await assertClientIdFree(
+        this.dataSource.manager,
+        Appointment,
+        createAppointmentDto.id,
+      );
+      // Conflicto que no impide guardar (solo con `flagConflicts`).
+      let conflict: string | null = null;
+      const flag = async (check: () => unknown) => {
+        try {
+          await check();
+        } catch (error) {
+          const code = options.flagConflicts && flaggableCode(error);
+          if (!code) throw error;
+          conflict = conflict ?? code;
+        }
+      };
 
       // Reserva pública (9.01): el cliente se resuelve DENTRO de la
       // transacción (si la cita no se guarda, no queda un cliente suelto).
@@ -204,13 +251,17 @@ export class AppointmentsService {
       if ((!client && !options.resolveClient) || !professional) {
         throw new NotFoundException('Cliente o profesional no encontrado');
       }
-      this.assertProfessionalSchedulable(professional, tenantId);
+      await flag(() =>
+        this.assertProfessionalSchedulable(professional, tenantId),
+      );
 
       const services = await this.loadTenantServices(service_ids, tenantId);
-      await this.assertProfessionalOffers(
-        professional_id,
-        tenantId,
-        services.map((service) => service.id),
+      await flag(() =>
+        this.assertProfessionalOffers(
+          professional_id,
+          tenantId,
+          services.map((service) => service.id),
+        ),
       );
       // Precio de cada servicio guardado en la cita (2.29); total = su suma.
       const priceLines = priceLinesFor(services);
@@ -222,6 +273,7 @@ export class AppointmentsService {
       );
 
       const appointmentToSave = {
+        ...(createAppointmentDto.id ? { id: createAppointmentDto.id } : {}),
         ownerId: tenantId,
         professionalId: professional_id,
         date: start,
@@ -252,11 +304,20 @@ export class AppointmentsService {
             manager,
           );
 
-          await this.assertSlotAvailable(manager, {
-            tenantId,
-            professionalId: professional_id,
-            start: appointmentToSave.date,
-            services,
+          if (!conflict) {
+            await flag(() =>
+              this.assertSlotAvailable(manager, {
+                tenantId,
+                professionalId: professional_id,
+                start: appointmentToSave.date,
+                services,
+              }),
+            );
+          }
+          // 10.01b: guardada en conflicto = no ocupa hueco hasta moverla.
+          Object.assign(appointmentToSave, {
+            syncConflict: conflict,
+            needsReschedule: !!conflict,
           });
 
           if (options.resolveClient) {
@@ -638,6 +699,8 @@ export class AppointmentsService {
         WHERE a.professional_id = $1
           AND a.owner_id = $2
           AND NOT (a.status = ANY($3::appointments_status_enum[]))
+          -- 10.01b: una cita en conflicto de sincronización no ocupa hueco.
+          AND NOT a.needs_reschedule
           AND a.date < $4
           AND ($6::uuid IS NULL OR a.id <> $6::uuid)
         GROUP BY a.id
@@ -701,6 +764,7 @@ export class AppointmentsService {
     id: string,
     updateAppointmentDto: UpdateAppointmentDto,
     tenantId: string,
+    options: SyncWriteOptions = {},
   ): Promise<Appointment> {
     try {
       const appointment = await this.findOne(id, tenantId);
@@ -784,7 +848,7 @@ export class AppointmentsService {
         // fecha (la app la manda siempre al editar) no cuenta: una cita pasada
         // se puede seguir editando, completando y pagando.
         if (isRescheduled(current.date, updateData.date)) {
-          assertStartNotInPast(updateData.date);
+          assertStartNotInPast(updateData.date, options.now);
           // 6.03: mover la cita toma la zona ACTUAL del negocio, la misma con
           // la que se interpretó la nueva hora y se validó el horario. Sin
           // mover (notas, estado, servicios), conserva la suya.
@@ -801,20 +865,44 @@ export class AppointmentsService {
               professionalId,
               tenantId,
             ));
-          this.assertProfessionalSchedulable(professional, tenantId);
-          await this.assertProfessionalOffers(
-            professionalId,
-            tenantId,
-            (nextServices ?? appointment.services).map((service) => service.id),
-            manager,
+          // 10.01b: con `flagConflicts` (llega sin conexión) el cambio se
+          // guarda igual, marcado para mover; si cabe, se limpia la marca de
+          // un conflicto anterior (mover la cita lo resuelve).
+          let conflict: string | null = null;
+          const flag = async (check: () => unknown) => {
+            if (conflict) return;
+            try {
+              await check();
+            } catch (error) {
+              const code = options.flagConflicts && flaggableCode(error);
+              if (!code) throw error;
+              conflict = code;
+            }
+          };
+          await flag(() =>
+            this.assertProfessionalSchedulable(professional, tenantId),
           );
-          await this.assertSlotAvailable(manager, {
-            tenantId,
-            professionalId,
-            start: new Date(updateData.date ?? appointment.date),
-            services: nextServices ?? appointment.services,
-            excludeAppointmentId: id,
-          });
+          await flag(() =>
+            this.assertProfessionalOffers(
+              professionalId,
+              tenantId,
+              (nextServices ?? appointment.services).map(
+                (service) => service.id,
+              ),
+              manager,
+            ),
+          );
+          await flag(() =>
+            this.assertSlotAvailable(manager, {
+              tenantId,
+              professionalId,
+              start: new Date(updateData.date ?? appointment.date),
+              services: nextServices ?? appointment.services,
+              excludeAppointmentId: id,
+            }),
+          );
+          updateData.syncConflict = conflict;
+          updateData.needsReschedule = !!conflict;
         }
         // Fecha comparada con la fila bloqueada: otra fecha reinicia el
         // recordatorio manual (2.18).
@@ -932,6 +1020,15 @@ export class AppointmentsService {
    * Owner: cualquier cita del negocio; Employee: solo las suyas (alcance).
    * El hueco queda libre (`blocksSlot`). El cupo del trial NO se devuelve.
    */
+  /** Citas con `needs_reschedule` del alcance (10.01b), por fecha. */
+  findConflicts(scope: AppointmentScope): Promise<Appointment[]> {
+    return this.appointmentRepository.find({
+      where: { ...this.scopeWhere(scope), needsReschedule: true },
+      relations: RELATION_GROUPS.default,
+      order: { date: 'ASC' },
+    });
+  }
+
   cancel(
     id: string,
     scope: AppointmentScope,
@@ -943,8 +1040,13 @@ export class AppointmentsService {
   }
 
   /** Completa una cita PENDING o CONFIRMED (→ COMPLETED; sin pagar se paga después, 2.15). */
-  complete(id: string, scope: AppointmentScope): Promise<Appointment> {
-    return this.changeStatus(id, scope, AppointmentStatus.COMPLETED);
+  complete(
+    id: string,
+    scope: AppointmentScope,
+    // 10.01b: hora del dispositivo si se completó sin conexión.
+    now?: Date,
+  ): Promise<Appointment> {
+    return this.changeStatus(id, scope, AppointmentStatus.COMPLETED, {}, now);
   }
 
   private async changeStatus(
@@ -952,6 +1054,7 @@ export class AppointmentsService {
     scope: AppointmentScope,
     to: AppointmentStatus,
     extra: Partial<Appointment> = {},
+    now?: Date,
   ): Promise<Appointment> {
     await this.dataSource.transaction(async (manager) => {
       const current = await this.lockAppointment(manager, id, scope);
@@ -960,7 +1063,7 @@ export class AppointmentsService {
         await this.assertCancellable(manager, current.id);
       }
       if (to === AppointmentStatus.COMPLETED) {
-        assertAppointmentStarted(current.date); // 7.03
+        assertAppointmentStarted(current.date, now); // 7.03
       }
       await manager
         .getRepository(Appointment)
