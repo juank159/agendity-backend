@@ -99,6 +99,10 @@ async function loadBusiness() {
   document.title = `Reservar · ${name}`;
   $('business-zone').textContent =
     `Horas en la zona del negocio (${state.business.timezone}).`;
+  if (state.business.has_online_services === false) {
+    showError('Este negocio aún no tiene servicios para reservar en línea.');
+    return false;
+  }
   if (!state.business.accepting_bookings) {
     showError(
       'Este negocio no está recibiendo reservas en línea en este momento.',

@@ -7,7 +7,7 @@ import {
   PaymentStatus,
 } from 'src/common/enums/status.enum';
 import { PaymentsService } from './payments.service';
-import { PaymentStatsService } from './payment-stats.service';
+import { PaymentStatsService, percentChange } from './payment-stats.service';
 
 const BOGOTA = 'America/Bogota';
 
@@ -453,5 +453,17 @@ describe('PaymentStatsService (estadísticas, 2.28; separadas en 5.05)', () => {
         percentage: 40,
       },
     ]);
+  });
+});
+
+describe('percentChange (7.04-8)', () => {
+  it('sin base (periodo anterior en 0): null, no "100 %"', () => {
+    expect(percentChange(50000, 0)).toBeNull();
+    expect(percentChange(0, 0)).toBeNull();
+  });
+  it('con base: cambio porcentual', () => {
+    expect(percentChange(150, 100)).toBe(50);
+    expect(percentChange(50, 100)).toBe(-50);
+    expect(percentChange(100, 100)).toBe(0);
   });
 });

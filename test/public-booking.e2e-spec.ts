@@ -172,6 +172,7 @@ describeWritable('Agenda pública 9.01 (e2e, escribe en copia)', () => {
     expect(res.status).toBe(200);
     expect(Object.keys(res.body).sort()).toEqual([
       'accepting_bookings',
+      'has_online_services',
       'name',
       'opening_hours',
       'slug',
@@ -181,9 +182,39 @@ describeWritable('Agenda pública 9.01 (e2e, escribe en copia)', () => {
       name: `Salón 1 ${run}`,
       timezone: 'America/Bogota',
       accepting_bookings: true,
+      has_online_services: true,
     });
     const missing = await http.get('/api/public/businesses/no-existe-xyz');
     expect([missing.status, missing.body.code]).toEqual([404, 'NOT_FOUND']);
+  });
+
+  it('7.04-9: un servicio nace sin reserva en línea; sin ninguno, has_online_services = false', async () => {
+    const reg = await http.post('/api/auth/register/owner').send({
+      name: 'Sin',
+      lastname: 'Servicios',
+      email: `pub-3-${run}@example.com`,
+      phone: `3${(Date.now() + 3).toString().slice(-9)}`,
+      password: 'Secreta1!',
+      business_name: `Salón 3 ${run}`,
+    });
+    expect(reg.status).toBe(201);
+    const as = (req: any) => req.set(auth(reg.body.token));
+    const category = await as(http.post('/api/categories')).send({
+      name: `Uñas ${run}`,
+    });
+    const service = await as(http.post('/api/services')).send({
+      name: `Manicure ${run}`,
+      price: 20000,
+      duration: 45,
+      categoryId: category.body.id,
+    });
+    expect(service.status).toBe(201);
+    expect(service.body.onlineBooking).toBe(false);
+    const { slug } = (await as(http.get('/api/settings'))).body;
+    const info = await http.get(`/api/public/businesses/${slug}`);
+    expect(info.body.has_online_services).toBe(false);
+    const services = await http.get(`/api/public/businesses/${slug}/services`);
+    expect(services.body).toEqual([]);
   });
 
   it('servicios: solo los activos con reserva en línea, por categoría', async () => {

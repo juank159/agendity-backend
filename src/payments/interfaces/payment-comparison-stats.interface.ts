@@ -15,10 +15,13 @@ export interface PaymentComparisonStats {
   };
   change: {
     amount_difference: number;
-    amount_percentage: number;
+    /** `null` si el periodo anterior es 0 (7.04-8). */
+    amount_percentage: number | null;
     count_difference: number;
-    count_percentage: number;
+    /** `null` si el periodo anterior es 0 (7.04-8). */
+    count_percentage: number | null;
     average_difference: number;
-    average_percentage: number;
+    /** `null` si el periodo anterior es 0 (7.04-8). */
+    average_percentage: number | null;
   };
 }

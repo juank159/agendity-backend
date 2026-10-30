@@ -388,33 +388,29 @@ export class PaymentStatsService {
         tenantId,
       );
 
-      // Calcular diferencias y cambios porcentuales
+      // Diferencias y cambios porcentuales. Con el periodo anterior en 0 el %
+      // no existe: `null` (7.04-8; antes salía "↑ 100 %"), la app muestra
+      // "nuevo" o "—".
       const amountDifference =
         currentStats.total_amount - previousStats.total_amount;
-      const amountPercentage =
-        previousStats.total_amount !== 0
-          ? (amountDifference * 100) / previousStats.total_amount
-          : currentStats.total_amount > 0
-            ? 100
-            : 0;
+      const amountPercentage = percentChange(
+        currentStats.total_amount,
+        previousStats.total_amount,
+      );
 
       const countDifference =
         currentStats.payment_count - previousStats.payment_count;
-      const countPercentage =
-        previousStats.payment_count !== 0
-          ? (countDifference * 100) / previousStats.payment_count
-          : currentStats.payment_count > 0
-            ? 100
-            : 0;
+      const countPercentage = percentChange(
+        currentStats.payment_count,
+        previousStats.payment_count,
+      );
 
       const averageDifference =
         currentStats.average_amount - previousStats.average_amount;
-      const averagePercentage =
-        previousStats.average_amount !== 0
-          ? (averageDifference * 100) / previousStats.average_amount
-          : currentStats.average_amount > 0
-            ? 100
-            : 0;
+      const averagePercentage = percentChange(
+        currentStats.average_amount,
+        previousStats.average_amount,
+      );
 
       return {
         current_period: {
@@ -433,11 +429,11 @@ export class PaymentStatsService {
         },
         change: {
           amount_difference: amountDifference,
-          amount_percentage: parseFloat(amountPercentage.toFixed(2)),
+          amount_percentage: round2(amountPercentage),
           count_difference: countDifference,
-          count_percentage: parseFloat(countPercentage.toFixed(2)),
+          count_percentage: round2(countPercentage),
           average_difference: averageDifference,
-          average_percentage: parseFloat(averagePercentage.toFixed(2)),
+          average_percentage: round2(averagePercentage),
         },
       };
     } catch (error) {
@@ -706,4 +702,21 @@ export class PaymentStatsService {
       });
     }
   }
+}
+
+/**
+ * Cambio porcentual del periodo anterior al actual (7.04-8). `null` si el
+ * anterior es 0: no hay base y "100 %" sería falso.
+ */
+export function percentChange(
+  current: number,
+  previous: number,
+): number | null {
+  if (!previous) return null;
+  return ((current - previous) * 100) / previous;
+}
+
+/** 2 decimales, como antes; `null` se queda en `null`. */
+function round2(value: number | null): number | null {
+  return value === null ? null : parseFloat(value.toFixed(2));
 }

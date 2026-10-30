@@ -134,7 +134,9 @@ export class ServicesService {
         ownerId: tenantId,
         color: createServiceDto.color || '#1c94f4',
         priceType: createServiceDto.priceType || 'Precio fijo',
-        onlineBooking: createServiceDto.onlineBooking ?? true,
+        // 7.04-9: nace sin reserva en línea (como dicen la entidad y el DTO);
+        // el Owner la activa. Antes nacía en true si no se enviaba.
+        onlineBooking: createServiceDto.onlineBooking ?? false,
         deposit: createServiceDto.deposit ?? 0,
         image: createServiceDto.image || null,
       });

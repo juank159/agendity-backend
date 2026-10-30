@@ -138,6 +138,9 @@ export class PublicBookingService {
       timezone: business.timezone,
       opening_hours: business.openingHours,
       accepting_bookings: await this.acceptsBookings(business.tenantId),
+      // 7.04-9: sin servicios activos con reserva en línea, la web dice
+      // "Este negocio aún no tiene servicios para reservar en línea".
+      has_online_services: (await this.loadServices(business.tenantId)).length > 0,
     };
   }
 

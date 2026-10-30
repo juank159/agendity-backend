@@ -93,3 +93,45 @@ describe('PaymentStatsService: días del negocio en su zona (6.02)', () => {
     },
   );
 });
+
+describe('PaymentStatsService.getPaymentStatsComparison (7.04-8)', () => {
+  beforeAll(() => Logger.overrideLogger(false));
+
+  it('periodo anterior en 0: los % salen null (la app muestra "nuevo" o "—")', async () => {
+    const { service } = build();
+    const qb = (service as any).paymentRepository.createQueryBuilder();
+    qb.getRawOne
+      .mockResolvedValueOnce({
+        total_amount: '1000',
+        payment_count: '2',
+        average_amount: '500',
+      })
+      .mockResolvedValueOnce({});
+    const result = await service.getPaymentStatsComparison(
+      day('2030-01-07', BOGOTA_TENANT),
+      day('2030-01-07', BOGOTA_TENANT),
+      BOGOTA_TENANT,
+    );
+    expect(result.change).toMatchObject({
+      amount_difference: 1000,
+      amount_percentage: null,
+      count_percentage: null,
+      average_percentage: null,
+    });
+  });
+
+  it('con base: % redondeado a 2 decimales', async () => {
+    const { service } = build();
+    const qb = (service as any).paymentRepository.createQueryBuilder();
+    qb.getRawOne
+      .mockResolvedValueOnce({ total_amount: '1000', payment_count: '3' })
+      .mockResolvedValueOnce({ total_amount: '300', payment_count: '3' });
+    const result = await service.getPaymentStatsComparison(
+      day('2030-01-07', BOGOTA_TENANT),
+      day('2030-01-07', BOGOTA_TENANT),
+      BOGOTA_TENANT,
+    );
+    expect(result.change.amount_percentage).toBe(233.33);
+    expect(result.change.count_percentage).toBe(0);
+  });
+});
