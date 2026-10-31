@@ -64,4 +64,12 @@ export class CreateClientDto {
   @IsOptional()
   @IsBoolean()
   showNotes?: boolean;
+
+  /**
+   * Consentimiento para WhatsApp automáticos (Fase 11, Ley 1581). `true` lo
+   * registra con fecha; `false` es la baja (fecha en `whatsapp_opt_out_at`).
+   */
+  @IsOptional()
+  @IsBoolean({ message: 'whatsapp_opt_in debe ser verdadero o falso' })
+  whatsapp_opt_in?: boolean;
 }

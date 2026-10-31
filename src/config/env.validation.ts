@@ -43,6 +43,14 @@ export const PRODUCTION_REQUIRED = [
   'PUBLIC_BASE_URL',
 ] as const;
 
+/** Con `MESSAGING_CHANNEL=whatsapp_cloud` (Fase 11, D-20). */
+export const WHATSAPP_CLOUD_REQUIRED = [
+  'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
+  'WHATSAPP_CLOUD_ACCESS_TOKEN',
+  'WHATSAPP_APP_SECRET',
+  'WHATSAPP_WEBHOOK_VERIFY_TOKEN',
+] as const;
+
 export const JWT_MIN_LENGTH_PRODUCTION = 32;
 
 const BOOL = ['true', 'false'];
@@ -102,6 +110,37 @@ export class EnvironmentVariables {
   REMINDER_OWNER_WHATSAPP?: string;
 
   @IsOptional()
+  @IsIn(['log', 'whatsapp_cloud'], {
+    message: 'MESSAGING_CHANNEL debe ser log o whatsapp_cloud',
+  })
+  MESSAGING_CHANNEL?: string;
+
+  @IsOptional()
+  @Matches(/^\d{5,20}$/, {
+    message:
+      'WHATSAPP_CLOUD_PHONE_NUMBER_ID debe ser el id numérico del número',
+  })
+  WHATSAPP_CLOUD_PHONE_NUMBER_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_CLOUD_ACCESS_TOKEN?: string;
+
+  @IsOptional()
+  @Matches(/^v\d{1,3}\.\d$/, {
+    message: 'WHATSAPP_CLOUD_API_VERSION debe tener la forma v21.0',
+  })
+  WHATSAPP_CLOUD_API_VERSION?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_APP_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'DB_PORT debe ser un número' })
   DB_PORT?: number;
@@ -142,6 +181,15 @@ export function envProblems(config: Record<string, unknown>): string[] {
   const problems: string[] = [];
   for (const key of ALWAYS_REQUIRED) {
     if (!(key in present)) problems.push(`Falta ${key}`);
+  }
+  if (present.MESSAGING_CHANNEL === 'whatsapp_cloud') {
+    for (const key of WHATSAPP_CLOUD_REQUIRED) {
+      if (!(key in present)) {
+        problems.push(
+          `Falta ${key} (obligatoria con MESSAGING_CHANNEL=whatsapp_cloud)`,
+        );
+      }
+    }
   }
   const production = present.NODE_ENV === 'production';
   if (production) {

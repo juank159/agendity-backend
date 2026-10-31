@@ -9,6 +9,9 @@ import {
   Min,
   IsBoolean,
   IsEnum,
+  IsInt,
+  Max,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -111,6 +114,20 @@ export class CreateServiceDto {
   @IsOptional()
   @IsBoolean()
   onlineBooking?: boolean;
+
+  @ApiProperty({
+    description:
+      'Días después de una cita completada para el recordatorio de mantenimiento (Fase 11). null = sin mantenimiento',
+    example: 30,
+    required: false,
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt({ message: 'maintenanceDays debe ser un número entero de días' })
+  @Min(1, { message: 'maintenanceDays debe ser al menos 1' })
+  @Max(365, { message: 'maintenanceDays admite hasta 365' })
+  maintenanceDays?: number | null;
 
   @ApiProperty({
     description: 'URL de la imagen representativa del servicio',

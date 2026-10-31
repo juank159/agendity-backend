@@ -29,6 +29,10 @@ const PUBLIC_ROUTES = new Set<string>([
   'POST /api/auth/forgot-password',
   'POST /api/auth/reset-password',
   'POST /api/webhooks/wompi',
+  // WhatsApp Cloud API (Fase 11): GET = verificación con token; POST = firma
+  // X-Hub-Signature-256 (test/reminders.e2e-spec.ts).
+  'GET /api/webhooks/whatsapp',
+  'POST /api/webhooks/whatsapp',
   // Agenda pública por link (9.01, D-17): por slug, con throttle por IP.
   'GET /api/public/businesses/{slug}',
   'GET /api/public/businesses/{slug}/services',

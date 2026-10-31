@@ -88,6 +88,20 @@ export class Client {
   @Column('boolean', { default: false })
   showNotes: boolean;
 
+  /**
+   * Consentimiento para recibir WhatsApp automáticos (Fase 11, Ley 1581): sin
+   * él no se envía marketing. La baja ("STOP"/"BAJA" o desde la app) lo pone
+   * en `false` y fecha `whatsapp_opt_out_at`.
+   */
+  @Column('boolean', { default: false })
+  whatsapp_opt_in: boolean;
+
+  @Column('timestamptz', { nullable: true })
+  whatsapp_opt_in_at: Date | null;
+
+  @Column('timestamptz', { nullable: true })
+  whatsapp_opt_out_at: Date | null;
+
   @CreateDateColumn({
     type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',

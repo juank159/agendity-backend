@@ -39,6 +39,10 @@ export class SubscriptionPlan {
   @Column({ type: 'integer', nullable: false, default: -1 })
   appointment_limit: number; // -1 significa ilimitado
 
+  /** Mensajes de WhatsApp automáticos al mes (Fase 11, D-20). 0 = ninguno, -1 = ilimitado. */
+  @Column({ type: 'integer', nullable: false, default: 0 })
+  whatsapp_monthly_quota: number;
+
   @Column({ type: 'varchar', nullable: true })
   wompi_price_id: string;
 

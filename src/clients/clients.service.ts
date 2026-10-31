@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, QueryFailedError, Repository } from 'typeorm';
+import { consentChange } from './whatsapp-consent';
 import { Client } from './entities/client.entity';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -165,6 +166,7 @@ export class ClientsService {
         birthday: await this.birthdayOf(createClientDto.birthday, tenantId),
         isFromDevice: options.fromDevice === true,
         isActive: true,
+        ...consentChange(null, createClientDto.whatsapp_opt_in),
       } as Client);
 
       return await this.clientRepository.save(client);
@@ -393,6 +395,7 @@ export class ClientsService {
       notes: dto.notes ?? null,
       birthday: await this.birthdayOf(dto.birthday, tenantId),
       isActive: true,
+      ...consentChange(null, dto.whatsapp_opt_in),
     });
     return manager.save(Client, client);
   }
@@ -478,6 +481,9 @@ export class ClientsService {
           : {}),
         // Asegurarse de que la imagen se actualice
         image: updateClientDto.image || currentClient.image,
+        // Consentimiento de WhatsApp con su fecha (Fase 11).
+        whatsapp_opt_in: currentClient.whatsapp_opt_in,
+        ...consentChange(currentClient, updateClientDto.whatsapp_opt_in),
       });
 
       return await this.clientRepository.save(updatedClient);

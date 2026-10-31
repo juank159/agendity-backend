@@ -6,6 +6,8 @@ import {
 } from '../common/utils/date.util';
 import { requestTimeZoneMiddleware } from '../common/context/request-time-zone';
 import { setupBookingPage } from '../web/booking-page';
+import { json } from 'express';
+import { WHATSAPP_WEBHOOK_PATH } from '../reminders/whatsapp-webhook.controller';
 
 /**
  * Configuración HTTP común de la app (prefijo, validación, fechas y Swagger).
@@ -37,6 +39,20 @@ export function setupApp(app: INestApplication): OpenAPIObject {
   // `TenantTimeZoneInterceptor` fija la zona; sin sesión, UTC.
   app.use(requestTimeZoneMiddleware);
   express.set('json replacer', businessJsonReplacer);
+
+  // Webhook de WhatsApp (Fase 11): Meta firma el cuerpo CRUDO, así que esta
+  // ruta guarda los bytes en `req.rawBody` antes del parser JSON de Nest. Va
+  // envuelto en una función con nombre propio: si la capa se llamara
+  // `jsonParser`, Nest creería que ya hay parser global y no pondría el suyo.
+  const whatsappJson = json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  });
+  app.use(WHATSAPP_WEBHOOK_PATH, function whatsappRawBody(req, res, next) {
+    whatsappJson(req, res, next);
+  });
 
   // Página web de reservas (9.02): `/reservar/:slug`, fuera de `/api`.
   setupBookingPage(app);

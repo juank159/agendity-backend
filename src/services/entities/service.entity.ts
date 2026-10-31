@@ -151,6 +151,14 @@ export class Service {
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 
+  /**
+   * Días después de una cita completada para el recordatorio de
+   * mantenimiento (Fase 11, p. ej. uñas a los 30). `null` = sin mantenimiento.
+   */
+  @ApiProperty({ required: false, nullable: true, example: 30 })
+  @Column({ name: 'maintenance_days', type: 'int', nullable: true })
+  maintenanceDays: number | null;
+
   @ApiProperty({
     description: 'Información completa de la categoría',
     type: () => Category,

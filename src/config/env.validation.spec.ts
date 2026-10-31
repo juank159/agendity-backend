@@ -24,6 +24,28 @@ const PRODUCTION = {
 };
 
 describe('validación del .env (D.02)', () => {
+  it('Fase 11: MESSAGING_CHANNEL=whatsapp_cloud exige las claves de Meta (solo nombres)', () => {
+    expect(envProblems({ ...BASE, MESSAGING_CHANNEL: 'log' })).toEqual([]);
+    expect(envProblems({ ...BASE, MESSAGING_CHANNEL: 'sms' })).toEqual([
+      'MESSAGING_CHANNEL debe ser log o whatsapp_cloud',
+    ]);
+    const problems = envProblems({
+      ...BASE,
+      MESSAGING_CHANNEL: 'whatsapp_cloud',
+      WHATSAPP_CLOUD_ACCESS_TOKEN: 'token-secreto',
+      WHATSAPP_CLOUD_API_VERSION: '21',
+    });
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        'Falta WHATSAPP_CLOUD_PHONE_NUMBER_ID (obligatoria con MESSAGING_CHANNEL=whatsapp_cloud)',
+        'Falta WHATSAPP_APP_SECRET (obligatoria con MESSAGING_CHANNEL=whatsapp_cloud)',
+        'Falta WHATSAPP_WEBHOOK_VERIFY_TOKEN (obligatoria con MESSAGING_CHANNEL=whatsapp_cloud)',
+        'WHATSAPP_CLOUD_API_VERSION debe tener la forma v21.0',
+      ]),
+    );
+    expect(problems.join(' ')).not.toContain('token-secreto');
+  });
+
   it('desarrollo: con BD y JWT basta', () => {
     expect(envProblems(BASE)).toEqual([]);
     expect(validateEnv(BASE)).toBe(BASE);

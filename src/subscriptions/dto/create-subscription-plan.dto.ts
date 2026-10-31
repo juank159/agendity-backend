@@ -44,6 +44,12 @@ export class CreateSubscriptionPlanDto {
   @Min(-1)
   appointment_limit: number;
 
+  /** Mensajes de WhatsApp automáticos al mes (Fase 11); 0 = ninguno, -1 = ilimitado. */
+  @IsOptional()
+  @IsInt()
+  @Min(-1)
+  whatsapp_monthly_quota?: number;
+
   @IsString()
   @IsOptional()
   wompi_price_id?: string;
