@@ -361,11 +361,13 @@ export class SyncPushService {
 
     // Idempotencia: la misma mutación devuelve lo mismo.
     const [stored] = await this.dataSource.query(
-      `SELECT tenant_id, status, result FROM sync_mutations WHERE mutation_id = $1`,
+      `SELECT tenant_id, user_id, status, result FROM sync_mutations WHERE mutation_id = $1`,
       [mutation.mutation_id],
     );
     if (stored) {
-      if (stored.tenant_id !== tenantId) {
+      // Solo el mismo negocio Y el mismo usuario reciben el resultado
+      // guardado; a cualquier otro, un rechazo genérico (nunca datos ajenos).
+      if (stored.tenant_id !== tenantId || stored.user_id !== user.id) {
         return {
           ...base,
           status: 'rejected',

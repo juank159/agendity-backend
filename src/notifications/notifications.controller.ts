@@ -4,7 +4,6 @@ import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
-import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { Notification, ReceiverType } from './entities/notification.entity';
 import { Tenant } from '../common/decorators/tenant.decorator';
 

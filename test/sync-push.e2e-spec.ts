@@ -580,6 +580,22 @@ describeWritable(
       expect(first.map((r) => r.status)).toEqual(['applied', 'applied']);
     });
 
+    it('un mutation_id ya usado por otro usuario u otro negocio: rechazo genérico, sin su resultado', async () => {
+      const mutation = m('client.update', clientId, { notes: 'del Owner' });
+      const [mine] = await push(ownerToken, [mutation]);
+      expect(mine.status).toBe('applied');
+      for (const token of [employeeToken, otherToken]) {
+        const [theirs] = await push(token, [mutation]);
+        expect(theirs).toEqual({
+          mutation_id: mutation.mutation_id,
+          entity_id: clientId,
+          status: 'rejected',
+          code: 'CONFLICT',
+          message: 'mutation_id ya usado',
+        });
+      }
+    });
+
     it('dos dispositivos, uno sin conexión: nada se pierde (conteo por id) y los dos convergen', async () => {
       // B (la empleada) sigue en línea y agenda.
       const online = await newAppointment(

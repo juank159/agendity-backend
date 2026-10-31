@@ -15,17 +15,21 @@ const CLIENT = 'c0000000-0000-4000-8000-000000000001';
 function build(clients: Record<string, jest.Mock> = {}) {
   const stored = new Map<string, any>();
   const query = jest.fn(async (sql: string, params: any[]) => {
-    if (sql.startsWith('SELECT tenant_id, status, result')) {
+    if (sql.startsWith('SELECT tenant_id, user_id, status, result')) {
       const row = stored.get(params[0]);
       return row ? [row] : [];
     }
     if (sql.includes('INSERT INTO sync_mutations')) {
-      stored.set(params[0], { tenant_id: params[1], status: 'pending' });
+      stored.set(params[0], {
+        tenant_id: params[1],
+        user_id: params[2],
+        status: 'pending',
+      });
       return [{ mutation_id: params[0] }];
     }
     if (sql.startsWith('UPDATE sync_mutations')) {
       stored.set(params[0], {
-        tenant_id: 'owner',
+        ...stored.get(params[0]),
         status: params[1],
         result: JSON.parse(params[2]),
       });
@@ -130,5 +134,27 @@ describe('SyncPushService (10.01b)', () => {
     const { results } = await service.push(OWNER, { mutations: [one] } as any);
     expect(results[0].status).toBe('retry');
     expect(stored.has(one.mutation_id)).toBe(false);
+  });
+
+  it('un mutation_id de otro usuario o de otro negocio: rechazo genérico, nunca su resultado', async () => {
+    const { service } = build();
+    const same = mutation();
+    const first = await service.push(OWNER, { mutations: [same] } as any);
+    expect(first.results[0].status).toBe('applied');
+    for (const other of [
+      { ...EMPLOYEE }, // mismo negocio, otro usuario
+      { ...OWNER, id: 'otro', tenantId: 'otro-negocio' },
+    ]) {
+      const { results } = await service.push(other, {
+        mutations: [same],
+      } as any);
+      expect(results[0]).toEqual({
+        mutation_id: same.mutation_id,
+        entity_id: same.entity_id,
+        status: 'rejected',
+        code: 'CONFLICT',
+        message: 'mutation_id ya usado',
+      });
+    }
   });
 });

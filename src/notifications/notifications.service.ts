@@ -8,7 +8,6 @@ import { isUUID } from 'class-validator';
 import { Repository } from 'typeorm';
 import { Notification, ReceiverType } from './entities/notification.entity';
 import { CreateNotificationDto } from './dto/create-notification.dto';
-import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { Client } from '../clients/entities/client.entity';
 import { User } from '../users/entities/user.entity';
 import { assertUserInTenant } from '../users/user-access';
@@ -133,16 +132,6 @@ export class NotificationsService {
       { receiver_id: receiverId, receiver_type: receiverType, read: false },
       { read: true },
     );
-  }
-
-  async update(
-    id: string,
-    updateNotificationDto: UpdateNotificationDto,
-    tenantId: string,
-  ): Promise<Notification> {
-    const notification = await this.findOne(id, tenantId);
-    Object.assign(notification, updateNotificationDto);
-    return await this.notificationRepository.save(notification);
   }
 
   async remove(id: string, tenantId: string): Promise<void> {
