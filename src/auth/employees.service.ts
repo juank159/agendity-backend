@@ -15,6 +15,8 @@ import {
 import { User } from 'src/users/entities/user.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { percentToDecimal } from 'src/appointments/appointment-commission';
+import { assertTenantRefs } from 'src/common/utils/tenant-refs';
+import { Service } from 'src/services/entities/service.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { BusinessException } from 'src/common/exceptions/business.exception';
@@ -102,6 +104,15 @@ export class EmployeesService {
         await manager.save(newEmployee);
 
         if (services && services.length > 0) {
+          // Auditoría 2026-11-01: cada servicio debe ser del negocio (antes
+          // se podía asignar uno de otro negocio y ver sus datos).
+          await assertTenantRefs(
+            manager,
+            Service,
+            services.map((service) => service.serviceId),
+            owner.tenantId,
+            { message: 'Uno o más servicios no encontrados' },
+          );
           await manager.save(
             userServiceRows(manager, newEmployee.id, services),
           );
@@ -259,6 +270,14 @@ export class EmployeesService {
 
         // Servicios: si llegan, sustituyen a los anteriores.
         if (updateData.services && Array.isArray(updateData.services)) {
+          // Auditoría 2026-11-01: cada servicio debe ser del negocio.
+          await assertTenantRefs(
+            manager,
+            Service,
+            updateData.services.map((service) => service.serviceId),
+            ownerId,
+            { message: 'Uno o más servicios no encontrados' },
+          );
           await manager.delete(UserService, { userId: employeeId });
 
           if (updateData.services.length > 0) {

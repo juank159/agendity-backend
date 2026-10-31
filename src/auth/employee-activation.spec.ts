@@ -130,6 +130,10 @@ describe('Los empleados nacen inactivos hasta verificar el email (2.16)', () => 
         ...saved[0],
         roles: [{ name: 'Employee' }],
       })),
+      // Servicios del negocio (auditoría 2026-11-01: se comprueban antes).
+      getRepository: () => ({
+        count: jest.fn(async ({ where }) => where.id.value.length),
+      }),
     };
     const userRepository = { findOne: jest.fn().mockResolvedValue(null) };
     const roleRepository = {
