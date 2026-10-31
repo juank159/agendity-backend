@@ -113,3 +113,19 @@ export function canBeScheduled(
   if (!user?.isActive || user.deletedAt) return false;
   return user.id === tenantId || user.is_email_verified === true;
 }
+
+/**
+ * Lecturas de la agenda de un profesional (horarios, servicios asignados):
+ * una empleada solo ve las suyas (2026-10-31). `ownProfessionalId` = id de la
+ * empleada que llama (`undefined` para el Owner). Ajena → 404, como cualquier
+ * recurso que no es tuyo.
+ */
+export function assertOwnProfessional(
+  ownProfessionalId: string | undefined,
+  professionalId: string,
+  message = 'Usuario no encontrado',
+): void {
+  if (ownProfessionalId && ownProfessionalId !== professionalId) {
+    throw new NotFoundException(message);
+  }
+}

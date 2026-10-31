@@ -1670,3 +1670,60 @@ describe('AppointmentsService: comisión congelada en la cita (8.02)', () => {
     );
   });
 });
+
+describe('AppointmentsService: servicio desactivado (2026-10-31)', () => {
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  it('no se agenda ni da horas libres: 409 SERVICE_INACTIVE', async () => {
+    const { service, services, txRepo } = build();
+    services.findOne.mockResolvedValue({
+      id: SERVICE,
+      name: 'Cejas',
+      price: '10',
+      duration: 30,
+      isActive: false,
+    });
+    const error = await service.create(dto, TENANT).catch((e) => e);
+    expect(error.getResponse()).toMatchObject({ code: 'SERVICE_INACTIVE' });
+    expect(txRepo.save).not.toHaveBeenCalled();
+    const slots = await service
+      .findAvailableSlots(
+        {
+          professionalId: EMPLOYEE,
+          date: '2030-01-07',
+          serviceIds: [SERVICE],
+          stepMinutes: 30,
+        },
+        TENANT,
+      )
+      .catch((e) => e);
+    expect(slots.getResponse()).toMatchObject({ code: 'SERVICE_INACTIVE' });
+  });
+
+  it('una cita que ya lo tenía puede reenviarlo al editarla', async () => {
+    const { service, services, repo, txRepo } = build();
+    services.findOne.mockResolvedValue({
+      id: SERVICE,
+      name: 'Cejas',
+      price: '10',
+      duration: 30,
+      isActive: false,
+    });
+    repo.findOne.mockResolvedValue({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+      date: new Date('2030-01-01T10:00:00-05:00'),
+      timezone: BOGOTA,
+      status: AppointmentStatus.PENDING,
+      services: [{ id: SERVICE, duration: 30 }],
+    });
+    await service.update(
+      'cita-1',
+      { service_ids: [SERVICE], notes: 'x' } as any,
+      TENANT,
+    );
+    expect(txRepo.save).toHaveBeenCalled();
+  });
+});

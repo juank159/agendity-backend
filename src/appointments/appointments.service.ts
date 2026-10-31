@@ -438,12 +438,31 @@ export class AppointmentsService {
     );
   }
 
-  private async loadTenantServices(serviceIds: string[], tenantId: string) {
+  /**
+   * Servicios del negocio por id (404 si alguno no es del negocio). Un
+   * servicio desactivado no se puede agendar (2026-10-31): 409
+   * `SERVICE_INACTIVE`, salvo los de `keep` (los que la cita ya tenía: sus
+   * citas no cambian).
+   */
+  private async loadTenantServices(
+    serviceIds: string[],
+    tenantId: string,
+    keep: ReadonlySet<string> = new Set(),
+  ) {
     const services = await Promise.all(
       serviceIds.map((id) => this.servicesService.findOne(id, tenantId)),
     );
     if (services.some((service) => !service)) {
       throw new NotFoundException('Uno o más servicios no encontrados');
+    }
+    const inactive = services.find(
+      (service) => service.isActive === false && !keep.has(service.id),
+    );
+    if (inactive) {
+      throw new BusinessException(
+        ErrorCode.SERVICE_INACTIVE,
+        `El servicio "${inactive.name}" no está disponible`,
+      );
     }
     return services;
   }
@@ -813,6 +832,7 @@ export class AppointmentsService {
         ? await this.loadTenantServices(
             updateAppointmentDto.service_ids,
             tenantId,
+            new Set((appointment.services ?? []).map((service) => service.id)),
           )
         : undefined;
 

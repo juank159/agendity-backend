@@ -1,3 +1,4 @@
+import { assertOwnProfessional } from '../users/user-access';
 import {
   Injectable,
   NotFoundException,
@@ -133,7 +134,12 @@ export class SchedulesService {
     });
   }
 
-  async findByUser(userId: string, tenantId: string): Promise<Schedule[]> {
+  async findByUser(
+    userId: string,
+    tenantId: string,
+    ownProfessionalId?: string,
+  ): Promise<Schedule[]> {
+    assertOwnProfessional(ownProfessionalId, userId);
     await this.usersService.findTenantMember(userId, tenantId);
     return await this.scheduleRepository.find({
       where: { user: { id: userId } },
@@ -141,7 +147,11 @@ export class SchedulesService {
     });
   }
 
-  async findOne(id: string, tenantId: string): Promise<Schedule> {
+  async findOne(
+    id: string,
+    tenantId: string,
+    ownProfessionalId?: string,
+  ): Promise<Schedule> {
     const schedule = await this.scheduleRepository.findOne({
       where: this.tenantWhere(tenantId, { id }),
       relations: ['user'],
@@ -150,6 +160,12 @@ export class SchedulesService {
     if (!schedule) {
       throw new NotFoundException(`Horario con ID ${id} no encontrado`);
     }
+    // Una empleada solo lee sus horarios (2026-10-31).
+    assertOwnProfessional(
+      ownProfessionalId,
+      schedule.user?.id,
+      `Horario con ID ${id} no encontrado`,
+    );
 
     return schedule;
   }

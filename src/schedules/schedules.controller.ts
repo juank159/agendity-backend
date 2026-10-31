@@ -13,6 +13,8 @@ import { hasRoles } from '../auth/jwt/has.roles';
 import { JwtRoles } from '../auth/jwt/jwt.role';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SchedulesService } from './schedules.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthUser, isOnlyEmployee } from '../auth/interfaces';
 import {
   CreateScheduleBatchItemDto,
   CreateScheduleDto,
@@ -86,8 +88,17 @@ export class SchedulesController {
     description: 'Horarios del profesional',
     type: [Schedule],
   })
-  findByUser(@Param('userId') userId: string, @Tenant() tenantId: string) {
-    return this.schedulesService.findByUser(userId, tenantId);
+  findByUser(
+    @Param('userId') userId: string,
+    @Tenant() tenantId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // Una empleada solo lee el suyo (otra → 404).
+    return this.schedulesService.findByUser(
+      userId,
+      tenantId,
+      isOnlyEmployee(user) ? user.id : undefined,
+    );
   }
 
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)
@@ -98,8 +109,16 @@ export class SchedulesController {
     description: 'Horario encontrado',
     type: Schedule,
   })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @Tenant() tenantId: string) {
-    return this.schedulesService.findOne(id, tenantId);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Tenant() tenantId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.schedulesService.findOne(
+      id,
+      tenantId,
+      isOnlyEmployee(user) ? user.id : undefined,
+    );
   }
 
   @hasRoles(JwtRoles.Owner)

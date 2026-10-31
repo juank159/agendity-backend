@@ -14,6 +14,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { UserServicesService } from './user-services.service';
 import { AssignServiceDto } from './dto/assign-service.dto';
 import { UserService } from './entities/user-service.entity';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthUser, isOnlyEmployee } from '../auth/interfaces';
 import { Tenant } from '../common/decorators/tenant.decorator';
 
 @ApiTags('Servicios de Usuario')
@@ -116,8 +118,14 @@ export class UserServicesController {
   getUserServices(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Tenant() tenantId: string,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.userServicesService.getUserServices(userId, tenantId);
+    // Una empleada solo lee los suyos (otra → 404).
+    return this.userServicesService.getUserServices(
+      userId,
+      tenantId,
+      isOnlyEmployee(user) ? user.id : undefined,
+    );
   }
 
   @hasRoles(JwtRoles.Owner)

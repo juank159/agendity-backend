@@ -7,6 +7,7 @@ import { Service } from '../services/entities/service.entity';
 import { effectiveCommission } from '../appointments/appointment-commission';
 import { User } from '../users/entities/user.entity';
 import { UserService } from './entities/user-service.entity';
+import { assertOwnProfessional } from '../users/user-access';
 import { AssignServiceDto } from './dto/assign-service.dto';
 import { UsersService } from '../users/users.service';
 import { ServicesService } from '../services/services.service';
@@ -175,7 +176,9 @@ export class UserServicesService {
   async getUserServices(
     userId: string,
     tenantId: string,
+    ownProfessionalId?: string,
   ): Promise<UserService[]> {
+    assertOwnProfessional(ownProfessionalId, userId);
     await this.usersService.findTenantMember(userId, tenantId);
 
     return this.userServiceRepository.find({
