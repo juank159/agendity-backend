@@ -1,6 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AuthUser, isOnlyEmployee } from '../auth/interfaces';
+import { tenantIdFrom } from '../common/decorators/tenant.decorator';
+import { Service } from '../services/entities/service.entity';
+import { effectiveCommission } from '../appointments/appointment-commission';
+import { User } from '../users/entities/user.entity';
 import { UserService } from './entities/user-service.entity';
 import { AssignServiceDto } from './dto/assign-service.dto';
 import { UsersService } from '../users/users.service';
@@ -107,6 +112,66 @@ export class UserServicesService {
     return result;
   }
 
+  /**
+   * Servicios que puede atender quien llama (`GET /auth/me/services`):
+   * - Employee: los suyos, asignados y activos (y el servicio activo), con el
+   *   % de comisión efectivo (su excepción, o su general). Nunca los de otros.
+   * - Owner: todos los servicios activos del negocio (los hace todos, 7.03).
+   * `price` y `duration` son los del catálogo: es lo que cobra la cita
+   * (`priceLinesFor`; `customPrice` no se usa en ningún cálculo).
+   */
+  async findMine(user: AuthUser): Promise<MyService[]> {
+    const tenantId = tenantIdFrom(user);
+    const shape = (service: Service, commission: string | null) => ({
+      id: service.id,
+      name: service.name,
+      duration: service.duration,
+      price: Number(service.price),
+      color: service.color,
+      category: service.category
+        ? { id: service.category.id, name: service.category.name }
+        : null,
+      commission_percentage: commission === null ? null : Number(commission),
+    });
+
+    if (!isOnlyEmployee(user)) {
+      const services = await this.userServiceRepository.manager
+        .getRepository(Service)
+        .find({
+          where: { ownerId: tenantId, isActive: true },
+          relations: { category: true },
+          order: { name: 'ASC' },
+        });
+      return services.map((service) => shape(service, null));
+    }
+
+    const [assignments, me] = await Promise.all([
+      this.userServiceRepository.find({
+        where: {
+          userId: user.id,
+          isActive: true,
+          service: { ownerId: tenantId, isActive: true },
+        },
+        relations: { service: { category: true } },
+      }),
+      this.userServiceRepository.manager.getRepository(User).findOne({
+        where: { id: user.id },
+        select: { id: true, commission_percentage: true },
+      }),
+    ]);
+    return assignments
+      .map((row) =>
+        shape(
+          row.service,
+          effectiveCommission(
+            row.commissionPercentage,
+            me?.commission_percentage,
+          ),
+        ),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   async getUserServices(
     userId: string,
     tenantId: string,
@@ -128,4 +193,16 @@ export class UserServicesService {
     const userService = await this.findUserService(userId, serviceId);
     await this.userServiceRepository.remove(userService);
   }
+}
+
+/** Un servicio de `GET /auth/me/services`. */
+export interface MyService {
+  id: string;
+  name: string;
+  duration: number;
+  price: number;
+  color: string;
+  category: { id: string; name: string } | null;
+  /** % de comisión efectivo del Employee en ese servicio; `null` para el Owner. */
+  commission_percentage: number | null;
 }
