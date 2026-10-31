@@ -23,6 +23,17 @@ export interface SyncChangesPage {
   /** Pásalo en la siguiente petición. `"0"` = carga inicial. */
   cursor: string;
   has_more: boolean;
+  /**
+   * UUID propio de esta base (`sync_meta`). Si cambia, el servidor es otro o
+   * se restauró un respaldo: la app debe descartar su cursor y bajar todo.
+   */
+  epoch: string;
+  /**
+   * Versión actual del negocio (`"0"` si aún no tiene cambios). Se lee después
+   * de la página, así que nunca es menor que su `cursor`. Si el cursor que
+   * guarda la app es mayor que `head`, la base retrocedió: bajar todo.
+   */
+  head: string;
 }
 
 export const SYNC_PAGE = { default: 500, max: 1000 } as const;
@@ -76,10 +87,24 @@ export class SyncService {
         });
       }
     }
+    const [meta] = await this.dataSource.query(
+      `SELECT (SELECT value FROM sync_meta WHERE key = 'epoch') AS epoch,
+              COALESCE((SELECT version FROM sync_tenant_version
+                         WHERE tenant_id = $1), 0)::text AS head`,
+      [viewer.tenantId],
+    );
+    if (!meta?.epoch) {
+      // Sin la migración SyncMeta la app no podría detectar una restauración.
+      throw new Error(
+        'sync_meta sin epoch: falta aplicar la migración SyncMeta',
+      );
+    }
     return {
       changes,
       cursor: page.length ? String(page[page.length - 1].version) : cursor,
       has_more: rows.length > limit,
+      epoch: meta.epoch,
+      head: String(meta.head),
     };
   }
 

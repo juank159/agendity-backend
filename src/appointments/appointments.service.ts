@@ -331,7 +331,11 @@ export class AppointmentsService {
 
       // La respuesta lleva los servicios como siempre, con su precio en la cita.
       savedAppointment.services = services.map((service, i) =>
-        withAppointmentPrice(service, priceLines[i].price),
+        withAppointmentPrice(
+          service,
+          priceLines[i].price,
+          commissions.get(service.id) ?? null,
+        ),
       );
 
       // Emitir el evento después de guardar la cita

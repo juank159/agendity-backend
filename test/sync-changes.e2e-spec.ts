@@ -110,7 +110,8 @@ describeWritable(
       });
       employeeId = emp.body.user.id;
       await ds.query(
-        `UPDATE users SET is_email_verified = true, "isActive" = true WHERE id = $1`,
+        `UPDATE users SET is_email_verified = true, "isActive" = true,
+                commission_percentage = 40 WHERE id = $1`,
         [employeeId],
       );
       await as(http.post(`/api/users/${employeeId}/services/batch`)).send([
@@ -200,6 +201,11 @@ describeWritable(
         date: `${MONDAY}T10:00:00`,
       });
       expect(mine.status).toBe(201);
+      // La línea lleva su comisión congelada (la app no la adivina).
+      expect(mine.body.services[0]).toMatchObject({
+        appointment_price: '30000.00',
+        appointment_commission_percentage: '40.00',
+      });
       const ownerOnly = await as(http.post('/api/appointments')).send({
         client_id: clientId,
         professional_id: ownerId,
@@ -222,7 +228,10 @@ describeWritable(
       expect(appointmentIds).not.toContain(ownerOnly.body.id);
       expect(emp.changes.some((c) => c.entity === 'payments')).toBe(false);
       const appt = emp.changes.find((c) => c.id === mine.body.id);
-      expect(appt.data.services[0]).toMatchObject({ id: serviceId });
+      expect(appt.data.services[0]).toMatchObject({
+        id: serviceId,
+        appointment_commission_percentage: '40.00',
+      });
       // Fechas con el offset de la zona de la cita.
       expect(appt.data.date).toBe(`${MONDAY}T10:00:00.000-05:00`);
       employeeCursor = emp.cursor;
@@ -282,6 +291,40 @@ describeWritable(
         [serviceId, extra.body.id].sort(),
       );
       ownerCursor = cursor;
+    });
+
+    it('epoch (de la base) y head (versión del negocio): la app detecta otro servidor o una restauración', async () => {
+      const get = (token: string, cursor: string) =>
+        http.get(`/api/sync/changes?cursor=${cursor}&limit=2`).set(auth(token));
+      const first = await get(ownerToken, '0');
+      expect(first.body.epoch).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
+      const [{ value }] = await ds.query(
+        `SELECT value FROM sync_meta WHERE key = 'epoch'`,
+      );
+      expect(first.body.epoch).toBe(value);
+      // head ≥ cursor de la página; al terminar de bajar, cursor = head.
+      expect(BigInt(first.body.head)).toBeGreaterThanOrEqual(
+        BigInt(first.body.cursor),
+      );
+      const done = await pull(ownerToken, '0');
+      const last = await get(ownerToken, done.cursor);
+      expect(last.body).toMatchObject({
+        changes: [],
+        cursor: done.cursor,
+        has_more: false,
+        head: done.cursor,
+        epoch: value,
+      });
+      // Mismo epoch para otro negocio y para el Employee; head es de cada negocio.
+      const other = await get(otherToken, '0');
+      expect(other.body.epoch).toBe(value);
+      const otherDone = await pull(otherToken, '0');
+      expect((await get(otherToken, otherDone.cursor)).body.head).toBe(
+        otherDone.cursor,
+      );
+      expect((await get(employeeToken, '0')).body.epoch).toBe(value);
     });
 
     it('aislamiento: los cambios de otro negocio no llegan', async () => {

@@ -92,7 +92,7 @@ export class PaymentStatsService {
           FROM payments p
           JOIN appointments a ON a.id = p."appointmentId"
          WHERE p.owner_id = $1
-           AND p.status = 'COMPLETED'
+           AND p.status = 'COMPLETED' AND p.review_required IS NULL
            AND p.created_at BETWEEN $2 AND $3
            ${professionalId ? 'AND a.professional_id = $4' : ''}
          GROUP BY p."appointmentId"
@@ -143,6 +143,8 @@ export class PaymentStatsService {
       const result = await this.paymentRepository
         .createQueryBuilder('payment')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
+        // 10.01b: un pago en revisión no cuenta hasta resolverlo.
+        .andWhere('payment.reviewRequired IS NULL')
         .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere(
           'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
@@ -191,6 +193,8 @@ export class PaymentStatsService {
         .addSelect('COUNT(DISTINCT appointment.id)', 'appointment_count')
         .innerJoin('payment.appointment', 'appointment')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
+        // 10.01b: un pago en revisión no cuenta hasta resolverlo.
+        .andWhere('payment.reviewRequired IS NULL')
         .andWhere('appointment.professional_id = :professionalId', {
           professionalId,
         })
@@ -233,7 +237,7 @@ export class PaymentStatsService {
         FROM payments p
         JOIN appointments a ON p."appointmentId" = a.id
         WHERE p.owner_id = $1
-        AND p.status = 'COMPLETED'
+        AND p.status = 'COMPLETED' AND p.review_required IS NULL
         AND a."professional_id" = $2
         AND p.created_at BETWEEN $3 AND $4
         GROUP BY 1
@@ -322,7 +326,7 @@ export class PaymentStatsService {
         LEFT JOIN custom_payment_methods cpm
           ON cpm.id = p.custom_payment_method_id AND cpm.owner_id = p.owner_id
         WHERE p.owner_id = $1
-          AND p.status = 'COMPLETED'
+          AND p.status = 'COMPLETED' AND p.review_required IS NULL
           AND p.created_at BETWEEN $2 AND $3
         GROUP BY 1, 2, 3
         `,
@@ -529,6 +533,8 @@ export class PaymentStatsService {
         .innerJoin('payment.appointment', 'appointment')
         .innerJoin('appointment.professional', 'professional')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
+        // 10.01b: un pago en revisión no cuenta hasta resolverlo.
+        .andWhere('payment.reviewRequired IS NULL')
         .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere(
           'payment.created_at BETWEEN :startDate AND :adjustedEndDate',
@@ -599,6 +605,8 @@ export class PaymentStatsService {
         .innerJoin('payment.appointment', 'appointment')
         .innerJoin('appointment.client', 'client')
         .where('payment.status = :status', { status: PaymentStatus.COMPLETED })
+        // 10.01b: un pago en revisión no cuenta hasta resolverlo.
+        .andWhere('payment.reviewRequired IS NULL')
         .andWhere('payment.ownerId = :tenantId', { tenantId })
         .andWhere('payment.created_at BETWEEN :startDate AND :endDate', {
           startDate,
@@ -606,6 +614,8 @@ export class PaymentStatsService {
         })
         .groupBy('client.id, client.name, client.lastname')
         .orderBy('total_spent', 'DESC')
+        // Desempate estable por id: el LIMIT no elige al azar.
+        .addOrderBy('client.id', 'ASC')
         .limit(limit)
         .getRawMany();
 
@@ -674,10 +684,11 @@ export class PaymentStatsService {
         JOIN appointments a ON p."appointmentId" = a.id
         JOIN clients c ON a."clientId" = c.id
         WHERE p.owner_id = $1
-        AND p.status = 'COMPLETED'
+        AND p.status = 'COMPLETED' AND p.review_required IS NULL
         AND p.created_at BETWEEN $2 AND $3
         GROUP BY c.id, c.name, c.lastname
-        ORDER BY total_spent DESC
+        -- Desempate estable: a igual gasto, por id (el LIMIT no elige al azar).
+        ORDER BY total_spent DESC, c.id ASC
         LIMIT $4
       `,
         [

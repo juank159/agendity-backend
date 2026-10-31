@@ -54,7 +54,10 @@ describe('SyncService (10.01a)', () => {
     ];
     const find = jest.fn(async () => [{ id: 'c1', name: 'Ana' }]);
     const ds = {
-      query: jest.fn(async () => rows),
+      query: jest
+        .fn()
+        .mockResolvedValueOnce(rows)
+        .mockResolvedValueOnce([{ epoch: 'e-1', head: '9' }]),
       manager: { getRepository: () => ({ find }) },
     };
     const page = await new SyncService(ds as any).changes(owner, '4', 3);
@@ -71,7 +74,25 @@ describe('SyncService (10.01a)', () => {
       ],
       cursor: '7',
       has_more: true,
+      epoch: 'e-1',
+      head: '9',
     });
+    // epoch/head se leen DESPUÉS de la página y por el negocio del que pide.
+    expect(ds.query.mock.calls[1][0]).toContain('sync_meta');
+    expect(ds.query.mock.calls[1][1]).toEqual([owner.tenantId]);
+  });
+
+  it('sin la migración SyncMeta (no hay epoch) falla en vez de devolver uno vacío', async () => {
+    const ds = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ epoch: null, head: '0' }]),
+      manager: { getRepository: () => ({ find: jest.fn(async () => []) }) },
+    };
+    await expect(
+      new SyncService(ds as any).changes(owner, '0', 10),
+    ).rejects.toThrow(/SyncMeta/);
   });
 
   it('cursor inválido → 400', async () => {

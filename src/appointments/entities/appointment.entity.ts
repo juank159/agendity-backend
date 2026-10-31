@@ -25,14 +25,25 @@ import {
   AppointmentStatus,
 } from 'src/common/enums/status.enum';
 
-/** Un servicio en la respuesta de una cita, con el precio cobrado en ella. */
-export type AppointmentServiceView = Service & { appointment_price: string };
+/**
+ * Un servicio en la respuesta de una cita, con el precio cobrado en ella y el
+ * % de comisión congelado en su línea (8.02; expuesto desde 2026-11-01 para
+ * que la app no lo adivine).
+ */
+export type AppointmentServiceView = Service & {
+  appointment_price: string;
+  appointment_commission_percentage: string | null;
+};
 
 export function withAppointmentPrice(
   service: Service,
   price: string,
+  commissionPercentage: string | null = null,
 ): AppointmentServiceView {
-  return Object.assign(service, { appointment_price: price });
+  return Object.assign(service, {
+    appointment_price: price,
+    appointment_commission_percentage: commissionPercentage,
+  });
 }
 
 @Entity('appointments')
@@ -93,7 +104,11 @@ export class Appointment {
   exposeServices(): void {
     if (this.serviceLines?.every((line) => line.service)) {
       this.services = this.serviceLines.map((line) =>
-        withAppointmentPrice(line.service, line.price),
+        withAppointmentPrice(
+          line.service,
+          line.price,
+          line.commissionPercentage ?? null,
+        ),
       );
     }
   }
