@@ -144,6 +144,9 @@ export class ClientsService {
   async create(
     createClientDto: CreateClientDto,
     tenantId: string,
+    // Importado de los contactos del teléfono (como `importBatch`): lo usa
+    // `client.import` de la sincronización (10.02a).
+    options: { fromDevice?: boolean } = {},
   ): Promise<Client> {
     try {
       await this.validateUniqueFields(createClientDto, tenantId);
@@ -160,7 +163,7 @@ export class ClientsService {
         showNotes: createClientDto.showNotes ?? false, // Valor por defecto para nuevos campos
         notes: createClientDto.notes ?? null,
         birthday: await this.birthdayOf(createClientDto.birthday, tenantId),
-        isFromDevice: false,
+        isFromDevice: options.fromDevice === true,
         isActive: true,
       } as Client);
 
@@ -338,6 +341,11 @@ export class ClientsService {
               });
             }
           } catch (error) {
+            // Id de la app ya usado (10.01b): se rechaza esa fila, no el lote.
+            if (error instanceof BusinessException) {
+              errors.push({ data: dto, error: error.message });
+              continue;
+            }
             if (!(error instanceof QueryFailedError)) throw error;
             errors.push({ data: dto, error: this.importRowError(error, dto) });
           }
@@ -373,6 +381,9 @@ export class ClientsService {
       where: { phone: dto.phone, ownerId: tenantId },
     });
     if (existing) return null;
+    // Un id de la app (10.01b) nunca puede pisar un cliente que ya existe
+    // (`save()` con un id existente lo ACTUALIZARÍA, aunque fuera de otro negocio).
+    await assertClientIdFree(manager, Client, dto.id);
 
     const client = manager.create(Client, {
       ...dto,

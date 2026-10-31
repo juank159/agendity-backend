@@ -270,6 +270,69 @@ describeWritable(
       expect(row).toEqual({ lastname: 'Desde el móvil', phone: newPhone });
     });
 
+    it('client.import: contacto importado sin conexión queda isFromDevice y sale en "Importados"; client.create no', async () => {
+      const imported = randomUUID();
+      const manual = randomUUID();
+      const results = await push(employeeToken, [
+        m('client.import', imported, {
+          name: 'Contacto',
+          lastname: 'Del teléfono',
+          phone: phone(),
+          deviceContactId: 'contact-42',
+        }),
+        m('client.create', manual, {
+          name: 'Manual',
+          lastname: 'Sin red',
+          phone: phone(),
+        }),
+      ]);
+      expect(results.map((r) => r.status)).toEqual(['applied', 'applied']);
+      const rows = await ds.query(
+        `SELECT id, "isFromDevice", "deviceContactId" FROM clients WHERE id = ANY($1::uuid[])`,
+        [[imported, manual]],
+      );
+      const byId = Object.fromEntries(rows.map((r: any) => [r.id, r]));
+      expect(byId[imported]).toMatchObject({
+        isFromDevice: true,
+        deviceContactId: 'contact-42',
+      });
+      expect(byId[manual].isFromDevice).toBe(false);
+      const list = await http
+        .get('/api/clients?source=imported&limit=100')
+        .set(auth(ownerToken));
+      const ids = (list.body.data ?? list.body).map((c: any) => c.id);
+      expect(ids).toContain(imported);
+      expect(ids).not.toContain(manual);
+    });
+
+    it('POST /clients/batch: un id ajeno en una fila no pisa ese cliente (fila rechazada)', async () => {
+      const foreign = await http
+        .post('/api/clients')
+        .set(auth(otherToken))
+        .send({ name: 'Ajena', lastname: 'Otro', phone: phone() });
+      const res = await http
+        .post('/api/clients/batch')
+        .set(auth(ownerToken))
+        .send({
+          clients: [
+            {
+              id: foreign.body.id,
+              name: 'Pisar',
+              lastname: 'X',
+              phone: phone(),
+            },
+          ],
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(0);
+      const [row] = await ds.query(
+        'SELECT name, owner_id FROM clients WHERE id = $1',
+        [foreign.body.id],
+      );
+      expect(row.name).toBe('Ajena');
+      expect(row.owner_id).not.toBe(ownerId);
+    });
+
     it('§4 dos dispositivos crean el mismo teléfono: fusión, y lo que llega con el id viejo va al cliente que quedó', async () => {
       const [{ phone: samePhone }] = await ds.query(
         'SELECT phone FROM clients WHERE id = $1',

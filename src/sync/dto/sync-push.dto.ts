@@ -17,6 +17,7 @@ import {
 /** Operaciones de negocio que la app puede subir (10.01b, D-18). */
 export const SYNC_MUTATION_TYPES = [
   'client.create',
+  'client.import',
   'client.update',
   'client.delete',
   'appointment.create',

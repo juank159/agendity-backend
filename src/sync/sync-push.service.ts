@@ -128,22 +128,17 @@ export class SyncPushService {
         dto: CreateClientDto,
         creates: Client,
         needsEntity: true,
-        run: async (ctx, payload: CreateClientDto) => {
-          // Mismo teléfono en el negocio: se fusiona (§4), sin perder la
-          // referencia del dispositivo (alias).
-          const existing = await this.dataSource.getRepository(Client).findOne({
-            where: { ownerId: ctx.tenantId, phone: payload.phone },
-          });
-          if (existing) {
-            await this.addAlias(ctx, 'clients', existing.id);
-            return { status: 'merged', merged_into: existing.id };
-          }
-          await this.clients.create(
-            { ...payload, id: ctx.entityId },
-            ctx.tenantId,
-          );
-          return {};
-        },
+        run: (ctx, payload: CreateClientDto) =>
+          this.createClient(ctx, payload, false),
+      },
+      // Contacto importado del teléfono sin conexión: como una fila de
+      // `POST /clients/batch` (mismo DTO y permisos), marcado `isFromDevice`.
+      'client.import': {
+        dto: CreateClientDto,
+        creates: Client,
+        needsEntity: true,
+        run: (ctx, payload: CreateClientDto) =>
+          this.createClient(ctx, payload, true),
       },
       'client.update': {
         dto: UpdateClientDto,
@@ -528,6 +523,28 @@ export class SyncPushService {
         Object.values(e.constraints ?? { [e.property]: e.property }),
       )
       .join('\n');
+  }
+
+  /**
+   * Alta de un cliente (manual o importado). Mismo teléfono en el negocio: se
+   * fusiona (§4) y queda el alias del id del dispositivo.
+   */
+  private async createClient(
+    ctx: Context,
+    payload: CreateClientDto,
+    fromDevice: boolean,
+  ): Promise<Partial<SyncMutationResult>> {
+    const existing = await this.dataSource
+      .getRepository(Client)
+      .findOne({ where: { ownerId: ctx.tenantId, phone: payload.phone } });
+    if (existing) {
+      await this.addAlias(ctx, 'clients', existing.id);
+      return { status: 'merged', merged_into: existing.id };
+    }
+    await this.clients.create({ ...payload, id: ctx.entityId }, ctx.tenantId, {
+      fromDevice,
+    });
+    return {};
   }
 
   /** El id con el que quedó un cliente fusionado (o el mismo). */
