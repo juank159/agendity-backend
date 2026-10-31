@@ -1,6 +1,21 @@
 import { Logger, NotFoundException } from '@nestjs/common';
 import { SyncPushService } from './sync-push.service';
 
+// Transacción simulada: el `work` recibe el mismo `ds`; si lanza, la tabla
+// en memoria vuelve a como estaba (rollback). La real: test/sync-push.e2e.
+jest.mock('src/common/database/ambient-transaction', () => ({
+  inSavepoint: (work: () => Promise<unknown>) => work(),
+  runInAmbientTransaction: async (ds: any, work: (tx: any) => Promise<any>) => {
+    const restore = ds.snapshot();
+    try {
+      return await work(ds);
+    } catch (error) {
+      restore();
+      throw error;
+    }
+  },
+}));
+
 const OWNER = {
   id: 'owner',
   name: 'D',
@@ -42,7 +57,17 @@ function build(clients: Record<string, jest.Mock> = {}) {
     if (sql.includes('sync_id_aliases')) return [];
     throw new Error(`SQL inesperado: ${sql}`);
   });
-  const ds = { query, getRepository: () => ({ exist: async () => false }) };
+  const ds = {
+    query,
+    getRepository: () => ({ exist: async () => false }),
+    snapshot: () => {
+      const copy = new Map(stored);
+      return () => {
+        stored.clear();
+        copy.forEach((v, k) => stored.set(k, v));
+      };
+    },
+  };
   const service = new SyncPushService(
     ds as any,
     { update: jest.fn(async () => ({})), remove: jest.fn(), ...clients } as any,
@@ -156,5 +181,23 @@ describe('SyncPushService (10.01b)', () => {
         message: 'mutation_id ya usado',
       });
     }
+  });
+
+  it('si la transacción se cae a mitad (p. ej. al guardar el resultado), no queda la mutación: retry y el reintento aplica', async () => {
+    const update = jest.fn(async () => ({}));
+    const { service, stored, query } = build({ update });
+    const same = mutation();
+    const real = query.getMockImplementation()!;
+    query.mockImplementationOnce(real); // SELECT del resultado guardado
+    query.mockImplementationOnce(real); // INSERT de la reserva
+    query.mockImplementationOnce(async () => {
+      throw new Error('conexión perdida'); // UPDATE del resultado
+    });
+    const first = await service.push(OWNER, { mutations: [same] } as any);
+    expect(first.results[0]).toMatchObject({ status: 'retry' });
+    expect(stored.has(same.mutation_id)).toBe(false); // sin pending huérfano
+    const second = await service.push(OWNER, { mutations: [same] } as any);
+    expect(second.results[0]).toMatchObject({ status: 'applied' });
+    expect(stored.get(same.mutation_id).status).toBe('applied');
   });
 });

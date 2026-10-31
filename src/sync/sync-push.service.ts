@@ -4,6 +4,10 @@ import { validate } from 'class-validator';
 import { DataSource, EntityTarget, ObjectLiteral } from 'typeorm';
 import { AuthUser, isOnlyEmployee } from 'src/auth/interfaces';
 import { tenantIdFrom } from 'src/common/decorators/tenant.decorator';
+import {
+  inSavepoint,
+  runInAmbientTransaction,
+} from 'src/common/database/ambient-transaction';
 import { AppointmentsService } from 'src/appointments/appointments.service';
 import { appointmentScopeOf } from 'src/appointments/appointment-scope';
 import { CancelAppointmentDto } from 'src/appointments/dto/cancel-appointment.dto';
@@ -364,61 +368,100 @@ export class SyncPushService {
       `SELECT tenant_id, user_id, status, result FROM sync_mutations WHERE mutation_id = $1`,
       [mutation.mutation_id],
     );
-    if (stored) {
-      // Solo el mismo negocio Y el mismo usuario reciben el resultado
-      // guardado; a cualquier otro, un rechazo genérico (nunca datos ajenos).
-      if (stored.tenant_id !== tenantId || stored.user_id !== user.id) {
-        return {
-          ...base,
-          status: 'rejected',
-          code: ErrorCode.CONFLICT,
-          message: 'mutation_id ya usado',
-        };
-      }
-      return stored.status === 'pending'
-        ? { ...base, status: 'retry', message: 'En proceso' }
-        : (stored.result as SyncMutationResult);
-    }
-    const claimed = await this.dataSource.query(
-      `INSERT INTO sync_mutations
-         (mutation_id, tenant_id, user_id, device_id, type, entity_id, status, client_time)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
-       ON CONFLICT (mutation_id) DO NOTHING RETURNING mutation_id`,
-      [
-        mutation.mutation_id,
-        tenantId,
-        user.id,
-        deviceId,
-        mutation.type,
-        mutation.entity_id ?? null,
-        isNaN(Date.parse(mutation.client_time))
-          ? null
-          : new Date(mutation.client_time),
-      ],
-    );
-    if (!claimed.length) {
-      return { ...base, status: 'retry', message: 'En proceso' };
-    }
+    if (stored) return this.storedResult(stored, base, tenantId, user.id);
 
-    const result = await this.execute(user, tenantId, mutation, base);
-    // Temporales: no se guardan, así reenviar la MISMA mutación la vuelve a
-    // intentar (error del servidor, o cupo del trial / plan: rechazada hasta
-    // que el negocio tenga un plan, decisión del orquestador).
-    if (
-      result.status === 'retry' ||
-      TRANSIENT_REJECTIONS.has(result.code ?? '')
-    ) {
-      await this.dataSource.query(
-        `DELETE FROM sync_mutations WHERE mutation_id = $1`,
-        [mutation.mutation_id],
+    // Reservar, aplicar y guardar el resultado en UNA transacción (todo el
+    // DataSource la comparte: `runInAmbientTransaction`). Si el proceso muere
+    // a mitad, Postgres no confirma nada (ni la reserva ni la operación) y el
+    // reintento la aplica una sola vez. Otra petición con el mismo
+    // `mutation_id` espera en el INSERT (índice único) hasta el commit o el
+    // rollback de esta: nunca se aplica dos veces.
+    let result: SyncMutationResult | null;
+    try {
+      result = await runInAmbientTransaction(this.dataSource, async (tx) => {
+        const claimed = await tx.query(
+          `INSERT INTO sync_mutations
+             (mutation_id, tenant_id, user_id, device_id, type, entity_id, status, client_time)
+           VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
+           ON CONFLICT (mutation_id) DO NOTHING RETURNING mutation_id`,
+          [
+            mutation.mutation_id,
+            tenantId,
+            user.id,
+            deviceId,
+            mutation.type,
+            mutation.entity_id ?? null,
+            isNaN(Date.parse(mutation.client_time))
+              ? null
+              : new Date(mutation.client_time),
+          ],
+        );
+        if (!claimed.length) return null; // otra la aplicó: leer su resultado
+
+        const outcome = await this.execute(user, tenantId, mutation, base);
+        // Temporales: no se guardan, así reenviar la MISMA mutación la vuelve
+        // a intentar (error del servidor, o cupo del trial / plan: rechazada
+        // hasta que el negocio tenga un plan, decisión del orquestador).
+        if (
+          outcome.status === 'retry' ||
+          TRANSIENT_REJECTIONS.has(outcome.code ?? '')
+        ) {
+          await tx.query(`DELETE FROM sync_mutations WHERE mutation_id = $1`, [
+            mutation.mutation_id,
+          ]);
+        } else {
+          await tx.query(
+            `UPDATE sync_mutations SET status = $2, result = $3 WHERE mutation_id = $1`,
+            [mutation.mutation_id, outcome.status, JSON.stringify(outcome)],
+          );
+        }
+        return outcome;
+      });
+    } catch (error) {
+      // La transacción entera se deshizo: no quedó nada, se puede reintentar.
+      this.logger.error(
+        `Mutación ${mutation.mutation_id} (${mutation.type}): ${(error as Error)?.message}`,
       );
-    } else {
-      await this.dataSource.query(
-        `UPDATE sync_mutations SET status = $2, result = $3 WHERE mutation_id = $1`,
-        [mutation.mutation_id, result.status, JSON.stringify(result)],
-      );
+      return { ...base, status: 'retry', message: 'Error temporal' };
     }
-    return result;
+    if (result) return result;
+
+    const [after] = await this.dataSource.query(
+      `SELECT tenant_id, user_id, status, result FROM sync_mutations WHERE mutation_id = $1`,
+      [mutation.mutation_id],
+    );
+    return after
+      ? this.storedResult(after, base, tenantId, user.id)
+      : { ...base, status: 'retry', message: 'En proceso' };
+  }
+
+  /** Resultado guardado de una mutación ya aplicada. */
+  private storedResult(
+    stored: {
+      tenant_id: string;
+      user_id: string;
+      status: string;
+      result: unknown;
+    },
+    base: Pick<SyncMutationResult, 'mutation_id' | 'entity_id'>,
+    tenantId: string,
+    userId: string,
+  ): SyncMutationResult {
+    // Solo el mismo negocio Y el mismo usuario reciben el resultado
+    // guardado; a cualquier otro, un rechazo genérico (nunca datos ajenos).
+    if (stored.tenant_id !== tenantId || stored.user_id !== userId) {
+      return {
+        ...base,
+        status: 'rejected',
+        code: ErrorCode.CONFLICT,
+        message: 'mutation_id ya usado',
+      };
+    }
+    // Con la reserva en la misma transacción, `pending` ya no se confirma
+    // nunca; solo podría venir de antes de este cambio.
+    return stored.status === 'pending'
+      ? { ...base, status: 'retry', message: 'En proceso' }
+      : (stored.result as SyncMutationResult);
   }
 
   private async execute(
@@ -482,7 +525,9 @@ export class SyncPushService {
     }
 
     try {
-      const outcome = await handler.run(ctx, payload);
+      // SAVEPOINT: si falla, se deshace solo la operación y la transacción
+      // de la mutación sigue viva para guardar el rechazo.
+      const outcome = await inSavepoint(() => handler.run(ctx, payload));
       return { ...base, status: 'applied', ...outcome };
     } catch (error) {
       const body = this.errors.toBody(error);

@@ -15,6 +15,8 @@ import {
   E2E_BOOT_TIMEOUT_MS,
 } from './utils/create-e2e-app';
 import { signToken } from './utils/dev-fixtures';
+import { PaymentsService } from 'src/payments/payments.service';
+import { SyncPushService } from 'src/sync/sync-push.service';
 import {
   assertWritableDatabase,
   describeWritable,
@@ -54,6 +56,16 @@ describeWritable(
       payload: Record<string, unknown> = {},
       client_time = now(),
     ) => ({ mutation_id: randomUUID(), type, entity_id, payload, client_time });
+
+    // Llamada directa al service (el agente HTTP de los e2e serializa).
+    const ownerAuth = () => ({
+      id: ownerId,
+      name: 'Dueña',
+      email: '',
+      roles: ['Owner'],
+      tenantId: ownerId,
+      ownerId,
+    });
 
     async function push(token: string, mutations: any[], device = 'tablet') {
       const res = await http
@@ -418,6 +430,107 @@ describeWritable(
         [paymentId],
       );
       expect(row.review_required).toBeNull();
+    });
+
+    it.each([
+      [
+        'el proceso muere (se corta la conexión) después de aplicar',
+        true,
+        '05',
+      ],
+      ['una excepción después de aplicar', false, '03'],
+    ])(
+      'atómica: %s → nada queda (ni la mutación ni el reembolso); el reintento la aplica una sola vez y deja resultado',
+      async (_label, killConnection, hour) => {
+        const appt = await newAppointment(ownerId, `${MONDAY}T${hour}:00:00`);
+        const pay = await http
+          .post('/api/payments')
+          .set(auth(ownerToken))
+          .send({
+            appointment_id: appt.id,
+            amount: 30000,
+            payment_method: 'CASH',
+          });
+        expect(pay.status).toBe(201);
+        const refundOf = async () =>
+          (
+            await ds.query(
+              'SELECT refund_amount::text AS r FROM payments WHERE id = $1',
+              [pay.body.id],
+            )
+          )[0].r;
+        const before = await refundOf();
+        const payments = app.get(PaymentsService);
+        const original = payments.refund.bind(payments);
+        jest
+          .spyOn(payments, 'refund')
+          .mockImplementationOnce(
+            async (...args: Parameters<typeof original>) => {
+              await original(...args); // el reembolso YA se aplicó
+              if (killConnection) {
+                // Igual que si el proceso muriera: Postgres pierde la conexión
+                // de la transacción antes del commit.
+                await ds.query('SELECT pg_terminate_backend(pg_backend_pid())');
+              }
+              throw new Error('muerte a mitad de la mutación');
+            },
+          );
+        const mutation = m('payment.refund', pay.body.id, {
+          refund_amount: 10000,
+          refund_reason: 'Prueba de atomicidad',
+        });
+
+        const [first] = await push(ownerToken, [mutation]);
+        expect(first).toMatchObject({ status: 'retry' });
+        expect(await refundOf()).toBe(before); // nada aplicado
+        const stuck = await ds.query(
+          'SELECT 1 FROM sync_mutations WHERE mutation_id = $1',
+          [mutation.mutation_id],
+        );
+        expect(stuck).toEqual([]); // ningún `pending` huérfano
+
+        const [second] = await push(ownerToken, [mutation]);
+        expect(second).toMatchObject({ status: 'applied' });
+        const [third] = await push(ownerToken, [mutation]);
+        expect(third).toEqual(second);
+        expect(Number(await refundOf())).toBe(Number(before) + 10000); // una vez
+        const [row] = await ds.query(
+          'SELECT status, result FROM sync_mutations WHERE mutation_id = $1',
+          [mutation.mutation_id],
+        );
+        expect(row).toMatchObject({ status: 'applied', result: second });
+      },
+    );
+
+    it('el mismo mutation_id en dos peticiones a la vez: se aplica una vez y las dos reciben el mismo resultado', async () => {
+      const appt = await newAppointment(ownerId, `${MONDAY}T04:00:00`);
+      const pay = await http.post('/api/payments').set(auth(ownerToken)).send({
+        appointment_id: appt.id,
+        amount: 30000,
+        payment_method: 'CASH',
+      });
+      const mutation = m('payment.refund', pay.body.id, {
+        refund_amount: 5000,
+        refund_reason: 'Concurrencia',
+      });
+      const sync = app.get(SyncPushService);
+      const [a, b] = await Promise.all([
+        sync.push(ownerAuth(), {
+          device_id: 'a',
+          mutations: [mutation],
+        } as any),
+        sync.push(ownerAuth(), {
+          device_id: 'b',
+          mutations: [mutation],
+        } as any),
+      ]);
+      expect(a.results[0]).toMatchObject({ status: 'applied' });
+      expect(b.results[0]).toEqual(a.results[0]);
+      const [row] = await ds.query(
+        'SELECT refund_amount::numeric AS r FROM payments WHERE id = $1',
+        [pay.body.id],
+      );
+      expect(Number(row.r)).toBe(5000);
     });
 
     it('§4 pagos que juntos superan el total: el que sobra queda en revisión y no cuenta; reembolsado el exceso, cuenta', async () => {
