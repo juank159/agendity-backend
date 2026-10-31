@@ -1,4 +1,5 @@
 // src/clients/dto/create-client.dto.ts
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import { Transform } from 'class-transformer';
 import {
   IsEmail,
@@ -70,6 +71,7 @@ export class CreateClientDto {
    * registra con fecha; `false` es la baja (fecha en `whatsapp_opt_out_at`).
    */
   @IsOptional()
+  @RawBoolean()
   @IsBoolean({ message: 'whatsapp_opt_in debe ser verdadero o falso' })
   whatsapp_opt_in?: boolean;
 }

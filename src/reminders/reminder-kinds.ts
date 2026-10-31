@@ -69,11 +69,10 @@ export const KIND_DEFAULTS: Record<
 };
 
 /**
- * ¿Un recordatorio `utility` (de cita) exige opt-in? La política de WhatsApp
- * pide consentimiento para todo mensaje que inicia la empresa; hoy, por
- * decisión pendiente del usuario, `utility` solo se corta con la baja.
+ * ¿Un recordatorio `utility` (de cita) exige opt-in? Sí (D-21, decisión del
+ * usuario y política de WhatsApp): TODO envío necesita `whatsapp_opt_in`.
  */
-export const UTILITY_REQUIRES_OPT_IN = false;
+export const UTILITY_REQUIRES_OPT_IN = true;
 
-/** Mensajes al mes en el periodo de prueba (sin plan pagado). */
+/** Mensajes al mes en el periodo de prueba (sin plan pagado), D-21. Los planes pagados: 300 (migración `WhatsappQuotaPlans`). */
 export const TRIAL_WHATSAPP_QUOTA = 10;

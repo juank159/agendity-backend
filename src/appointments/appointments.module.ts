@@ -8,7 +8,6 @@ import { ClientsModule } from 'src/clients/clients.module';
 import { UsersModule } from 'src/users/users.module';
 import { ServicesModule } from 'src/services/services.module';
 import { AppointmentReminderService } from './appointment-reminder.service';
-import { WhatsappModule } from 'src/whatsapp/whatsapp.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SubscriptionsModule } from 'src/subscriptions/subscriptions.module';
 import { SettingsModule } from 'src/settings/settings.module';
@@ -21,7 +20,6 @@ import { SettingsModule } from 'src/settings/settings.module';
     SubscriptionsModule,
     SettingsModule,
     ServicesModule,
-    WhatsappModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppointmentsController],

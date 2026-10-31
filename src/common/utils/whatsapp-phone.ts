@@ -1,7 +1,7 @@
 /**
- * Número en el formato que esperan WhatsApp (`wa.me/<número>`) y CallMeBot:
- * solo dígitos, con el indicativo del país. Regla única (2.09a): la usan
- * `WhatsappService` y los recordatorios manuales.
+ * Teléfonos para WhatsApp (movido de `src/whatsapp` al retirar CallMeBot,
+ * D-21). `toWhatsappPhone`: número para `wa.me/<número>` (solo dígitos, con
+ * indicativo); lo usa el recordatorio manual. `toE164`: el de la Cloud API.
  *
  * - Con `+` delante: ya trae el indicativo; se quitan los separadores.
  * - Empieza por el indicativo y es más largo que un número local: se respeta.

@@ -4,6 +4,7 @@
  * Todas las horas en la zona del negocio (booking-core.mjs).
  */
 import {
+  bookingPayload,
   buildGrid,
   dayLabel,
   errorMessage,
@@ -372,19 +373,7 @@ async function submit(event) {
   try {
     const booking = await api('/bookings', {
       method: 'POST',
-      body: JSON.stringify({
-        service_ids: [...state.selected],
-        professional_id: state.professionalId,
-        start: state.slotStart,
-        client: {
-          name: data.name.trim(),
-          lastname: data.lastname?.trim() || undefined,
-          phone: data.phone.trim(),
-          email: data.email?.trim() || undefined,
-        },
-        notes: data.notes?.trim() || undefined,
-        website: data.website || undefined,
-      }),
+      body: JSON.stringify(bookingPayload(state, data)),
     });
     renderDone(booking);
   } catch (error) {

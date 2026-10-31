@@ -8,7 +8,7 @@
  *   el cron (llamado con un "ahora" fijo), su idempotencia y los recordatorios
  *   manuales de Owner y Employee.
  *
- * Nunca se envía nada real: `NODE_ENV=test` apaga el cron y CallMeBot/axios
+ * Nunca se envía nada real: `NODE_ENV=test` apaga el cron y axios
  * están espiados para fallar si alguien los llama.
  */
 import { INestApplication } from '@nestjs/common';
@@ -20,7 +20,6 @@ import { Service } from '../src/services/entities/service.entity';
 import { Appointment } from '../src/appointments/entities/appointment.entity';
 import { Notification } from '../src/notifications/entities/notification.entity';
 import { AppointmentReminderService } from '../src/appointments/appointment-reminder.service';
-import { WhatsappService } from '../src/whatsapp/whatsapp.service';
 import { AppointmentStatus } from '../src/common/enums/status.enum';
 import {
   E2EHttp,
@@ -47,15 +46,8 @@ const DAY = 24 * 60 * MINUTE;
 const PAST_BASE = Date.UTC(1990, 0, 1, 15);
 const PAST_LIMIT = Date.UTC(1995, 0, 1);
 
-/** Ningún envío real: CallMeBot y axios fallan si se llaman. */
-function forbidRealSends(app: INestApplication, sent: string[]) {
-  const whatsapp = app.get(WhatsappService);
-  for (const method of ['sendWhatsAppMessage', 'sendToOwner'] as const) {
-    jest.spyOn(whatsapp, method).mockImplementation(async () => {
-      sent.push(method);
-      throw new Error('Envío real bloqueado en tests');
-    });
-  }
+/** Ningún envío real: axios falla si se llama (CallMeBot se retiró, D-21). */
+function forbidRealSends(_app: INestApplication, sent: string[]) {
   jest.spyOn(axios, 'get').mockImplementation(async (url: string) => {
     sent.push(`axios ${url.slice(0, 30)}`);
     throw new Error('HTTP saliente bloqueado en tests');
@@ -118,18 +110,23 @@ describe('Recordatorios 2.09a (e2e, solo lectura)', () => {
     expect(process).not.toHaveBeenCalled();
   });
 
-  it('no hay ruta para enviar WhatsApp libres: POST /whatsapp/send → 404 sin enviar (5.08)', async () => {
-    const res = await http
-      .post('/api/whatsapp/send')
-      .set(
-        auth(
-          signToken({ id: STRANGER_ID, name: 'x', email: 'x@x.x' }, ['Owner']),
-        ),
-      )
-      .send({ phoneNumber: '3001234567', message: 'hola' });
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('NOT_FOUND');
-  });
+  it.each(['/api/whatsapp/send', '/api/whatsapp/config', '/api/whatsapp/test'])(
+    'sin rutas de CallMeBot (5.08, D-21): POST %s → 404 sin enviar',
+    async (path) => {
+      const res = await http
+        .post(path)
+        .set(
+          auth(
+            signToken({ id: STRANGER_ID, name: 'x', email: 'x@x.x' }, [
+              'Owner',
+            ]),
+          ),
+        )
+        .send({ phoneNumber: '3001234567', message: 'hola' });
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('NOT_FOUND');
+    },
+  );
 
   it('check-reminders: el Owner solo dispara los de su negocio', async () => {
     // Mockeado: la consulta real se prueba en la copia (bloque que escribe).

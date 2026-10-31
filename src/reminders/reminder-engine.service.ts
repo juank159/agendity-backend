@@ -10,7 +10,7 @@ import {
   zonedParts,
 } from 'src/common/utils/date.util';
 import { bookingUrl } from 'src/settings/tenant-settings.service';
-import { toE164 } from 'src/whatsapp/whatsapp-phone';
+import { toE164 } from 'src/common/utils/whatsapp-phone';
 import {
   Notification,
   NotificationType,

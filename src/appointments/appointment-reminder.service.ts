@@ -4,8 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Appointment } from './entities/appointment.entity';
-import { WhatsappService } from '../whatsapp/whatsapp.service';
-import { whatsappLink } from '../whatsapp/whatsapp-phone';
+import { whatsappLink } from '../common/utils/whatsapp-phone';
 import { AppointmentStatus } from '../common/enums/status.enum';
 import { AppointmentScope } from './appointment-scope';
 import { isRescheduled } from './appointment-slot';
@@ -30,9 +29,9 @@ import {
  *   (`reminderSent`). El envío automático por un proveedor está en pausa (2.09b).
  * - **Automático (cron por minuto)**: busca en la BD las citas `PENDING` o
  *   `CONFIRMED` que entraron en su ventana y aún no se procesaron, y deja una
- *   notificación interna al profesional (tabla `notifications`). Opcional, con
- *   `REMINDER_OWNER_WHATSAPP=true`: aviso por CallMeBot al número del propio
- *   Owner. Nunca escribe al cliente.
+ *   notificación interna al profesional (tabla `notifications`). Nunca
+ *   escribe al cliente: eso lo hacen los recordatorios automáticos de la
+ *   Fase 11 (`src/reminders`). CallMeBot se retiró (D-21).
  */
 
 /** Estados a los que se les recuerda la cita (CLAUDE.md §1). */
@@ -109,13 +108,6 @@ export function remindersCronEnabled(
   return env.NODE_ENV !== 'test' && env.REMINDERS_CRON_ENABLED !== 'false';
 }
 
-/** Aviso por CallMeBot al Owner: APAGADO salvo `REMINDER_OWNER_WHATSAPP=true` (D-05). */
-export function ownerWhatsappEnabled(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return env.REMINDER_OWNER_WHATSAPP === 'true';
-}
-
 type ReminderAppointment = Pick<Appointment, 'date' | 'services'> & {
   client?: Pick<Appointment['client'], 'name'> | null;
 };
@@ -144,7 +136,7 @@ export function reminderMessage(
   return `${greeting} te recordamos tu cita para *${serviceNames(appointment)}* programada para *${dateStr}* a las *${timeStr}*. Te esperamos en nuestra ubicación habitual.`;
 }
 
-/** Texto de la notificación interna (profesional) y del aviso opcional al Owner, en la zona del negocio (6.02). */
+/** Texto de la notificación interna al profesional, en la zona del negocio (6.02). */
 export function staffReminderMessage(
   appointment: Appointment,
   timeZone: string,
@@ -192,7 +184,6 @@ export class AppointmentReminderService {
     @InjectRepository(Appointment)
     private readonly appointmentsRepository: Repository<Appointment>,
     private readonly dataSource: DataSource,
-    private readonly whatsappService: WhatsappService,
   ) {}
 
   /** Cada minuto. Sustituye a los `CronJob` en memoria y a la limpieza cada 6 h. */
@@ -238,9 +229,6 @@ export class AppointmentReminderService {
         );
         if (!appointment) continue;
         processed.push(appointment.id);
-        if (ownerWhatsappEnabled()) {
-          await this.notifyOwnerSafely(appointment, timeZone);
-        }
       } catch (error) {
         this.logger.error(
           `Error en el recordatorio de la cita ${candidate.id}: ${error.message}`,
@@ -330,28 +318,6 @@ export class AppointmentReminderService {
       }),
     );
     return appointment;
-  }
-
-  /** Aviso opcional al Owner por CallMeBot, fuera de la transacción y sin romper la pasada. */
-  private async notifyOwnerSafely(
-    appointment: Appointment,
-    timeZone: string,
-  ): Promise<void> {
-    try {
-      const result = await this.whatsappService.sendToOwner(
-        appointment.ownerId,
-        `🔔 ${staffReminderMessage(appointment, timeZone)}`,
-      );
-      if (!result?.success) {
-        this.logger.warn(
-          `Aviso al Owner no enviado (cita ${appointment.id}): ${result?.message ?? result?.error}`,
-        );
-      }
-    } catch (error) {
-      this.logger.warn(
-        `Aviso al Owner no enviado (cita ${appointment.id}): ${error.message}`,
-      );
-    }
   }
 
   /**

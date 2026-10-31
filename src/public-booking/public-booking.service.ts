@@ -21,6 +21,7 @@ import {
 import { AppointmentsService } from 'src/appointments/appointments.service';
 import { appointmentEnd } from 'src/appointments/appointment-slot';
 import { Client } from 'src/clients/entities/client.entity';
+import { consentChange } from 'src/clients/whatsapp-consent';
 import {
   Notification,
   NotificationType,
@@ -243,7 +244,12 @@ export class PublicBookingService {
           {
             source: AppointmentSource.WEB,
             resolveClient: (manager) =>
-              this.findOrCreateClient(manager, business.tenantId, dto.client),
+              this.findOrCreateClient(
+                manager,
+                business.tenantId,
+                dto.client,
+                dto.whatsapp_opt_in === true,
+              ),
           },
         );
         await this.notifyBusiness(
@@ -397,12 +403,14 @@ export class PublicBookingService {
    * Cliente por (teléfono, negocio), comparando solo dígitos; si no existe se
    * crea. Si existe, NO se cambian sus datos. Un email que ya usa otro
    * cliente del negocio no se guarda (no se revela que existe). Antes, el
-   * límite de reservas `PENDING` a futuro de ese teléfono.
+   * límite de reservas `PENDING` a futuro de ese teléfono. Consentimiento de
+   * WhatsApp (D-21): solo se DA con `optIn` explícito; la web nunca lo quita.
    */
   private async findOrCreateClient(
     manager: EntityManager,
     tenantId: string,
     data: PublicBookingClientDto,
+    optIn: boolean,
   ): Promise<Client> {
     const digits = phoneDigits(data.phone);
     const [{ pending }] = await manager.query(
@@ -429,7 +437,11 @@ export class PublicBookingService {
     );
     const clients = manager.getRepository(Client);
     if (existing) {
-      return clients.findOneByOrFail({ id: existing.id });
+      const client = await clients.findOneByOrFail({ id: existing.id });
+      const consent = optIn ? consentChange(client, true) : {};
+      if (!Object.keys(consent).length) return client;
+      await clients.update({ id: client.id }, consent);
+      return Object.assign(client, consent);
     }
     const email = data.email?.toLowerCase() ?? null;
     const emailTaken =
@@ -444,6 +456,7 @@ export class PublicBookingService {
         isFromDevice: false,
         isActive: true,
         showNotes: false,
+        ...consentChange(null, optIn ? true : undefined),
       }),
     );
   }

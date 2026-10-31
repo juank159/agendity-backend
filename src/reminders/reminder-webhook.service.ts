@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { returnedRows } from 'src/common/utils/query-rows';
 import { defaultBusinessTimeZone } from 'src/common/utils/date.util';
-import { toE164 } from 'src/whatsapp/whatsapp-phone';
+import { toE164 } from 'src/common/utils/whatsapp-phone';
 import {
   isOptOutText,
   parseWhatsAppWebhook,

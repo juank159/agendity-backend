@@ -7,7 +7,7 @@ import {
   parseWhatsAppWebhook,
   verifyWhatsAppSignature,
 } from './whatsapp-webhook';
-import { toE164, countryCodeOfZone } from '../whatsapp/whatsapp-phone';
+import { toE164, countryCodeOfZone } from '../common/utils/whatsapp-phone';
 import { consentChange } from '../clients/whatsapp-consent';
 import { whatsappQuotaOf, usagePeriod } from './reminder-quota.service';
 import { TRIAL_WHATSAPP_QUOTA } from './reminder-kinds';

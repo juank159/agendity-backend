@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -18,6 +19,7 @@ import {
   MaxLength,
   Min,
   ValidateNested,
+  IsBoolean,
 } from 'class-validator';
 import { normalizePhone, PUBLIC_PHONE } from '../public-booking-rules';
 
@@ -143,6 +145,17 @@ export class CreatePublicBookingDto {
   @IsString()
   @MaxLength(300, { message: 'La nota es demasiado larga (máx. 300)' })
   notes?: string;
+
+  /**
+   * "Acepto recibir recordatorios por WhatsApp" (D-21), sin marcar por
+   * defecto. `true` da el consentimiento; ausente o `false` no cambia nada (la
+   * web nunca quita un consentimiento ya dado).
+   */
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @RawBoolean()
+  @IsBoolean({ message: 'whatsapp_opt_in debe ser verdadero o falso' })
+  whatsapp_opt_in?: boolean;
 
   /**
    * Honeypot: campo oculto en el formulario web. Una persona lo deja vacío;

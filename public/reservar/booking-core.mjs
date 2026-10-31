@@ -241,3 +241,26 @@ export function errorMessage(error) {
     return 'Hiciste demasiados intentos. Espera un minuto y vuelve a intentarlo.';
   return 'Algo salió mal. Inténtalo de nuevo en unos minutos.';
 }
+
+/**
+ * Cuerpo de `POST /bookings` a partir del estado y del formulario. La casilla
+ * de WhatsApp (D-21) solo manda `whatsapp_opt_in: true` si está marcada: un
+ * checkbox sin marcar no aparece en el FormData y la web nunca quita un
+ * consentimiento ya dado.
+ */
+export function bookingPayload(state, data) {
+  return {
+    service_ids: [...state.selected],
+    professional_id: state.professionalId,
+    start: state.slotStart,
+    client: {
+      name: data.name.trim(),
+      lastname: data.lastname?.trim() || undefined,
+      phone: data.phone.trim(),
+      email: data.email?.trim() || undefined,
+    },
+    notes: data.notes?.trim() || undefined,
+    ...(data.whatsapp_opt_in ? { whatsapp_opt_in: true } : {}),
+    website: data.website || undefined,
+  };
+}

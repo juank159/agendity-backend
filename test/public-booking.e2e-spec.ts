@@ -389,6 +389,47 @@ describeWritable('Agenda pública 9.01 (e2e, escribe en copia)', () => {
     expect(other.status).toBe(201);
   });
 
+  it('consentimiento de WhatsApp (D-21): sin marcar no se da; marcado lo da con fecha; la web nunca lo quita', async () => {
+    const phone = newPhone();
+    const consent = async () =>
+      (
+        await ds.query(
+          `SELECT whatsapp_opt_in, whatsapp_opt_in_at, whatsapp_opt_out_at
+             FROM clients WHERE owner_id = $1 AND phone = $2`,
+          [b.ownerId, phone],
+        )
+      )[0];
+    const at = (t: string) => ({
+      start: `2031-03-24${t}`,
+      client: { name: 'Sol', phone },
+    });
+
+    expect((await book(b, at('T09:00:00'))).status).toBe(201);
+    expect(await consent()).toEqual({
+      whatsapp_opt_in: false,
+      whatsapp_opt_in_at: null,
+      whatsapp_opt_out_at: null,
+    });
+    // Una cadena nunca es consentimiento ("false" se convertiría en true).
+    for (const value of ['si', 'false']) {
+      const bad = await book(b, { ...at('T10:00:00'), whatsapp_opt_in: value });
+      expect(bad.status).toBe(400);
+    }
+
+    expect(
+      (await book(b, { ...at('T10:00:00'), whatsapp_opt_in: true })).status,
+    ).toBe(201);
+    const given = await consent();
+    expect(given.whatsapp_opt_in).toBe(true);
+    expect(given.whatsapp_opt_in_at).not.toBeNull();
+
+    // Sin marcar (o false) en otra reserva: no lo quita.
+    expect(
+      (await book(b, { ...at('T11:00:00'), whatsapp_opt_in: false })).status,
+    ).toBe(201);
+    expect(await consent()).toEqual(given);
+  });
+
   it('trial agotado: horas libres y reservas → 409 ONLINE_BOOKING_UNAVAILABLE; los datos dicen accepting_bookings=false', async () => {
     await resetTrialQuota(ds, b.ownerId, { used: 20, limit: 20 });
     const info = await http.get(base(b));

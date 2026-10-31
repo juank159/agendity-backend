@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import { ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
@@ -36,6 +37,7 @@ export const RULE_LIMITS = {
 export class UpdateReminderSettingsDto {
   @ApiPropertyOptional({ description: 'Activa los recordatorios automáticos' })
   @IsOptional()
+  @RawBoolean()
   @IsBoolean({ message: 'enabled debe ser verdadero o falso' })
   enabled?: boolean;
 
@@ -66,6 +68,7 @@ export class CreateReminderRuleDto {
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
+  @RawBoolean()
   @IsBoolean({ message: 'is_active debe ser verdadero o falso' })
   is_active?: boolean;
 

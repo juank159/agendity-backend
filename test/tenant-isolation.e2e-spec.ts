@@ -311,8 +311,8 @@ describe('Aislamiento por tenant (e2e)', () => {
             404,
           ],
           [
-            'GET whatsapp config',
-            () => http.get('/api/whatsapp/config').set(t),
+            'GET reminder rule',
+            () => http.get(`/api/reminders/rules/${MISSING_ID}`).set(t),
             404,
           ],
           [
@@ -501,12 +501,6 @@ describe('Aislamiento por tenant (e2e)', () => {
           [
             'DELETE time-block',
             () => http.delete(`/api/time-blocks/${MISSING_ID}`).set(t),
-            404,
-          ],
-          [
-            'PATCH whatsapp config',
-            () =>
-              http.patch(`/api/whatsapp/config/${MISSING_ID}`).set(t).send({}),
             404,
           ],
           [
@@ -813,13 +807,13 @@ describe('Aislamiento por tenant (e2e)', () => {
           403,
         ],
         [
-          'POST whatsapp config',
-          () => http.post('/api/whatsapp/config').set(t).send({}),
+          'GET reminders/deliveries (teléfonos de clientes, Fase 11)',
+          () => http.get('/api/reminders/deliveries').set(t),
           403,
         ],
         [
-          'GET whatsapp config (trae el apiKey del Owner)',
-          () => http.get('/api/whatsapp/config').set(t),
+          'PUT reminders/settings',
+          () => http.put('/api/reminders/settings').set(t).send({}),
           403,
         ],
       ]);

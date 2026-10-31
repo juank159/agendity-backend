@@ -3,13 +3,12 @@ import {
   isReminderDue,
   isReminderStatus,
   manualReminderResetOnReschedule,
-  ownerWhatsappEnabled,
   reminderMessage,
   remindersCronEnabled,
   staffReminderMessage,
 } from './appointment-reminder.service';
 import { AppointmentStatus } from '../common/enums/status.enum';
-import { toWhatsappPhone, whatsappLink } from '../whatsapp/whatsapp-phone';
+import { toWhatsappPhone, whatsappLink } from '../common/utils/whatsapp-phone';
 import { BusinessException } from '../common/exceptions/business.exception';
 import { NotFoundException } from '@nestjs/common';
 
@@ -142,14 +141,6 @@ describe('estados y flags', () => {
     expect(remindersCronEnabled({ NODE_ENV: 'production' })).toBe(true);
     expect(remindersCronEnabled({ NODE_ENV: 'development' })).toBe(true);
   });
-
-  it('el aviso por CallMeBot al Owner está apagado por defecto', () => {
-    expect(ownerWhatsappEnabled({})).toBe(false);
-    expect(ownerWhatsappEnabled({ REMINDER_OWNER_WHATSAPP: '1' })).toBe(false);
-    expect(ownerWhatsappEnabled({ REMINDER_OWNER_WHATSAPP: 'true' })).toBe(
-      true,
-    );
-  });
 });
 
 describe('textos en la zona del negocio', () => {
@@ -250,7 +241,6 @@ describe('AppointmentReminderService.processDueReminders', () => {
   };
 
   let repo: { query: jest.Mock; findOne: jest.Mock };
-  let whatsapp: { sendToOwner: jest.Mock; sendWhatsAppMessage: jest.Mock };
   let execute: jest.Mock;
   let saved: any[];
   let qbWheres: string[];
@@ -285,18 +275,7 @@ describe('AppointmentReminderService.processDueReminders', () => {
       query: jest.fn().mockResolvedValue([due, notYet]),
       findOne: jest.fn(),
     };
-    whatsapp = {
-      sendToOwner: jest.fn().mockResolvedValue({ success: true }),
-      sendWhatsAppMessage: jest.fn(() => {
-        throw new Error('nunca se envía al cliente');
-      }),
-    };
-    service = new AppointmentReminderService(
-      repo as any,
-      dataSource,
-      whatsapp as any,
-    );
-    delete process.env.REMINDER_OWNER_WHATSAPP;
+    service = new AppointmentReminderService(repo as any, dataSource);
   });
 
   afterEach(() => {
@@ -314,9 +293,6 @@ describe('AppointmentReminderService.processDueReminders', () => {
       type: 'APPOINTMENT_REMINDER',
       metadata: { appointment_id: 'due-1', client_id: 'c1' },
     });
-    // Sin flag: nada de CallMeBot, y nunca al cliente.
-    expect(whatsapp.sendToOwner).not.toHaveBeenCalled();
-    expect(whatsapp.sendWhatsAppMessage).not.toHaveBeenCalled();
   });
 
   it('cada cita usa SU zona guardada (6.03), aunque el negocio esté en otra', async () => {
@@ -367,15 +343,6 @@ describe('AppointmentReminderService.processDueReminders', () => {
     expect(repo.query).not.toHaveBeenCalled();
   });
 
-  it('REMINDER_OWNER_WHATSAPP=true: avisa al Owner una vez; un fallo no rompe la pasada', async () => {
-    process.env.REMINDER_OWNER_WHATSAPP = 'true';
-    whatsapp.sendToOwner.mockRejectedValue(new Error('CallMeBot caído'));
-    const result = await service.processDueReminders(NOW);
-    expect(result.processed).toEqual(['due-1']);
-    expect(whatsapp.sendToOwner).toHaveBeenCalledTimes(1);
-    expect(whatsapp.sendToOwner.mock.calls[0][0]).toBe('owner-1');
-  });
-
   it('el cron no hace nada en tests (NODE_ENV=test)', async () => {
     process.env.NODE_ENV = 'test';
     await service.runDueReminders();
@@ -412,11 +379,7 @@ describe('AppointmentReminderService.prepareManualReminder', () => {
   };
   const make = (found: unknown) => {
     const repo = { findOne: jest.fn().mockResolvedValue(found) };
-    const service = new AppointmentReminderService(
-      repo as any,
-      {} as any,
-      {} as any,
-    );
+    const service = new AppointmentReminderService(repo as any, {} as any);
     return { repo, service };
   };
 

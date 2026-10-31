@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  bookingPayload,
   buildGrid,
   dayKey,
   errorMessage,
@@ -148,3 +149,24 @@ function toMin(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
 }
+
+test('reserva: la casilla de WhatsApp solo manda consentimiento si está marcada (D-21)', () => {
+  const state = {
+    selected: new Set(['s1']),
+    professionalId: null,
+    slotStart: '2031-03-03T14:00:00.000Z',
+  };
+  const form = { name: ' Ana ', phone: ' 300 123 4567 ', email: '', notes: '' };
+  const without = bookingPayload(state, form);
+  assert.equal('whatsapp_opt_in' in without, false);
+  assert.deepEqual(without.client, {
+    name: 'Ana',
+    lastname: undefined,
+    phone: '300 123 4567',
+    email: undefined,
+  });
+  assert.equal(
+    bookingPayload(state, { ...form, whatsapp_opt_in: 'true' }).whatsapp_opt_in,
+    true,
+  );
+});

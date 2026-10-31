@@ -19,6 +19,7 @@ import { ReminderEngineService } from 'src/reminders/reminder-engine.service';
 import { MESSAGING_CHANNEL } from 'src/reminders/channels/messaging-channel';
 import { LogChannel } from 'src/reminders/channels/log.channel';
 import { TRIAL_WHATSAPP_QUOTA } from 'src/reminders/reminder-kinds';
+import { PAID_PLAN_IDS } from 'src/migrations/1793460000000-WhatsappQuotaPlans';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const SECRET = 'app-secret-de-prueba';
@@ -162,6 +163,15 @@ describeWritable(
       await close();
     });
 
+    it('D-21: cada plan pagado trae 300 mensajes al mes y el trial 10', async () => {
+      const plans = await ds.query(
+        `SELECT whatsapp_monthly_quota AS q FROM subscription_plans WHERE id = ANY($1::uuid[])`,
+        [PAID_PLAN_IDS],
+      );
+      expect(plans.map((p: any) => p.q)).toEqual([300, 300, 300]);
+      expect(TRIAL_WHATSAPP_QUOTA).toBe(10);
+    });
+
     it('configuración y reglas: solo el Owner, por negocio, validadas', async () => {
       const settings = await as(bogota).get('/api/reminders/settings');
       expect(settings.body).toEqual({
@@ -259,7 +269,7 @@ describeWritable(
     });
 
     it('antes de la cita (24 h y 30 min): una entrega por regla y fecha; el cron dos veces no envía doble', async () => {
-      const c = await client(bogota);
+      const c = await client(bogota, { whatsapp_opt_in: true });
       // 10:00 en Bogotá = 15:00Z.
       const id = await appointment(bogota, c, '2031-03-17T10:00:00');
       const before = channel.sent.length;
@@ -286,8 +296,19 @@ describeWritable(
       expect(new Set(rows.map((r: any) => r.provider_message_id)).size).toBe(2);
     });
 
-    it('ventana horaria: fuera se corre al inicio; si eso ya es después de la cita, no se manda', async () => {
+    it('D-21: sin consentimiento tampoco hay recordatorio de cita (skipped NO_CONSENT, sin enviar)', async () => {
       const c = await client(bogota);
+      const id = await appointment(bogota, c, '2031-03-17T16:00:00');
+      const before = channel.sent.length;
+      await engine.runOnce(at('2031-03-16T21:01:00Z'), bogota.id);
+      expect(await deliveries('appointment_id = $1', [id])).toMatchObject([
+        { status: 'skipped', reason: 'NO_CONSENT' },
+      ]);
+      expect(channel.sent.length).toBe(before);
+    });
+
+    it('ventana horaria: fuera se corre al inicio; si eso ya es después de la cita, no se manda', async () => {
+      const c = await client(bogota, { whatsapp_opt_in: true });
       // 08:10 local: el de 30 min tocaba a las 07:40 → se corre a las 08:00.
       const early = await appointment(bogota, c, '2031-03-18T08:10:00');
       // 07:30 local: el de 30 min tocaba a las 07:00 → las 08:00 ya es tarde.
@@ -319,7 +340,7 @@ describeWritable(
     });
 
     it('cupo mensual: agotado → skipped QUOTA y un solo aviso al Owner', async () => {
-      const c = await client(bogota);
+      const c = await client(bogota, { whatsapp_opt_in: true });
       const a1 = await appointment(bogota, c, '2031-04-07T11:00:00');
       const a2 = await appointment(bogota, c, '2031-04-07T15:00:00');
       await ds.query(

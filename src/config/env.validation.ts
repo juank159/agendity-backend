@@ -106,10 +106,6 @@ export class EnvironmentVariables {
   REMINDERS_CRON_ENABLED?: string;
 
   @IsOptional()
-  @IsIn(BOOL, { message: 'REMINDER_OWNER_WHATSAPP debe ser true o false' })
-  REMINDER_OWNER_WHATSAPP?: string;
-
-  @IsOptional()
   @IsIn(['log', 'whatsapp_cloud'], {
     message: 'MESSAGING_CHANNEL debe ser log o whatsapp_cloud',
   })
