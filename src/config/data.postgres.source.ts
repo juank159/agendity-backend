@@ -1,6 +1,6 @@
 // src/config/data.postgres.source.ts
 import { join } from 'path';
-import { DataSourceOptions } from 'typeorm';
+import { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 import { ConfigService } from '@nestjs/config';
 import { config } from 'dotenv';
 
@@ -21,7 +21,7 @@ const ext = __filename.endsWith('.ts') ? 'ts' : 'js';
  * únicamente si `DB_MIGRATIONS_RUN=true` (pensado para el despliegue); en
  * desarrollo se aplican a mano con `npm run migration:run`.
  */
-export const DataSourceConfig: DataSourceOptions = {
+export const DataSourceConfig: PostgresConnectionOptions = {
   type: 'postgres',
   host: configService.get('DB_HOST'),
   port: configService.get('DB_PORT'),
@@ -34,4 +34,16 @@ export const DataSourceConfig: DataSourceOptions = {
   synchronize: false,
   logging: ['error'],
   migrationsRun: configService.get('DB_MIGRATIONS_RUN') === 'true',
+  // D.02: Postgres administrado (despliegue). `true` = TLS verificando el
+  // certificado; `no-verify` = TLS sin verificarlo (certificados propios del
+  // proveedor); ausente o `false` = sin TLS (desarrollo local).
+  ssl: dbSsl(configService.get('DB_SSL')),
 };
+
+function dbSsl(
+  value: string | undefined,
+): boolean | { rejectUnauthorized: boolean } {
+  if (value === 'true') return true;
+  if (value === 'no-verify') return { rejectUnauthorized: false };
+  return false;
+}

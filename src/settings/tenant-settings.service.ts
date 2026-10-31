@@ -25,6 +25,20 @@ export interface BusinessSettingsView {
   slug: string | null;
   /** Horario de apertura (8.01); `null` = sin configurar (sin límite). */
   opening_hours: OpeningHoursRange[] | null;
+  /**
+   * Link público de reservas (D.02): `PUBLIC_BASE_URL` + `/reservar/` + slug,
+   * para que la app lo comparta. `null` sin slug o sin `PUBLIC_BASE_URL`.
+   */
+  booking_url: string | null;
+}
+
+/** Link de reservas del negocio (D.02). */
+export function bookingUrl(
+  slug: string | null,
+  base: string | undefined = process.env.PUBLIC_BASE_URL,
+): string | null {
+  const root = base?.trim().replace(/\/+$/, '');
+  return slug && root ? `${root}/reservar/${encodeURIComponent(slug)}` : null;
 }
 
 /** Datos opcionales del negocio en el alta del Owner. */
@@ -110,6 +124,7 @@ export class TenantSettingsService {
       name: row?.name ?? null,
       slug: row?.slug ?? null,
       opening_hours: row?.opening_hours ?? null,
+      booking_url: bookingUrl(row?.slug ?? null),
     };
     this.cache.set(tenantId, {
       view,

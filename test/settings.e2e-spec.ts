@@ -76,6 +76,7 @@ describe('Configuración del negocio 6.01 (e2e, solo lectura)', () => {
     expect(asOwner.status).toBe(200);
     // 8.00/8.01: también nombre, slug y horario del negocio.
     expect(Object.keys(asOwner.body).sort()).toEqual([
+      'booking_url', // D.02
       'name',
       'opening_hours',
       'slug',

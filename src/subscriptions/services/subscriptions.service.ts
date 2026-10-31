@@ -438,8 +438,8 @@ export class SubscriptionsService {
         } else {
           // Usar la URL configurada o una por defecto
           redirectUrl =
-            this.configService.get<string>('WOMPI_REDIRECT_URL') ||
-            'https://tuapp.com/payment-callback';
+            // D.02: obligatoria en producción (env.validation), sin valor inventado.
+            this.configService.getOrThrow<string>('WOMPI_REDIRECT_URL');
         }
       } else {
         // URL para desarrollo - mantener esquema myapp:// para el flujo de demo

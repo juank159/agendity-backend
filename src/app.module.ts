@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { validateEnv } from './config/env.validation';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
@@ -33,6 +34,8 @@ import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      // D.02: el arranque falla si falta una variable obligatoria.
+      validate: validateEnv,
     }),
 
     TypeOrmModule.forRoot({

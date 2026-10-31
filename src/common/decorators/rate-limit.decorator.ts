@@ -8,7 +8,7 @@ const ONE_MINUTE_MS = 60_000;
  * Solo se aplica donde se pone este decorador: el resto de la app no tiene throttle.
  * Al pasarse responde 429.
  *
- * Nota de despliegue (D.03): detrás de un proxy hay que activar `trust proxy`
+ * Nota de despliegue: detrás de un proxy hay que poner `TRUST_PROXY` (D.02)
  * para que la IP sea la del cliente y no la del proxy.
  */
 export const RateLimit = (limit: number, ttlMs: number = ONE_MINUTE_MS) =>

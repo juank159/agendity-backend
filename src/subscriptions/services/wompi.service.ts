@@ -173,8 +173,8 @@ export class WompiService {
         if (this.isProduction) {
           // Usar la URL configurada o una por defecto
           processedRedirectUrl =
-            this.configService.get<string>('WOMPI_REDIRECT_URL') ||
-            'https://tuapp.com/payment-callback';
+            // D.02: obligatoria en producción (env.validation), sin valor inventado.
+            this.configService.getOrThrow<string>('WOMPI_REDIRECT_URL');
         } else {
           // En desarrollo, para testing podemos usar una URL de ejemplo
           processedRedirectUrl = 'https://example.com/payment-callback';

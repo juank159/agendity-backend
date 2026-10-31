@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -58,7 +58,14 @@ function setSecurityHeaders(res: HeaderTarget): void {
 
 export function setupBookingPage(app: INestApplication): void {
   const indexFile = join(BOOKING_PAGE_DIR, 'index.html');
-  if (!existsSync(indexFile)) return;
+  if (!existsSync(indexFile)) {
+    // D.02: en producción `public/` debe ir con el backend (si no, el link
+    // de reservas da 404).
+    new Logger('BookingPage').error(
+      `No se encontró ${indexFile}: /reservar no estará disponible. Despliega la carpeta public/ junto al backend.`,
+    );
+    return;
+  }
   const express = app as NestExpressApplication;
 
   express.useStaticAssets(BOOKING_PAGE_DIR, {
