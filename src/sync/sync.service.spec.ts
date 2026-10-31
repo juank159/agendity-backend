@@ -22,7 +22,18 @@ describe('SyncService (10.01a)', () => {
     expect(sql).toMatch(/FROM "notifications"[\s\S]*?receiver_id = \$3/);
     expect(sql).not.toMatch(/FROM "clients"[^U]*\$3/);
     expect(params.slice(0, 4)).toEqual(['t1', '10', 'u-emp', 501]);
-    expect(params[5]).toEqual(['appointments', 'time_block', 'notifications']);
+    expect(params[5]).toEqual([
+      'users',
+      'user_services',
+      'schedules',
+      'appointments',
+      'time_block',
+      'notifications',
+    ]);
+    // Asignaciones, horarios y usuarios: solo los suyos (como la API, 6389bef).
+    expect(sql).toMatch(/FROM "user_services"[\s\S]*?user_id = \$3/);
+    expect(sql).toMatch(/FROM "schedules"[\s\S]*?"userId" = \$3/);
+    expect(sql).toMatch(/FROM "users"[\s\S]*?AND id = \$3/);
   });
 
   it('Owner: todo el negocio; solo sus notificaciones; nunca leave_scope ajenos', () => {

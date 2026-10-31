@@ -88,6 +88,9 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     table: 'users',
     tenantColumn: 'tenant_id',
     idColumn: 'id',
+    // La empleada solo se recibe a sí misma: la API no le deja leer el equipo
+    // (`GET /auth/employees` es del Owner).
+    scope: { column: 'id', employeeOnly: true },
     load: async (manager, ids, viewer) => {
       const users = await manager.getRepository(User).find({
         where: { id: In(ids) },
@@ -96,14 +99,17 @@ export const SYNC_ENTITIES: SyncEntity[] = [
       });
       return users.map((user) => ({
         id: user.id,
-        // El Employee ve a sus compañeros solo con lo necesario para la agenda.
+        // Employee: los mismos campos que `GET /auth/me` (sin comisión).
         data: viewer.employee
           ? {
               id: user.id,
               name: user.name,
               lastname: user.lastname,
+              email: user.email,
+              phone: user.phone,
               image: user.image ?? null,
               isActive: user.isActive,
+              is_email_verified: user.is_email_verified,
               deletedAt: user.deletedAt ?? null,
               roles: user.roles.map((role) => ({ name: role.name })),
             }
@@ -130,6 +136,8 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     table: 'user_services',
     tenantColumn: 'owner_id',
     idColumn: 'id',
+    // Como `GET /users/:userId/services` (6389bef): la empleada, solo las suyas.
+    scope: { column: 'user_id', employeeOnly: true },
     load: byId(UserService),
   },
   {
@@ -137,6 +145,8 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     table: 'schedules',
     tenantColumn: 'owner_id',
     idColumn: 'id',
+    // Como `GET /schedules/user/:userId` (6389bef): la empleada, solo los suyos.
+    scope: { column: '"userId"', employeeOnly: true },
     load: byId(Schedule, { loadRelationIds: true }),
   },
   {
