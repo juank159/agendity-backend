@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Recordatorios por WhatsApp</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/reservar/_/styles.css" />
+    <script type="module" src="/consentimiento/_/consent.mjs"></script>
+  </head>
+  <body>
+    <main id="app" class="page" aria-busy="true">
+      <header class="header">
+        <p class="eyebrow">Recordatorios por WhatsApp</p>
+        <h1 id="business-name">Cargando…</h1>
+      </header>
+
+      <p id="status" class="notice" role="status" aria-live="polite"></p>
+      <p id="error" class="notice notice--error" role="alert" hidden></p>
+
+      <section id="ask" class="step" aria-labelledby="h-ask" hidden>
+        <h2 id="h-ask"><span id="greeting">Hola</span></h2>
+        <p><strong id="ask-business"></strong> quiere enviarte por WhatsApp:</p>
+        <ul id="purposes"></ul>
+        <p class="muted">
+          Puedes dejar de recibirlos cuando quieras escribiendo <strong>BAJA</strong> en el chat.
+          Tus datos los trata el negocio solo para esto.
+        </p>
+        <button id="accept" type="button" class="button button--primary">Acepto</button>
+        <button id="decline" type="button" class="button">No, gracias</button>
+      </section>
+    </main>
+  </body>
+</html>

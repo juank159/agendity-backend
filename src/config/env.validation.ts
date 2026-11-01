@@ -41,6 +41,8 @@ export const PRODUCTION_REQUIRED = [
   'EMAIL_USER',
   'EMAIL_PASSWORD',
   'PUBLIC_BASE_URL',
+  // 11.06: firma de los links de consentimiento de WhatsApp.
+  'CONSENT_LINK_SECRET',
 ] as const;
 
 /** Con `MESSAGING_CHANNEL=whatsapp_cloud` (Fase 11, D-20). */
@@ -137,6 +139,10 @@ export class EnvironmentVariables {
   WHATSAPP_WEBHOOK_VERIFY_TOKEN?: string;
 
   @IsOptional()
+  @IsString()
+  CONSENT_LINK_SECRET?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'DB_PORT debe ser un número' })
   DB_PORT?: number;
@@ -204,6 +210,14 @@ export function envProblems(config: Record<string, unknown>): string[] {
     ) {
       problems.push(
         `SECRET_KEY_JWT debe tener al menos ${JWT_MIN_LENGTH_PRODUCTION} caracteres en producción`,
+      );
+    }
+    if (
+      'CONSENT_LINK_SECRET' in present &&
+      String(present.CONSENT_LINK_SECRET).length < JWT_MIN_LENGTH_PRODUCTION
+    ) {
+      problems.push(
+        `CONSENT_LINK_SECRET debe tener al menos ${JWT_MIN_LENGTH_PRODUCTION} caracteres en producción`,
       );
     }
     if (present.WOMPI_MODE === 'stub') {

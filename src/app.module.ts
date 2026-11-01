@@ -18,6 +18,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { TimeBlocksModule } from './time-blocks/time-blocks.module';
 import { DataSourceConfig } from './config/data.postgres.source';
 import { RemindersModule } from './reminders/reminders.module';
+import { ConsentModule } from './consent/consent.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { SettingsModule } from './settings/settings.module';
@@ -77,6 +78,7 @@ import { JwtRolesGuard } from './auth/jwt/jwt.roles.guard';
     TimeBlocksModule,
 
     RemindersModule,
+    ConsentModule,
 
     SubscriptionsModule,
 

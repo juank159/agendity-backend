@@ -421,6 +421,11 @@ describeWritable('Agenda pública 9.01 (e2e, escribe en copia)', () => {
     ).toBe(201);
     const given = await consent();
     expect(given.whatsapp_opt_in).toBe(true);
+    const [{ source }] = await ds.query(
+      `SELECT whatsapp_opt_in_source AS source FROM clients WHERE owner_id = $1 AND phone = $2`,
+      [b.ownerId, phone],
+    );
+    expect(source).toBe('WEB');
     expect(given.whatsapp_opt_in_at).not.toBeNull();
 
     // Sin marcar (o false) en otra reserva: no lo quita.

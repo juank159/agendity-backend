@@ -102,6 +102,10 @@ export class Client {
   @Column('timestamptz', { nullable: true })
   whatsapp_opt_out_at: Date | null;
 
+  /** Origen del último consentimiento: `APP`, `WEB` o `LINK` (11.06). */
+  @Column('varchar', { length: 10, nullable: true })
+  whatsapp_opt_in_source: 'APP' | 'WEB' | 'LINK' | null;
+
   @CreateDateColumn({
     type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',

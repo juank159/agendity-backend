@@ -161,22 +161,26 @@ describe('Fase 11: piezas puras de los recordatorios', () => {
   describe('consentimiento', () => {
     const now = new Date('2031-01-01T00:00:00Z');
     it('dar, quitar y no cambiar', () => {
-      expect(consentChange(null, true, now)).toEqual({
+      expect(consentChange(null, true, 'APP', now)).toEqual({
         whatsapp_opt_in: true,
         whatsapp_opt_in_at: now,
         whatsapp_opt_out_at: null,
+        whatsapp_opt_in_source: 'APP',
       });
-      expect(consentChange({ whatsapp_opt_in: true }, false, now)).toEqual({
+      expect(
+        consentChange({ whatsapp_opt_in: true }, false, 'APP', now),
+      ).toEqual({
         whatsapp_opt_in: false,
         whatsapp_opt_out_at: now,
       });
-      expect(consentChange({ whatsapp_opt_in: true }, undefined, now)).toEqual(
-        {},
-      );
+      expect(
+        consentChange({ whatsapp_opt_in: true }, undefined, 'APP', now),
+      ).toEqual({});
       expect(
         consentChange(
           { whatsapp_opt_in: true, whatsapp_opt_out_at: null },
           true,
+          'APP',
           now,
         ),
       ).toEqual({});

@@ -33,6 +33,9 @@ const PUBLIC_ROUTES = new Set<string>([
   // X-Hub-Signature-256 (test/reminders.e2e-spec.ts).
   'GET /api/webhooks/whatsapp',
   'POST /api/webhooks/whatsapp',
+  // Link de consentimiento de WhatsApp (11.06): token firmado, throttle por IP.
+  'GET /api/public/consent/{token}',
+  'POST /api/public/consent/{token}/accept',
   // Agenda pública por link (9.01, D-17): por slug, con throttle por IP.
   'GET /api/public/businesses/{slug}',
   'GET /api/public/businesses/{slug}/services',

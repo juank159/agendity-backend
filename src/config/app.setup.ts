@@ -5,7 +5,7 @@ import {
   defaultBusinessTimeZone,
 } from '../common/utils/date.util';
 import { requestTimeZoneMiddleware } from '../common/context/request-time-zone';
-import { setupBookingPage } from '../web/booking-page';
+import { setupBookingPage, setupConsentPage } from '../web/booking-page';
 import { json } from 'express';
 import { WHATSAPP_WEBHOOK_PATH } from '../reminders/whatsapp-webhook.controller';
 
@@ -56,6 +56,8 @@ export function setupApp(app: INestApplication): OpenAPIObject {
 
   // Página web de reservas (9.02): `/reservar/:slug`, fuera de `/api`.
   setupBookingPage(app);
+  // Link de consentimiento de WhatsApp (11.06): `/consentimiento/:token`.
+  setupConsentPage(app);
 
   app.useGlobalPipes(
     new ValidationPipe({

@@ -21,9 +21,24 @@ const PRODUCTION = {
   EMAIL_USER: 'agenda@agendity.app',
   EMAIL_PASSWORD: 'app-password',
   PUBLIC_BASE_URL: 'https://agendity.app',
+  CONSENT_LINK_SECRET: 'c'.repeat(64),
 };
 
 describe('validación del .env (D.02)', () => {
+  it('11.06: en producción CONSENT_LINK_SECRET es obligatoria y larga', () => {
+    expect(envProblems(PRODUCTION)).toEqual([]);
+    const { CONSENT_LINK_SECRET: _omit, ...without } = PRODUCTION;
+    void _omit;
+    expect(envProblems(without)).toEqual([
+      'Falta CONSENT_LINK_SECRET (obligatoria en producción)',
+    ]);
+    expect(
+      envProblems({ ...PRODUCTION, CONSENT_LINK_SECRET: 'corta' }),
+    ).toEqual([
+      'CONSENT_LINK_SECRET debe tener al menos 32 caracteres en producción',
+    ]);
+  });
+
   it('Fase 11: MESSAGING_CHANNEL=whatsapp_cloud exige las claves de Meta (solo nombres)', () => {
     expect(envProblems({ ...BASE, MESSAGING_CHANNEL: 'log' })).toEqual([]);
     expect(envProblems({ ...BASE, MESSAGING_CHANNEL: 'sms' })).toEqual([

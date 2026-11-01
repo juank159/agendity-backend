@@ -438,7 +438,7 @@ export class PublicBookingService {
     const clients = manager.getRepository(Client);
     if (existing) {
       const client = await clients.findOneByOrFail({ id: existing.id });
-      const consent = optIn ? consentChange(client, true) : {};
+      const consent = optIn ? consentChange(client, true, 'WEB') : {};
       if (!Object.keys(consent).length) return client;
       await clients.update({ id: client.id }, consent);
       return Object.assign(client, consent);
@@ -456,7 +456,7 @@ export class PublicBookingService {
         isFromDevice: false,
         isActive: true,
         showNotes: false,
-        ...consentChange(null, optIn ? true : undefined),
+        ...consentChange(null, optIn ? true : undefined, 'WEB'),
       }),
     );
   }

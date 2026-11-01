@@ -56,20 +56,29 @@ function setSecurityHeaders(res: HeaderTarget): void {
   }
 }
 
-export function setupBookingPage(app: INestApplication): void {
-  const indexFile = join(BOOKING_PAGE_DIR, 'index.html');
+/**
+ * Sirve una página pública sin framework (HTML + JS + CSS de `public/<dir>`)
+ * con las cabeceras estrictas: estáticos en `<route>/_/…` y el `index.html`
+ * en `<route>` y `<route>/:param`. La usan `/reservar` (9.02) y
+ * `/consentimiento` (11.06).
+ */
+export function servePublicPage(
+  app: INestApplication,
+  { route, dir, name }: { route: string; dir: string; name: string },
+): void {
+  const indexFile = join(dir, 'index.html');
   if (!existsSync(indexFile)) {
-    // D.02: en producción `public/` debe ir con el backend (si no, el link
-    // de reservas da 404).
-    new Logger('BookingPage').error(
-      `No se encontró ${indexFile}: /reservar no estará disponible. Despliega la carpeta public/ junto al backend.`,
+    // D.02: en producción `public/` debe ir con el backend (si no, la
+    // página da 404).
+    new Logger(name).error(
+      `No se encontró ${indexFile}: ${route} no estará disponible. Despliega la carpeta public/ junto al backend.`,
     );
     return;
   }
   const express = app as NestExpressApplication;
 
-  express.useStaticAssets(BOOKING_PAGE_DIR, {
-    prefix: '/reservar/_/',
+  express.useStaticAssets(dir, {
+    prefix: `${route}/_/`,
     index: false,
     setHeaders: (res, path) => {
       setSecurityHeaders(res);
@@ -90,6 +99,31 @@ export function setupBookingPage(app: INestApplication): void {
     res.sendFile(indexFile);
   };
   const http = express.getHttpAdapter().getInstance();
-  http.get('/reservar', sendIndex);
-  http.get('/reservar/:slug', sendIndex);
+  http.get(route, sendIndex);
+  http.get(`${route}/:param`, sendIndex);
+}
+
+export function setupBookingPage(app: INestApplication): void {
+  servePublicPage(app, {
+    route: '/reservar',
+    dir: BOOKING_PAGE_DIR,
+    name: 'BookingPage',
+  });
+}
+
+/** Página del link de consentimiento de WhatsApp (11.06): `/consentimiento/:token`. */
+export const CONSENT_PAGE_DIR = join(
+  __dirname,
+  '..',
+  '..',
+  'public',
+  'consentimiento',
+);
+
+export function setupConsentPage(app: INestApplication): void {
+  servePublicPage(app, {
+    route: '/consentimiento',
+    dir: CONSENT_PAGE_DIR,
+    name: 'ConsentPage',
+  });
 }

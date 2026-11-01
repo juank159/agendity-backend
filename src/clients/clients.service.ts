@@ -166,7 +166,7 @@ export class ClientsService {
         birthday: await this.birthdayOf(createClientDto.birthday, tenantId),
         isFromDevice: options.fromDevice === true,
         isActive: true,
-        ...consentChange(null, createClientDto.whatsapp_opt_in),
+        ...consentChange(null, createClientDto.whatsapp_opt_in, 'APP'),
       } as Client);
 
       return await this.clientRepository.save(client);
@@ -395,7 +395,7 @@ export class ClientsService {
       notes: dto.notes ?? null,
       birthday: await this.birthdayOf(dto.birthday, tenantId),
       isActive: true,
-      ...consentChange(null, dto.whatsapp_opt_in),
+      ...consentChange(null, dto.whatsapp_opt_in, 'APP'),
     });
     return manager.save(Client, client);
   }
@@ -483,7 +483,7 @@ export class ClientsService {
         image: updateClientDto.image || currentClient.image,
         // Consentimiento de WhatsApp con su fecha (Fase 11).
         whatsapp_opt_in: currentClient.whatsapp_opt_in,
-        ...consentChange(currentClient, updateClientDto.whatsapp_opt_in),
+        ...consentChange(currentClient, updateClientDto.whatsapp_opt_in, 'APP'),
       });
 
       return await this.clientRepository.save(updatedClient);
