@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 // src/payments/dto/create-custom-payment-method.dto.ts
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString, IsOptional, IsBoolean } from 'class-validator';
@@ -36,6 +37,7 @@ export class CreateCustomPaymentMethodDto {
     default: true,
   })
   @IsOptional()
+  @RawBoolean()
   @IsBoolean()
   isActive?: boolean;
 }

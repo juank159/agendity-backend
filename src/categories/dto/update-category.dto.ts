@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import { PartialType, OmitType } from '@nestjs/mapped-types';
 import { CreateCategoryDto } from './create-category.dto';
 import { IsBoolean, IsOptional } from 'class-validator';
@@ -13,6 +14,7 @@ export class UpdateCategoryDto extends PartialType(
     required: false,
   })
   @IsOptional()
+  @RawBoolean()
   @IsBoolean()
   isActive?: boolean;
 }

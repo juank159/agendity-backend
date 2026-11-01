@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import { PartialType, OmitType } from '@nestjs/mapped-types';
 import { CreateServiceDto } from './create-service.dto';
 import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
@@ -16,6 +17,7 @@ export class UpdateServiceDto extends PartialType(
    * web pública; las citas que ya lo tienen no cambian.
    */
   @IsOptional()
+  @RawBoolean()
   @IsBoolean({ message: 'isActive debe ser verdadero o falso' })
   isActive?: boolean;
 }

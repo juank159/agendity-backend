@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import {
   IsNotEmpty,
@@ -57,6 +58,7 @@ export class CreateScheduleDto {
     example: true,
     description: 'Indica si el horario está disponible',
   })
+  @RawBoolean()
   @IsBoolean()
   is_available: boolean;
 }

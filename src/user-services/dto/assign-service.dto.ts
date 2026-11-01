@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsUUID,
@@ -61,6 +62,7 @@ export class AssignServiceDto {
     default: true,
   })
   @IsOptional()
+  @RawBoolean()
   @IsBoolean({ message: 'isActive debe ser verdadero o falso' })
   isActive?: boolean;
 }

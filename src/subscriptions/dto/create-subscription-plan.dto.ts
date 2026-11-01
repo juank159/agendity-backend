@@ -1,5 +1,6 @@
 // src/subscriptions/dto/create-subscription-plan.dto.ts
 
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import {
   IsString,
   IsNumber,
@@ -35,6 +36,7 @@ export class CreateSubscriptionPlanDto {
   @IsOptional()
   duration_months?: number = 1;
 
+  @RawBoolean()
   @IsBoolean()
   @IsOptional()
   is_recurring?: boolean = false; // Nuevo campo
@@ -54,6 +56,7 @@ export class CreateSubscriptionPlanDto {
   @IsOptional()
   wompi_price_id?: string;
 
+  @RawBoolean()
   @IsBoolean()
   @IsOptional()
   is_active?: boolean = true;

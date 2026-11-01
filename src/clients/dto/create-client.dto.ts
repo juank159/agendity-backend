@@ -63,6 +63,7 @@ export class CreateClientDto {
   birthday?: string;
 
   @IsOptional()
+  @RawBoolean()
   @IsBoolean()
   showNotes?: boolean;
 

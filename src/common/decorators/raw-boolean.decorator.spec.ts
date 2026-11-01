@@ -1,6 +1,12 @@
 import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { join } from 'path';
+import { getMetadataStorage } from 'class-validator';
+import { defaultMetadataStorage } from 'class-transformer/cjs/storage';
+import { TransformationType } from 'class-transformer';
+import { RAW_BOOLEAN_TRANSFORM } from './raw-boolean.decorator';
 import { CreateClientDto } from 'src/clients/dto/create-client.dto';
 import { CreatePublicBookingDto } from 'src/public-booking/dto/public-booking.dto';
 
@@ -36,5 +42,80 @@ describe('@RawBoolean: consentimiento de WhatsApp sin conversión implícita', (
     for (const bad of ['false', 'true', 'si', 1, {}]) {
       expect(check(cls, base, bad).errors).toBe(1);
     }
+  });
+});
+
+/** Todos los `.ts` de `src` (sin specs). */
+function sources(dir = join(__dirname, '..', '..')): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sources(path);
+    return name.endsWith('.ts') && !name.endsWith('.spec.ts') ? [path] : [];
+  });
+}
+
+/**
+ * Guardia (auditoría del 2026-11-01): todo booleano de ENTRADA lleva
+ * `@RawBoolean()`. Si falla, añade `@RawBoolean()` encima de `@IsBoolean()`
+ * (o, en la query, usa `ParseBoolPipe`).
+ */
+describe('guardia: ningún booleano de entrada sin @RawBoolean', () => {
+  const dtoFiles = sources().filter(
+    (f) => /\/dto\//.test(f) || f.endsWith('.dto.ts'),
+  );
+
+  it('cada propiedad booleana validada de cada DTO usa @RawBoolean', () => {
+    const missing: string[] = [];
+    let checked = 0;
+    for (const file of dtoFiles) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require(file);
+      for (const value of Object.values(mod)) {
+        if (typeof value !== 'function') continue;
+        const cls = value as new () => object;
+        const metas = getMetadataStorage().getTargetValidationMetadatas(
+          cls,
+          '',
+          true,
+          false,
+        );
+        const props = new Set(metas.map((m) => m.propertyName));
+        for (const prop of props) {
+          const isBool =
+            metas.some(
+              (m) => m.propertyName === prop && m.name === 'isBoolean',
+            ) ||
+            Reflect.getMetadata('design:type', cls.prototype, prop) === Boolean;
+          if (!isBool) continue;
+          checked++;
+          const transforms = defaultMetadataStorage.findTransformMetadatas(
+            cls,
+            prop,
+            TransformationType.PLAIN_TO_CLASS,
+          );
+          if (
+            !transforms.some((t) => t.transformFn === RAW_BOOLEAN_TRANSFORM)
+          ) {
+            missing.push(`${cls.name}.${prop} (${file.split('/src/')[1]})`);
+          }
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+    expect(checked).toBeGreaterThanOrEqual(14);
+  });
+
+  it('en los controllers, ningún booleano de query a mano (=== "true") ni sin ParseBoolPipe', () => {
+    const offenders = sources()
+      .filter((f) => f.endsWith('.controller.ts'))
+      .flatMap((file) => {
+        const text = readFileSync(file, 'utf8');
+        const bad = [
+          ...text.matchAll(/=== ?['"](true|false)['"]/g),
+          ...text.matchAll(/@Query\('[^']+'\)\s*\w+\??:\s*boolean/g),
+        ];
+        return bad.map((m) => `${file.split('/src/')[1]}: ${m[0]}`);
+      });
+    expect(offenders).toEqual([]);
   });
 });

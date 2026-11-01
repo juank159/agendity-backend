@@ -1,3 +1,4 @@
+import { RawBoolean } from 'src/common/decorators/raw-boolean.decorator';
 import {
   IsNotEmpty,
   IsNumber,
@@ -112,6 +113,7 @@ export class CreateServiceDto {
     default: false,
   })
   @IsOptional()
+  @RawBoolean()
   @IsBoolean()
   onlineBooking?: boolean;
 

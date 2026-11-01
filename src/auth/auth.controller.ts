@@ -8,6 +8,7 @@ import {
   Patch,
   Delete,
   Query,
+  ParseBoolPipe,
 } from '@nestjs/common';
 
 import { LoginAuthDto, RegisterOwnerDto } from './dto';
@@ -161,12 +162,14 @@ export class AuthController {
   @Get('employees')
   getEmployees(
     @CurrentUser() owner: AuthUser,
-    @Query('includeDeleted') includeDeleted?: string,
+    // Solo "true"/"false" (400 si no); ausente = false. Antes cualquier otro
+    // texto contaba como false sin avisar.
+    @Query('includeDeleted', new ParseBoolPipe({ optional: true }))
+    includeDeleted?: boolean,
   ) {
-    const shouldIncludeDeleted = includeDeleted === 'true';
     return this.employeesService.getEmployeesByOwner(
       owner.id,
-      shouldIncludeDeleted,
+      includeDeleted === true,
     );
   }
 
