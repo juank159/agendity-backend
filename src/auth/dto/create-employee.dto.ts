@@ -17,7 +17,8 @@ export class CreateEmployeeDto extends CreateAuthDto {
     isArray: true,
   })
   @IsArray()
-  @IsUUID('4', { each: true })
+  // Cualquier versión (7.05a): los ids creados sin conexión son UUID v7.
+  @IsUUID('all', { each: true })
   @IsOptional()
   serviceIds?: string[];
 

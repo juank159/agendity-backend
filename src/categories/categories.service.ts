@@ -12,6 +12,7 @@ import { Category } from './entities/category.entity';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { InjectRepository } from '@nestjs/typeorm';
+import { isUUID } from 'class-validator';
 import { Not, QueryFailedError, Repository } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 
@@ -24,8 +25,6 @@ import { ErrorCode } from 'src/common/constants/error-codes';
 export class CategoriesService {
   private readonly logger = new Logger(CategoriesService.name);
   private readonly DEFAULT_RELATIONS = ['services'];
-  private readonly UUID_REGEX =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   constructor(
     @InjectRepository(Category)
@@ -198,10 +197,10 @@ export class CategoriesService {
   }
 
   async findOne(term: string, tenantId: string): Promise<Category> {
-    const isUUID = this.UUID_REGEX.test(term);
-
+    // Cualquier versión de UUID (7.05a): la app genera ids v7 sin conexión.
+    // Antes una regex propia solo admitía v1-v5 y buscaba un id v7 como nombre.
     return await this.findCategory({
-      ...(isUUID ? { id: term } : { name: term }),
+      ...(isUUID(term) ? { id: term } : { name: term }),
       ownerId: tenantId,
     });
   }

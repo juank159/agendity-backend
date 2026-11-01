@@ -47,7 +47,8 @@ export class AvailableSlotsQueryDto {
   @IsArray()
   @ArrayMinSize(1, { message: 'Indica al menos un servicio' })
   @ArrayUnique({ message: 'No repitas servicios' })
-  @IsUUID('4', { each: true })
+  // Cualquier versión (7.05a): los ids creados sin conexión son UUID v7.
+  @IsUUID('all', { each: true })
   service_ids: string[];
 
   @ApiPropertyOptional({

@@ -43,7 +43,8 @@ export class CreateAppointmentDto {
   @IsArray()
   @ArrayMinSize(1, { message: 'La cita debe tener al menos un servicio' })
   @ArrayUnique({ message: 'La cita no puede repetir un servicio' })
-  @IsUUID('4', { each: true })
+  // Cualquier versión (7.05a): los ids creados sin conexión son UUID v7.
+  @IsUUID('all', { each: true })
   service_ids: string[];
 
   @ApiProperty({
