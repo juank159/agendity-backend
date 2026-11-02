@@ -30,6 +30,7 @@ import {
 import { SubscriptionsService } from 'src/subscriptions/services/subscriptions.service';
 import { OpeningHoursRange } from 'src/settings/opening-hours';
 import { TenantSettingsService } from 'src/settings/tenant-settings.service';
+import { ThemePalette } from 'src/settings/theme-palette';
 import {
   CreatePublicBookingDto,
   PublicBookingClientDto,
@@ -49,6 +50,8 @@ export interface PublicBusiness {
   slug: string;
   timezone: string;
   openingHours: OpeningHoursRange[] | null;
+  /** Paleta del negocio (12.01, D-22): acento de la web; `null` = lavanda. */
+  themePalette: ThemePalette | null;
 }
 
 export interface PublicService {
@@ -112,6 +115,7 @@ export class PublicBookingService {
       slug: row.slug,
       timezone: view.timezone,
       openingHours: view.opening_hours,
+      themePalette: view.theme_palette,
     };
   }
 
@@ -138,6 +142,7 @@ export class PublicBookingService {
       slug: business.slug,
       timezone: business.timezone,
       opening_hours: business.openingHours,
+      theme_palette: business.themePalette,
       accepting_bookings: await this.acceptsBookings(business.tenantId),
       // 7.04-9: sin servicios activos con reserva en línea, la web dice
       // "Este negocio aún no tiene servicios para reservar en línea".

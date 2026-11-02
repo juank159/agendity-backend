@@ -4,7 +4,11 @@
   --surface: #ffffff;
   --text: #1f1d1b;
   --muted: #5c5752;
-  --primary: #7a2e55;
+  /* Acento = paleta del negocio (12.01, D-22); por defecto, lavanda. */
+  --seed: #7c5cfc;
+  --primary: #7154e5;
+  --primary-strong: #553fac;
+  --primary-soft: #f5f2ff;
   --primary-text: #ffffff;
   --border: #d9d3cd;
   --free-bg: #e7f4ec;
@@ -17,6 +21,57 @@
   --focus: #1a5fb4;
   --radius: 12px;
   color-scheme: light;
+}
+
+/*
+ * Paletas del negocio (12.01, D-22): `app.mjs` pone `data-palette` en <html>
+ * con `theme_palette` de la API pública (un atributo, no un estilo inline: la
+ * CSP no se toca). Una sin bloque (o null) se queda con lavanda (:root).
+ * `--seed` es la semilla de la guía (solo decoración); `--primary` es su tono
+ * con contraste AA (>= 4.5:1) con el texto blanco, el fondo y `--primary-soft`
+ * (lo comprueba test/web/palettes.test.mjs; los nombres salen de
+ * src/settings/theme-palette.ts y los vigila theme-palette.spec.ts).
+ */
+:root[data-palette='lavanda'] {
+  --seed: #7c5cfc;
+  --primary: #7154e5;
+  --primary-strong: #553fac;
+  --primary-soft: #f5f2ff;
+}
+
+:root[data-palette='rosa'] {
+  --seed: #ec4899;
+  --primary: #bf3a7c;
+  --primary-strong: #8f2c5d;
+  --primary-soft: #fdf0f7;
+}
+
+:root[data-palette='azul'] {
+  --seed: #2563eb;
+  --primary: #2563eb;
+  --primary-strong: #1c4ab0;
+  --primary-soft: #eef3fd;
+}
+
+:root[data-palette='turquesa'] {
+  --seed: #0ea5a4;
+  --primary: #0b7c7b;
+  --primary-strong: #085d5c;
+  --primary-soft: #ecf8f8;
+}
+
+:root[data-palette='coral'] {
+  --seed: #f97316;
+  --primary: #b35310;
+  --primary-strong: #863e0c;
+  --primary-soft: #fff4ec;
+}
+
+:root[data-palette='grafito'] {
+  --seed: #334155;
+  --primary: #334155;
+  --primary-strong: #263140;
+  --primary-soft: #eff0f1;
 }
 
 * {
@@ -41,15 +96,29 @@ body {
   padding: 16px 16px 48px;
 }
 
+.header {
+  padding: 20px;
+  border-radius: var(--radius);
+  border-bottom: 4px solid var(--seed);
+  background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+  color: var(--primary-text);
+}
+
 .header h1 {
   margin: 4px 0;
   font-size: 1.6rem;
   line-height: 1.2;
 }
 
+.header .muted {
+  color: var(--primary-text);
+  margin: 0;
+  font-size: 0.9rem;
+}
+
 .eyebrow {
   margin: 0;
-  color: var(--primary);
+  color: var(--primary-text);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -111,7 +180,7 @@ body {
 
 .service[aria-pressed='true'] {
   border-color: var(--primary);
-  background: #f6eef2;
+  background: var(--primary-soft);
 }
 
 .service-dot {

@@ -14,6 +14,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
 import { TenantSettingsService } from '../src/settings/tenant-settings.service';
 import { defaultBusinessTimeZone } from '../src/common/utils/date.util';
+import { THEME_PALETTE_MESSAGE } from '../src/settings/theme-palette';
 import {
   E2EHttp,
   createE2EApp,
@@ -80,6 +81,7 @@ describe('Configuración del negocio 6.01 (e2e, solo lectura)', () => {
       'name',
       'opening_hours',
       'slug',
+      'theme_palette', // 12.01
       'timezone',
     ]);
     expect(
@@ -140,6 +142,30 @@ describe('Configuración del negocio 6.01 (e2e, solo lectura)', () => {
     expect([res.status, res.body.code]).toEqual([400, 'VALIDATION_ERROR']);
   });
 
+  it('12.01: PATCH theme_palette como Employee → 403 FORBIDDEN', async () => {
+    if (!employee) return;
+    const res = await http
+      .patch('/api/settings')
+      .set(auth(signToken(employee, ['Employee'])))
+      .send({ theme_palette: 'rosa' });
+    expect([res.status, res.body.code]).toEqual([403, 'FORBIDDEN']);
+  });
+
+  it.each([['morado'], ['Rosa'], [''], ['#EC4899'], [5], [['rosa']]])(
+    '12.01: PATCH theme_palette inválida %p → 400 VALIDATION_ERROR',
+    async (theme_palette) => {
+      const res = await http
+        .patch('/api/settings')
+        .set(auth(signToken(owner, ['Owner'])))
+        .send({ theme_palette });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: THEME_PALETTE_MESSAGE,
+      });
+    },
+  );
+
   it('PATCH /settings con la misma zona: 200 y no escribe', async () => {
     const token = auth(signToken(owner, ['Owner']));
     const current = await http.get('/api/settings').set(token);
@@ -162,6 +188,7 @@ describeWritable(
     let owner: User;
     let employee: User | null;
     let original: string;
+    let originalPalette: string | null = null;
     const run = randomUUID().slice(0, 8);
     /** Owners creados aquí. `register/owner` admite 5 por minuto: este bloque hace 5. */
     const created: string[] = [];
@@ -192,14 +219,21 @@ describeWritable(
       await assertWritableDatabase(ds);
       ({ owner, employee } = await findDevOwnerAndEmployee(ds));
       original = (await zoneOf(owner.id)) ?? defaultBusinessTimeZone();
+      originalPalette =
+        (
+          await ds.query(
+            'SELECT theme_palette FROM business_settings WHERE tenant_id = $1',
+            [owner.id],
+          )
+        )[0]?.theme_palette ?? null;
     }, E2E_BOOT_TIMEOUT_MS);
 
     afterEach(() => jest.restoreAllMocks());
 
     afterAll(async () => {
       await ds.query(
-        'UPDATE business_settings SET timezone = $2 WHERE tenant_id = $1',
-        [owner.id, original],
+        'UPDATE business_settings SET timezone = $2, theme_palette = $3 WHERE tenant_id = $1',
+        [owner.id, original, originalPalette],
       );
       app.get(TenantSettingsService).clearCache();
       await close();
@@ -232,6 +266,36 @@ describeWritable(
         .set(ownerToken)
         .send({ timezone: 'Europe/Madrid' });
       expect(madrid.body).toMatchObject({ timezone: 'Europe/Madrid' });
+    });
+
+    it('12.01: el Owner fija la paleta; el Employee la ve; null vuelve al defecto; los demás ajustes no cambian', async () => {
+      const ownerToken = auth(signToken(owner, ['Owner']));
+      const before = (await http.get('/api/settings').set(ownerToken)).body;
+
+      const res = await http
+        .patch('/api/settings')
+        .set(ownerToken)
+        .send({ theme_palette: 'turquesa' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ...before, theme_palette: 'turquesa' });
+      const [row] = await ds.query(
+        'SELECT theme_palette FROM business_settings WHERE tenant_id = $1',
+        [owner.id],
+      );
+      expect(row.theme_palette).toBe('turquesa');
+      if (employee) {
+        const asEmployee = await http
+          .get('/api/settings')
+          .set(auth(signToken(employee, ['Employee'])));
+        expect(asEmployee.body.theme_palette).toBe('turquesa');
+      }
+
+      const reset = await http
+        .patch('/api/settings')
+        .set(ownerToken)
+        .send({ theme_palette: null });
+      expect(reset.status).toBe(200);
+      expect(reset.body).toEqual({ ...before, theme_palette: null });
     });
 
     it('alta por email con la zona del dispositivo: fila en business_settings con esa zona; sin zona o inválida: BUSINESS_TIMEZONE', async () => {

@@ -176,16 +176,28 @@ describeWritable('Agenda pública 9.01 (e2e, escribe en copia)', () => {
       'name',
       'opening_hours',
       'slug',
+      'theme_palette', // 12.01
       'timezone',
     ]);
     expect(res.body).toMatchObject({
       name: `Salón 1 ${run}`,
+      theme_palette: null,
       timezone: 'America/Bogota',
       accepting_bookings: true,
       has_online_services: true,
     });
     const missing = await http.get('/api/public/businesses/no-existe-xyz');
     expect([missing.status, missing.body.code]).toEqual([404, 'NOT_FOUND']);
+  });
+
+  it('12.01: la paleta que fija el Owner sale en los datos públicos (solo la de su negocio); null vuelve al defecto', async () => {
+    const patch = (theme_palette: string | null) =>
+      http.patch('/api/settings').set(auth(a.token)).send({ theme_palette });
+    expect((await patch('coral')).status).toBe(200);
+    expect((await http.get(base(a))).body.theme_palette).toBe('coral');
+    expect((await http.get(base(b))).body.theme_palette).toBeNull();
+    expect((await patch(null)).status).toBe(200);
+    expect((await http.get(base(a))).body.theme_palette).toBeNull();
   });
 
   it('7.04-9: un servicio nace sin reserva en línea; sin ninguno, has_online_services = false', async () => {

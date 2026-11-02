@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { OpeningHoursRange } from '../opening-hours';
+import type { ThemePalette } from '../theme-palette';
 
 /**
  * Configuración de un negocio (6.01, D-15): una fila por tenant (= id del
@@ -69,6 +70,14 @@ export class BusinessSettings {
    */
   @Column({ type: 'jsonb', nullable: true })
   opening_hours: OpeningHoursRange[] | null;
+
+  /**
+   * Paleta de color del negocio (12.01, D-22): uno de `THEME_PALETTES`
+   * (`settings/theme-palette.ts`). `null` = sin elegir (lavanda). La app la
+   * usa si el dispositivo no eligió otra y la web de reservas, como acento.
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  theme_palette: ThemePalette | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

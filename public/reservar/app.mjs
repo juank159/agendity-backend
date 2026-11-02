@@ -14,6 +14,7 @@ import {
   formatTime,
   isClosedDay,
   nextDays,
+  paletteAttr,
 } from './booking-core.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -95,6 +96,9 @@ const selectedServices = () =>
 async function loadBusiness() {
   if (!slug) throw new ApiError(404, null);
   state.business = await api('');
+  // 12.01 (D-22): acento con la paleta del negocio (atributo, no estilo inline).
+  const palette = paletteAttr(state.business.theme_palette);
+  if (palette) document.documentElement.dataset.palette = palette;
   const name = state.business.name || 'Reserva tu cita';
   $('business-name').textContent = name;
   document.title = `Reservar · ${name}`;

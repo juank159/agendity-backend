@@ -10,6 +10,7 @@ import { Review } from 'src/reviews/entities/review.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
 import { Service } from 'src/services/entities/service.entity';
 import { BusinessSettings } from 'src/settings/entities/business-settings.entity';
+import { storedThemePalette } from 'src/settings/theme-palette';
 import { TimeBlock } from 'src/time-blocks/entities/time-block.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
 import { User } from 'src/users/entities/user.entity';
@@ -80,6 +81,8 @@ export const SYNC_ENTITIES: SyncEntity[] = [
           slug: row.slug,
           timezone: row.timezone,
           opening_hours: row.opening_hours,
+          // 12.01 (D-22): paleta del negocio; `null` = lavanda.
+          theme_palette: storedThemePalette(row.theme_palette),
         },
       })),
   },

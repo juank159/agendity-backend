@@ -15,6 +15,7 @@ import {
   openingHoursError,
   sortOpeningHours,
 } from './opening-hours';
+import { storedThemePalette, ThemePalette } from './theme-palette';
 
 /** Lo que devuelven `GET` y `PATCH /settings`. Crece con los ajustes nuevos. */
 export interface BusinessSettingsView {
@@ -25,6 +26,8 @@ export interface BusinessSettingsView {
   slug: string | null;
   /** Horario de apertura (8.01); `null` = sin configurar (sin límite). */
   opening_hours: OpeningHoursRange[] | null;
+  /** Paleta de color (12.01, D-22); `null` = sin elegir (lavanda). */
+  theme_palette: ThemePalette | null;
   /**
    * Link público de reservas (D.02): `PUBLIC_BASE_URL` + `/reservar/` + slug,
    * para que la app lo comparta. `null` sin slug o sin `PUBLIC_BASE_URL`.
@@ -124,6 +127,7 @@ export class TenantSettingsService {
       name: row?.name ?? null,
       slug: row?.slug ?? null,
       opening_hours: row?.opening_hours ?? null,
+      theme_palette: storedThemePalette(row?.theme_palette),
       booking_url: bookingUrl(row?.slug ?? null),
     };
     this.cache.set(tenantId, {
@@ -152,8 +156,8 @@ export class TenantSettingsService {
 
   /**
    * `PATCH /settings` (solo Owner). Solo escribe los campos que cambian;
-   * zona canónica (6.01), nombre (8.00: el slug se genera la primera vez) y
-   * horario ordenado (8.01). Invalida la caché.
+   * zona canónica (6.01), nombre (8.00: el slug se genera la primera vez),
+   * horario ordenado (8.01) y paleta (12.01). Invalida la caché.
    */
   async updateSettings(
     tenantId: string,
@@ -188,6 +192,14 @@ export class TenantSettingsService {
       ) {
         changes.opening_hours = hours;
       }
+    }
+
+    if (
+      dto.theme_palette !== undefined &&
+      dto.theme_palette !== (row?.theme_palette ?? null)
+    ) {
+      // El DTO ya validó el valor; `null` = volver a la paleta por defecto.
+      changes.theme_palette = dto.theme_palette;
     }
 
     if (Object.keys(changes).length) {

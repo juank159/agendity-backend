@@ -165,6 +165,16 @@ export function buildGrid({
   return blocks.sort((a, b) => a.start - b.start);
 }
 
+/**
+ * Paleta del negocio (12.01, D-22) → valor de `data-palette` en <html>. Solo
+ * deja pasar un nombre en minúsculas (nunca CSS): los nombres válidos y sus
+ * colores viven en `styles.css` (lista única: src/settings/theme-palette.ts).
+ * `null`, vacío o raro → '' (sin atributo: lavanda por defecto).
+ */
+export function paletteAttr(value) {
+  return typeof value === 'string' && /^[a-z]{1,20}$/.test(value) ? value : '';
+}
+
 /** `$ 30.000` (pesos colombianos, sin decimales). */
 export function formatCOP(value) {
   return new Intl.NumberFormat('es-CO', {

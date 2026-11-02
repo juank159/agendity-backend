@@ -192,6 +192,52 @@ describeWritable(
       ownerCursor = cursor;
     });
 
+    it('12.01: cambiar la paleta del negocio baja business_settings con theme_palette (Owner y Employee)', async () => {
+      const initial = (await pull(ownerToken, '0')).changes.find(
+        (c) => c.entity === 'business_settings',
+      );
+      expect(initial?.data).toMatchObject({
+        tenant_id: ownerId,
+        theme_palette: null,
+      });
+
+      const res = await http
+        .patch('/api/settings')
+        .set(auth(ownerToken))
+        .send({ theme_palette: 'grafito' });
+      expect(res.status).toBe(200);
+      const owner = await pull(ownerToken, ownerCursor);
+      const employee = await pull(employeeToken, employeeCursor);
+      ownerCursor = owner.cursor;
+      employeeCursor = employee.cursor;
+      for (const { changes } of [owner, employee]) {
+        const settings = changes.filter(
+          (c) => c.entity === 'business_settings',
+        );
+        expect(settings).toHaveLength(1);
+        expect(settings[0]).toMatchObject({
+          op: 'upsert',
+          id: ownerId,
+          data: { tenant_id: ownerId, theme_palette: 'grafito' },
+        });
+        expect(Object.keys(settings[0].data).sort()).toEqual([
+          'name',
+          'opening_hours',
+          'slug',
+          'tenant_id',
+          'theme_palette',
+          'timezone',
+        ]);
+      }
+      // El otro negocio no recibe nada de esto.
+      const other = await pull(otherToken, '0');
+      expect(
+        other.changes.filter(
+          (c) => c.entity === 'business_settings' && c.id === ownerId,
+        ),
+      ).toEqual([]);
+    });
+
     it('permisos: el Employee recibe solo sus citas y nada de pagos; si la cita cambia de profesional, leave_scope', async () => {
       const as = (req: any) => req.set(auth(ownerToken));
       const mine = await as(http.post('/api/appointments')).send({

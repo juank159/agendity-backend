@@ -3,6 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -14,6 +15,11 @@ import {
 } from 'class-validator';
 import { IsIanaTimeZone } from 'src/common/decorators/is-time-zone.decorator';
 import { HHMM } from '../opening-hours';
+import {
+  THEME_PALETTE_MESSAGE,
+  THEME_PALETTES,
+  ThemePalette,
+} from '../theme-palette';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -41,7 +47,8 @@ export class OpeningHoursRangeDto {
 /**
  * `PATCH /settings` (solo Owner). Los campos que no llegan no cambian.
  * 6.01: `timezone`. 8.00: `name`. 8.01: `opening_hours` (`null` = quitar el
- * horario, sin límite; `[]` = cerrado todos los días).
+ * horario, sin límite; `[]` = cerrado todos los días). 12.01: `theme_palette`
+ * (`null` = volver a la paleta por defecto).
  */
 export class UpdateSettingsDto {
   @ApiPropertyOptional({
@@ -76,4 +83,14 @@ export class UpdateSettingsDto {
   @ValidateNested({ each: true })
   @Type(() => OpeningHoursRangeDto)
   opening_hours?: OpeningHoursRangeDto[] | null;
+
+  @ApiPropertyOptional({
+    enum: THEME_PALETTES,
+    nullable: true,
+    example: 'rosa',
+    description: 'Paleta de color del negocio (null = lavanda, por defecto)',
+  })
+  @IsOptional()
+  @IsIn(THEME_PALETTES, { message: THEME_PALETTE_MESSAGE })
+  theme_palette?: ThemePalette | null;
 }
