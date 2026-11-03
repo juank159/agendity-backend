@@ -4,7 +4,10 @@ import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import { AppointmentsService } from './appointments.service';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
-import { AppointmentStatus } from 'src/common/enums/status.enum';
+import {
+  AppointmentSource,
+  AppointmentStatus,
+} from 'src/common/enums/status.enum';
 import { AppointmentServiceLine } from './entities/appointment-service-line.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
 import { User } from 'src/users/entities/user.entity';
@@ -954,6 +957,7 @@ describe('AppointmentsService.findAvailableSlots (huecos libres, 2.14)', () => {
     date: day,
     serviceIds: [SERVICE],
     stepMinutes: 30,
+    channel: AppointmentSource.APP,
   };
   const workday = [
     {
@@ -1125,6 +1129,7 @@ describe('AppointmentsService: solo a futuro (2.21)', () => {
         date: '2000-01-03',
         serviceIds: [SERVICE],
         stepMinutes: 30,
+        channel: AppointmentSource.APP,
       },
       TENANT,
     );
@@ -1328,6 +1333,7 @@ describe('AppointmentsService: zona horaria de CADA negocio (6.02, D-15)', () =>
       date: '2030-01-07',
       serviceIds: [SERVICE],
       stepMinutes: 30,
+      channel: AppointmentSource.APP,
     };
     const iso = (dates: Date[]) => dates.map((d) => d.toISOString());
     expect(iso(await service.findAvailableSlots(query, TENANT))).toEqual([
@@ -1466,6 +1472,7 @@ describe('AppointmentsService: hallazgos de la prueba del salón (7.03)', () => 
             date: '2030-01-07',
             serviceIds: [SERVICE],
             stepMinutes: 30,
+            channel: AppointmentSource.APP,
           },
           TENANT,
         )
@@ -1593,6 +1600,90 @@ describe('AppointmentsService: horario del negocio (8.01)', () => {
     expect(codeOf(error)).toBe(ErrorCode.OUTSIDE_BUSINESS_HOURS);
   });
 
+  it('D-26: el almuerzo del negocio cierra solo el link público; la app agenda en él (crear y mover)', async () => {
+    const { service, hours, repo, txRepo } = build();
+    hours[TENANT] = [1, 2, 3, 4, 5].flatMap((day) => [
+      { day_of_week: day, start_time: '08:00', end_time: '12:00' },
+      { day_of_week: day, start_time: '14:00', end_time: '19:00' },
+    ]);
+    // App (Owner o Employee): 12:30 en el almuerzo y 11:30–12:00 + 12:00–12:30.
+    await expect(service.create(at('12:30'), TENANT)).resolves.toBeDefined();
+    await expect(service.create(at('11:45'), TENANT)).resolves.toBeDefined();
+    // Link público: 409 con las franjas.
+    const web = await service
+      .create(at('12:30'), TENANT, { source: AppointmentSource.WEB })
+      .catch((e) => e);
+    expect(codeOf(web)).toBe(ErrorCode.OUTSIDE_BUSINESS_HOURS);
+    expect(web.getResponse().details.hours).toEqual([
+      { start: '08:00', end: '12:00' },
+      { start: '14:00', end: '19:00' },
+    ]);
+    // Antes de abrir y después de cerrar: cerrado también en la app.
+    for (const hhmm of ['07:30', '19:00']) {
+      const error = await service.create(at(hhmm), TENANT).catch((e) => e);
+      expect(codeOf(error)).toBe(ErrorCode.OUTSIDE_BUSINESS_HOURS);
+      expect(error.getResponse().details.hours).toEqual([
+        { start: '08:00', end: '19:00' },
+      ]);
+    }
+    // Mover (PATCH, también /sync/push) al almuerzo: la app, aunque la cita
+    // haya entrado por el link público.
+    repo.findOne.mockResolvedValue({
+      id: 'cita-1',
+      ownerId: TENANT,
+      professionalId: EMPLOYEE,
+      date: new Date('2030-01-07T09:00:00-05:00'),
+      timezone: BOGOTA,
+      source: AppointmentSource.WEB,
+      status: AppointmentStatus.PENDING,
+      services: [{ id: SERVICE, duration: 30 }],
+    });
+    txRepo.save.mockClear();
+    await expect(
+      service.update('cita-1', { date: at('12:30').date } as any, TENANT),
+    ).resolves.toBeDefined();
+  });
+
+  it('D-26 available-slots: la app ofrece el almuerzo; el link público no', async () => {
+    const { service, hours } = build();
+    hours[TENANT] = [
+      { day_of_week: 1, start_time: '08:00', end_time: '10:00' },
+      { day_of_week: 1, start_time: '11:00', end_time: '12:00' },
+    ];
+    const slots = (channel: AppointmentSource) =>
+      service
+        .findAvailableSlots(
+          {
+            professionalId: EMPLOYEE,
+            date: '2030-01-07',
+            serviceIds: [SERVICE],
+            stepMinutes: 30,
+            channel,
+          },
+          TENANT,
+        )
+        .then((list) => list.map((d) => d.toISOString().slice(11, 16)));
+    // UTC (Bogotá + 5 h): 08:00 → 13:00 … 11:30 → 16:30.
+    expect(await slots(AppointmentSource.APP)).toEqual([
+      '13:00',
+      '13:30',
+      '14:00',
+      '14:30',
+      '15:00',
+      '15:30',
+      '16:00',
+      '16:30',
+    ]);
+    expect(await slots(AppointmentSource.WEB)).toEqual([
+      '13:00',
+      '13:30',
+      '14:00',
+      '14:30',
+      '16:00',
+      '16:30',
+    ]);
+  });
+
   it('available-slots: solo la intersección (14:00 a 18:00)', async () => {
     const { service, hours, db } = build();
     hours[TENANT] = business;
@@ -1603,6 +1694,7 @@ describe('AppointmentsService: horario del negocio (8.01)', () => {
         date: '2030-01-07',
         serviceIds: [SERVICE],
         stepMinutes: 60,
+        channel: AppointmentSource.APP,
       },
       TENANT,
     );
@@ -1694,6 +1786,7 @@ describe('AppointmentsService: servicio desactivado (2026-10-31)', () => {
           date: '2030-01-07',
           serviceIds: [SERVICE],
           stepMinutes: 30,
+          channel: AppointmentSource.APP,
         },
         TENANT,
       )
@@ -1794,13 +1887,16 @@ describe('AppointmentsService: motivo del error de hueco (13.04)', () => {
     expect(error.details).toEqual({ reason: 'APPOINTMENT_OVERLAP' });
   });
 
-  it('OUTSIDE_BUSINESS_HOURS: día cerrado o fuera de las franjas, con las horas del día', async () => {
+  it('OUTSIDE_BUSINESS_HOURS: día cerrado o fuera de las franjas, con las horas del día según el canal (D-26)', async () => {
     const { service, hours } = build();
     hours[TENANT] = [
       { day_of_week: 2, start_time: '14:00', end_time: '18:00' },
       { day_of_week: 2, start_time: '08:00', end_time: '09:30' },
     ];
-    const outside = await service.create(dto, TENANT).catch((e) => e);
+    // Link público (WEB): las 10:00 caen entre franjas; `hours` = las franjas.
+    const outside = await service
+      .create(dto, TENANT, { source: AppointmentSource.WEB })
+      .catch((e) => e);
     expect(bodyOf(outside)).toMatchObject({
       code: 'OUTSIDE_BUSINESS_HOURS',
       message: 'El negocio está cerrado a esa hora',
@@ -1810,6 +1906,18 @@ describe('AppointmentsService: motivo del error de hueco (13.04)', () => {
           { start: '08:00', end: '09:30' },
           { start: '14:00', end: '18:00' },
         ],
+      },
+    });
+    // App: las 10:00 sí (de corrido); las 07:00 no, y `hours` = un tramo.
+    await expect(service.create(dto, TENANT)).resolves.toBeDefined();
+    const early = await service
+      .create({ ...dto, date: '2030-01-01T07:00:00' }, TENANT)
+      .catch((e) => e);
+    expect(bodyOf(early)).toMatchObject({
+      code: 'OUTSIDE_BUSINESS_HOURS',
+      details: {
+        reason: 'OUTSIDE_OPENING_HOURS',
+        hours: [{ start: '08:00', end: '18:00' }],
       },
     });
 

@@ -332,6 +332,8 @@ export class AppointmentsService {
                 professionalId: professional_id,
                 start: appointmentToSave.date,
                 services,
+                // D-26: el link público (WEB) con las franjas; la app, de corrido.
+                channel: appointmentToSave.source,
               }),
             );
           }
@@ -514,12 +516,17 @@ export class AppointmentsService {
       date: string;
       serviceIds: string[];
       stepMinutes: number;
+      /**
+       * Canal que pregunta (D-26): `APP` cuenta la apertura de corrido;
+       * `WEB` (link público), con sus franjas. La misma regla que al guardar.
+       */
+      channel: AppointmentSource;
     },
     scope: AppointmentScope | string,
   ): Promise<Date[]> {
     const { tenantId, professionalId: ownProfessionalId } =
       toAppointmentScope(scope);
-    const { professionalId, serviceIds, stepMinutes } = query;
+    const { professionalId, serviceIds, stepMinutes, channel } = query;
     this.assertOwnAgenda(
       ownProfessionalId,
       professionalId,
@@ -572,8 +579,9 @@ export class AppointmentsService {
       schedules,
       busy: [...blocks, ...appointments],
       timeZone,
-      // 8.01: también dentro del horario del negocio.
-      businessWindows: openingHours && openingHoursWindows(openingHours),
+      // 8.01: también dentro del horario del negocio (según el canal, D-26).
+      businessWindows:
+        openingHours && openingHoursWindows(openingHours, channel),
       now: new Date(), // horas ya pasadas de hoy, fuera (2.21)
     });
   }
@@ -617,9 +625,14 @@ export class AppointmentsService {
       start: Date;
       services: { duration?: number | string | null }[];
       excludeAppointmentId?: string;
+      /**
+       * Canal que agenda (D-26): `APP` (Owner/Employee, también `/sync/push`)
+       * cuenta la apertura de corrido; `WEB` (link público), con las franjas.
+       */
+      channel: AppointmentSource;
     },
   ): Promise<void> {
-    const { tenantId, professionalId, start, services } = slot;
+    const { tenantId, professionalId, start, services, channel } = slot;
     const exclude = slot.excludeAppointmentId ?? null;
     if (!tenantId || !professionalId) {
       // TypeORM ignora `undefined` en el where: nunca consultar sin ellos.
@@ -641,11 +654,12 @@ export class AppointmentsService {
     // 8.01: primero el horario del negocio (sin configurar = sin límite);
     // la cita debe caber en él Y en el del profesional (intersección).
     const openingHours = await this.tenantSettings.getOpeningHours(tenantId);
-    if (!fitsOpeningHours(start, end, openingHours, timeZone)) {
-      // 13.04: cerrado ese día o fuera de sus franjas, y las horas del día.
+    if (!fitsOpeningHours(start, end, openingHours, timeZone, channel)) {
+      // 13.04: cerrado ese día o fuera de sus franjas, y las horas del día
+      // tal como cuentan en este canal (D-26: en la app, un solo tramo).
       const hours = dayWindows(
         start,
-        openingHoursWindows(openingHours ?? []),
+        openingHoursWindows(openingHours ?? [], channel),
         timeZone,
       );
       throw new BusinessException(
@@ -978,6 +992,9 @@ export class AppointmentsService {
               start: new Date(updateData.date ?? appointment.date),
               services: nextServices ?? appointment.services,
               excludeAppointmentId: id,
+              // Mover o editar solo se hace desde la app (también /sync/push),
+              // aunque la cita haya entrado por el link público (D-26).
+              channel: AppointmentSource.APP,
             }),
           );
           updateData.syncConflict = conflict;

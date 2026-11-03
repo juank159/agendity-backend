@@ -15,6 +15,7 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { AvailableSlotsQueryDto } from './dto/available-slots-query.dto';
 import { SLOT_STEP_MINUTES } from './appointment-slot';
+import { AppointmentSource } from '../common/enums/status.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Tenant } from '../common/decorators/tenant.decorator';
 import { hasRoles } from '../auth/jwt/has.roles';
@@ -150,6 +151,8 @@ export class AppointmentsController {
         date: query.date,
         serviceIds: query.service_ids,
         stepMinutes: query.step ?? SLOT_STEP_MINUTES.default,
+        // D-26: en la app la apertura cuenta de corrido (sin el almuerzo).
+        channel: AppointmentSource.APP,
       },
       appointmentScopeOf(user),
     );

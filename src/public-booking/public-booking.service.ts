@@ -195,6 +195,8 @@ export class PublicBookingService {
             date: query.date,
             serviceIds: query.service_ids,
             stepMinutes: query.step ?? 15,
+            // D-26: el link público respeta las franjas (cierra el almuerzo).
+            channel: AppointmentSource.WEB,
           },
           business.tenantId,
         ),
