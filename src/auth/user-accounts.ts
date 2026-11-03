@@ -98,14 +98,11 @@ export function findUserWithSecrets(
 }
 
 /**
- * Usuario para una respuesta: sin secretos, sin el token de notificaciones y
- * con los roles como `{ name }`. `notification_token` (13.04): ni la app ni la
- * web lo leen, y en la lista de empleados y en el feed de sincronización el
- * Owner recibía el de cada empleado.
+ * Usuario para una respuesta: sin secretos (incluido `notification_token`,
+ * 13.04: está en `USER_SECRET_FIELDS`) y con los roles como `{ name }`.
  */
 export function toUserResponse(user: User) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { notification_token, ...userData } = omitUserSecrets(user);
+  const userData = omitUserSecrets(user);
   return {
     ...userData,
     roles: userData.roles.map((role) => ({ name: role.name })),

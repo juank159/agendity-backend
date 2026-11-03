@@ -52,7 +52,6 @@ export class UsersService {
           email: true,
           image: true,
           phone: true,
-          notification_token: true,
           created_at: true,
           updated_at: true,
         },

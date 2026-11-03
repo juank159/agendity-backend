@@ -84,6 +84,7 @@ describe('Secretos de User fuera de las respuestas (e2e)', () => {
       verification_code_expires: new Date(),
       reset_password_code: '654321',
       reset_password_expires: new Date(),
+      notification_token: 'push-token',
     });
     const plain = instanceToPlain(user);
     expect(findSecretKeys(plain)).toEqual([]);

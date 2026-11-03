@@ -34,6 +34,9 @@ export const USER_SECRET_FIELDS = [
   'verification_code_expires',
   'reset_password_code',
   'reset_password_expires',
+  // 13.04b: el token de push es del dispositivo; ni la app ni la web lo leen de
+  // una respuesta. Quien lo necesite (Firebase) lo pide con `findUserWithSecrets`.
+  'notification_token',
 ] as const;
 export type UserSecretField = (typeof USER_SECRET_FIELDS)[number];
 
@@ -116,10 +119,12 @@ export class User {
   })
   password: string;
 
+  @Exclude({ toPlainOnly: true })
   @Column({
     type: 'varchar',
     nullable: true,
     name: 'notification_token',
+    select: false,
   })
   notification_token: string;
 
