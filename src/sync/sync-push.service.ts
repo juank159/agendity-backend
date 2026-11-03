@@ -58,6 +58,11 @@ export interface SyncMutationResult {
   message?: string;
   saved?: boolean;
   merged_into?: string;
+  /**
+   * Datos del conflicto (13.04), como `details` de un error HTTP: p. ej.
+   * `{ reason: 'APPOINTMENT_OVERLAP' }` en un `SLOT_UNAVAILABLE`.
+   */
+  details?: Record<string, unknown>;
 }
 
 /** Límites de la hora del dispositivo (decisión del orquestador). */
@@ -545,6 +550,10 @@ export class SyncPushService {
         status: CONFLICT_CODES.has(body.code) ? 'conflict' : 'rejected',
         code: body.code,
         message: body.message,
+        // 13.04: el motivo de un error de negocio (`{ reason, … }`).
+        ...(body.details && !Array.isArray(body.details)
+          ? { details: body.details }
+          : {}),
       };
     }
   }
@@ -626,6 +635,9 @@ export class SyncPushService {
           code: saved.syncConflict ?? ErrorCode.SLOT_UNAVAILABLE,
           saved: true,
           message: 'La cita quedó guardada; hay que moverla',
+          ...(saved.syncConflictDetails
+            ? { details: saved.syncConflictDetails }
+            : {}),
         }
       : {};
   }

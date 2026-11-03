@@ -9,14 +9,21 @@ import {
 import { Response } from 'express';
 import { EntityNotFoundError, QueryFailedError } from 'typeorm';
 import { ErrorCode, isErrorCode } from '../constants/error-codes';
-import { BusinessException } from '../exceptions/business.exception';
+import {
+  BusinessErrorDetails,
+  BusinessException,
+} from '../exceptions/business.exception';
 
-/** Cuerpo de todo error HTTP (ARQUITECTURA.md §3). */
+/**
+ * Cuerpo de todo error HTTP (ARQUITECTURA.md §3). `details`: lista de textos
+ * en `VALIDATION_ERROR`; objeto (`{ reason, … }`) en un error de negocio que
+ * lo trae (13.04); ausente en el resto.
+ */
 export interface ErrorResponseBody {
   statusCode: number;
   code: ErrorCode;
   message: string;
-  details?: string[];
+  details?: string[] | BusinessErrorDetails;
 }
 
 const INTERNAL_MESSAGE =
@@ -41,6 +48,15 @@ const NEST_DEFAULT_TEXTS = new Set([
   'ThrottlerException: Too Many Requests',
 ]);
 
+function isPlainObject(value: unknown): value is BusinessErrorDetails {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length > 0
+  );
+}
+
 function codeForStatus(status: number): ErrorCode {
   switch (status) {
     case 400:
@@ -62,9 +78,10 @@ function codeForStatus(status: number): ErrorCode {
 
 /**
  * Filtro global único (registrado como `APP_FILTER`). Todo error sale como
- * `{ statusCode, code, message: string, details?: string[] }`:
+ * `{ statusCode, code, message: string, details? }`:
  * - `class-validator` (lista) → 400 `VALIDATION_ERROR`, `message` unido y la lista en `details`;
- * - `BusinessException` → su `code`; `HttpException` → `code` según el HTTP;
+ * - `BusinessException` → su `code` y, si los trae, sus `details` (objeto, 13.04);
+ *   `HttpException` → `code` según el HTTP;
  * - errores de TypeORM → 409/400/404 traducidos;
  * - cualquier otro → 500 `INTERNAL_ERROR` sin stack ni mensaje interno (se registra en el log).
  */
@@ -149,7 +166,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       ? payload.code
       : codeForStatus(statusCode);
 
-    return { statusCode, code, message };
+    // 13.04: solo los `details` que puso nuestro código (BusinessException),
+    // nunca los de una excepción de terceros.
+    const details =
+      exception instanceof BusinessException && isPlainObject(exception.details)
+        ? exception.details
+        : undefined;
+
+    return { statusCode, code, message, ...(details ? { details } : {}) };
   }
 
   private fromQueryFailed(exception: QueryFailedError): ErrorResponseBody {

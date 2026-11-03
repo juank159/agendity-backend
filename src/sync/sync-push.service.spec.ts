@@ -1,5 +1,7 @@
 import { Logger, NotFoundException } from '@nestjs/common';
 import { SyncPushService } from './sync-push.service';
+import { BusinessException } from 'src/common/exceptions/business.exception';
+import { ErrorCode } from 'src/common/constants/error-codes';
 
 // Transacción simulada: el `work` recibe el mismo `ds`; si lanza, la tabla
 // en memoria vuelve a como estaba (rollback). La real: test/sync-push.e2e.
@@ -148,6 +150,26 @@ describe('SyncPushService (10.01b)', () => {
       ['conflict', 'NOT_FOUND'],
       ['applied', undefined],
     ]);
+  });
+
+  it('13.04: un error de negocio con details lleva su motivo al resultado; uno de validación, no', async () => {
+    const slot = jest.fn(async () => {
+      throw new BusinessException(
+        ErrorCode.SLOT_UNAVAILABLE,
+        'Horario no disponible',
+        { details: { reason: 'TIME_BLOCK' } },
+      );
+    });
+    const { service } = build({ update: slot });
+    const { results } = await service.push(OWNER, {
+      mutations: [mutation(), mutation({ payload: { inventado: 1 } })],
+    } as any);
+    expect(results[0]).toMatchObject({
+      code: 'SLOT_UNAVAILABLE',
+      details: { reason: 'TIME_BLOCK' },
+    });
+    expect(results[1].code).toBe('VALIDATION_ERROR');
+    expect(results[1]).not.toHaveProperty('details');
   });
 
   it('error del servidor: retry y no se guarda (reenviarla la vuelve a intentar)', async () => {

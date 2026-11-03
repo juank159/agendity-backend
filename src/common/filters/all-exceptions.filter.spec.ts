@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   HttpStatus,
   InternalServerErrorException,
   Logger,
@@ -162,5 +163,59 @@ describe('AllExceptionsFilter (formato §3)', () => {
       new BusinessException(ErrorCode.INTERNAL_ERROR, 'detalle interno'),
     );
     expect(internal.message).not.toContain('detalle interno');
+  });
+});
+
+describe('AllExceptionsFilter: details de un error de negocio (13.04)', () => {
+  const filter = new AllExceptionsFilter();
+
+  it('BusinessException con details: sale el objeto; sin details, no hay clave', () => {
+    expect(
+      filter.toBody(
+        new BusinessException(
+          ErrorCode.SLOT_UNAVAILABLE,
+          'Horario no disponible',
+          { details: { reason: 'TIME_BLOCK' } },
+        ),
+      ),
+    ).toEqual({
+      statusCode: 409,
+      code: 'SLOT_UNAVAILABLE',
+      message: 'Horario no disponible',
+      details: { reason: 'TIME_BLOCK' },
+    });
+    expect(
+      filter.toBody(new BusinessException(ErrorCode.CONFLICT, 'x', {})),
+    ).not.toHaveProperty('details');
+    expect(
+      filter.toBody(
+        new BusinessException(ErrorCode.CONFLICT, 'x', { details: {} }),
+      ),
+    ).not.toHaveProperty('details');
+  });
+
+  it('el HTTP explícito sigue funcionando (número u opciones)', () => {
+    expect(
+      new BusinessException(ErrorCode.CONFLICT, 'x', 418).getStatus(),
+    ).toBe(418);
+    expect(
+      new BusinessException(ErrorCode.CONFLICT, 'x', {
+        status: 418,
+      }).getStatus(),
+    ).toBe(418);
+  });
+
+  it('una HttpException de terceros con `details` en su cuerpo no lo filtra', () => {
+    const body = filter.toBody(
+      new HttpException(
+        { message: 'Conflicto', details: { secreto: 'sql' } },
+        409,
+      ),
+    );
+    expect(body).toEqual({
+      statusCode: 409,
+      code: 'CONFLICT',
+      message: 'Conflicto',
+    });
   });
 });

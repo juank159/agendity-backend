@@ -327,7 +327,8 @@ export class PublicBookingService {
   /**
    * Profesionales que se pueden reservar para TODOS los servicios: empleados
    * activos y verificados con cada servicio asignado y activo, y el Owner solo
-   * si atiende (tiene horario propio). Orden por nombre.
+   * si atiende (tiene alguna franja `is_available` propia, 13.04). Orden por
+   * nombre.
    */
   private async candidates(
     tenantId: string,
@@ -338,7 +339,7 @@ export class PublicBookingService {
          FROM users u
         WHERE u."deletedAt" IS NULL AND u."isActive"
           AND (
-            (u.id = $1 AND EXISTS (SELECT 1 FROM schedules s WHERE s."userId" = u.id))
+            (u.id = $1 AND EXISTS (SELECT 1 FROM schedules s WHERE s."userId" = u.id AND s.is_available))
             OR (
               u.owner_id = $1 AND u.is_email_verified
               AND (SELECT count(DISTINCT us.service_id) FROM user_services us

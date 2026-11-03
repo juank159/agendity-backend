@@ -127,6 +127,27 @@ export function fitsWindows(
   return merged.some(([s, e]) => s <= from && to <= e);
 }
 
+/**
+ * Franjas `is_available` del día de `start` en la zona del negocio, ordenadas
+ * y en `HH:mm` (13.04: `details.hours` de `SLOT_UNAVAILABLE` y
+ * `OUTSIDE_BUSINESS_HOURS`, para explicar qué horas sí). Lista vacía = ese
+ * día no hay ninguna.
+ */
+export function dayWindows(
+  start: Date,
+  schedules: ScheduleWindow[],
+  timeZone: string,
+): { start: string; end: string }[] {
+  const day = isoWeekday(start, timeZone);
+  return schedules
+    .filter((s) => s.is_available && Number(s.day_of_week) === day)
+    .map((s) => ({
+      start: String(s.start_time).slice(0, 5),
+      end: String(s.end_time).slice(0, 5),
+    }))
+    .sort((a, b) => a.start.localeCompare(b.start));
+}
+
 /** Intervalo semiabierto [start, end) de la agenda (cita o bloqueo ya guardados). */
 export interface SlotInterval {
   start: Date;

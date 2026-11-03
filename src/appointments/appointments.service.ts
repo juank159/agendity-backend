@@ -32,8 +32,15 @@ import { UsersService } from '../users/users.service';
 import { ServicesService } from '../services/services.service';
 import { RELATION_GROUPS } from './constants/relations.constants';
 import { ErrorHandlerOptions } from './interfaces/error-handler-options.interface';
-import { BusinessException } from 'src/common/exceptions/business.exception';
-import { ErrorCode } from 'src/common/constants/error-codes';
+import {
+  BusinessErrorDetails,
+  BusinessException,
+} from 'src/common/exceptions/business.exception';
+import {
+  ErrorCode,
+  OutsideBusinessHoursReason,
+  SlotUnavailableReason,
+} from 'src/common/constants/error-codes';
 import {
   AppointmentPaymentStatus,
   AppointmentSource,
@@ -53,6 +60,7 @@ import {
   appointmentDurationSql,
   appointmentEnd,
   blocksSlot,
+  dayWindows,
   fitsSchedule,
   freeSlotStarts,
   NON_BLOCKING_STATUSES,
@@ -90,11 +98,20 @@ export const SYNC_FLAGGABLE_CONFLICTS: readonly string[] = [
   ErrorCode.SERVICE_NOT_OFFERED_BY_PROFESSIONAL,
 ];
 
-function flaggableCode(error: unknown): string | null {
+/** Conflicto de hueco que se guarda (10.01b): su `code` y, si los trae, sus `details` (13.04). */
+interface FlaggedConflict {
+  code: string;
+  details?: BusinessErrorDetails;
+}
+
+function flaggableConflict(error: unknown): FlaggedConflict | null {
   const code = (
     error as { getResponse?: () => { code?: string } }
   )?.getResponse?.()?.code;
-  return code && SYNC_FLAGGABLE_CONFLICTS.includes(code) ? code : null;
+  if (!code || !SYNC_FLAGGABLE_CONFLICTS.includes(code)) return null;
+  const details =
+    error instanceof BusinessException ? error.details : undefined;
+  return details ? { code, details } : { code };
 }
 
 /** Opciones para citas que llegan de un dispositivo sin conexión (10.01b). */
@@ -229,13 +246,17 @@ export class AppointmentsService {
       );
       // Conflicto que no impide guardar (solo con `flagConflicts`).
       let conflict: string | null = null;
+      let conflictDetails: BusinessErrorDetails | undefined;
       const flag = async (check: () => unknown) => {
         try {
           await check();
         } catch (error) {
-          const code = options.flagConflicts && flaggableCode(error);
-          if (!code) throw error;
-          conflict = conflict ?? code;
+          const found = options.flagConflicts && flaggableConflict(error);
+          if (!found) throw error;
+          if (!conflict) {
+            conflict = found.code;
+            conflictDetails = found.details;
+          }
         }
       };
 
@@ -337,6 +358,10 @@ export class AppointmentsService {
           commissions.get(service.id) ?? null,
         ),
       );
+
+      // 13.04: motivo del conflicto para el resultado de `/sync/push` (no se guarda).
+      if (conflictDetails)
+        savedAppointment.syncConflictDetails = conflictDetails;
 
       // Emitir el evento después de guardar la cita
       this.eventEmitter.emit('appointment.created', savedAppointment);
@@ -581,7 +606,8 @@ export class AppointmentsService {
    *    propia (`excludeAppointmentId`, al editar).
    * Intervalos semiabiertos [inicio, fin): una cita puede empezar justo cuando
    * termina otra. Cualquier fallo → `SLOT_UNAVAILABLE` "Horario no disponible"
-   * (409; la app decide por `code`; hasta 2.34 salía con 400, D-11).
+   * (409; la app decide por `code`; hasta 2.34 salía con 400, D-11), con el
+   * motivo en `details.reason` (13.04: `SlotUnavailableReason`).
    */
   async assertSlotAvailable(
     manager: EntityManager,
@@ -616,13 +642,29 @@ export class AppointmentsService {
     // la cita debe caber en él Y en el del profesional (intersección).
     const openingHours = await this.tenantSettings.getOpeningHours(tenantId);
     if (!fitsOpeningHours(start, end, openingHours, timeZone)) {
+      // 13.04: cerrado ese día o fuera de sus franjas, y las horas del día.
+      const hours = dayWindows(
+        start,
+        openingHoursWindows(openingHours ?? []),
+        timeZone,
+      );
       throw new BusinessException(
         ErrorCode.OUTSIDE_BUSINESS_HOURS,
         'El negocio está cerrado a esa hora',
+        {
+          details: {
+            reason: hours.length
+              ? OutsideBusinessHoursReason.OUTSIDE_OPENING_HOURS
+              : OutsideBusinessHoursReason.BUSINESS_CLOSED_DAY,
+            hours,
+          },
+        },
       );
     }
     if (!fitsSchedule(start, end, schedules, timeZone)) {
-      this.slotUnavailable('fuera del horario del profesional');
+      this.slotUnavailable(SlotUnavailableReason.PROFESSIONAL_OFF_SCHEDULE, {
+        hours: dayWindows(start, schedules, timeZone),
+      });
     }
 
     const range = {
@@ -633,10 +675,10 @@ export class AppointmentsService {
       excludeAppointmentId: exclude,
     };
     if ((await this.findBusyBlocks(manager, range)).length) {
-      this.slotUnavailable('bloqueo de tiempo');
+      this.slotUnavailable(SlotUnavailableReason.TIME_BLOCK);
     }
     if ((await this.findBusyAppointments(manager, range)).length) {
-      this.slotUnavailable('cruce con otra cita');
+      this.slotUnavailable(SlotUnavailableReason.APPOINTMENT_OVERLAP);
     }
   }
 
@@ -762,15 +804,25 @@ export class AppointmentsService {
     }
     await this.lockProfessionalSlot(manager, range.professionalId);
     if ((await this.findBusyAppointments(manager, range)).length) {
-      this.slotUnavailable('bloqueo encima de una cita');
+      // Un bloqueo encima de una cita: el motivo es la cita que ya está.
+      this.slotUnavailable(SlotUnavailableReason.APPOINTMENT_OVERLAP);
     }
   }
 
-  private slotUnavailable(reason: string): never {
+  /**
+   * `SLOT_UNAVAILABLE` (409, "Horario no disponible") con el motivo en
+   * `details.reason` (13.04) y, fuera del horario, las franjas de ese día en
+   * `details.hours`. El `code`, el HTTP y el texto son los de siempre.
+   */
+  private slotUnavailable(
+    reason: SlotUnavailableReason,
+    extra: BusinessErrorDetails = {},
+  ): never {
     this.logger.debug(`Horario no disponible: ${reason}`);
     throw new BusinessException(
       ErrorCode.SLOT_UNAVAILABLE,
       'Horario no disponible',
+      { details: { reason, ...extra } },
     );
   }
 
@@ -847,6 +899,8 @@ export class AppointmentsService {
       );
       const professionalId =
         updateAppointmentDto.professional_id || appointment.professionalId;
+      // 13.04: motivo de un conflicto guardado (solo con `flagConflicts`).
+      let conflictDetails: BusinessErrorDetails | undefined;
 
       await this.dataSource.transaction(async (manager) => {
         const current = await this.lockAppointment(manager, id, tenantId);
@@ -898,9 +952,10 @@ export class AppointmentsService {
             try {
               await check();
             } catch (error) {
-              const code = options.flagConflicts && flaggableCode(error);
-              if (!code) throw error;
-              conflict = code;
+              const found = options.flagConflicts && flaggableConflict(error);
+              if (!found) throw error;
+              conflict = found.code;
+              conflictDetails = found.details;
             }
           };
           await flag(() =>
@@ -953,7 +1008,9 @@ export class AppointmentsService {
       });
 
       // Para asegurar que obtenemos todos los datos relacionados
-      return this.findOne(id, tenantId);
+      const updated = await this.findOne(id, tenantId);
+      if (conflictDetails) updated.syncConflictDetails = conflictDetails;
+      return updated;
     } catch (error) {
       this.handleError(error, {
         entity: 'la cita',

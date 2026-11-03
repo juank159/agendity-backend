@@ -97,9 +97,15 @@ export function findUserWithSecrets(
   return qb.getOne();
 }
 
-/** Usuario para una respuesta: sin secretos y con los roles como `{ name }`. */
+/**
+ * Usuario para una respuesta: sin secretos, sin el token de notificaciones y
+ * con los roles como `{ name }`. `notification_token` (13.04): ni la app ni la
+ * web lo leen, y en la lista de empleados y en el feed de sincronización el
+ * Owner recibía el de cada empleado.
+ */
 export function toUserResponse(user: User) {
-  const userData = omitUserSecrets(user);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { notification_token, ...userData } = omitUserSecrets(user);
   return {
     ...userData,
     roles: userData.roles.map((role) => ({ name: role.name })),

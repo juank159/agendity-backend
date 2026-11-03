@@ -139,6 +139,13 @@ export class Appointment {
   @Column({ type: 'boolean', name: 'needs_reschedule', default: false })
   needsReschedule: boolean;
 
+  /**
+   * Motivo del conflicto de sincronización al guardarla (13.04): los
+   * `details` del error (p. ej. `{ reason: 'TIME_BLOCK' }`). NO es columna:
+   * solo viaja en el resultado de `/sync/push` de esa mutación.
+   */
+  syncConflictDetails?: Record<string, unknown>;
+
   /** Origen (9.01): `APP` (el negocio) o `WEB` (reserva pública, D-17). */
   @Column({
     type: 'varchar',

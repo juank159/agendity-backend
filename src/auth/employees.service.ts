@@ -19,6 +19,12 @@ import { assertTenantRefs } from 'src/common/utils/tenant-refs';
 import { Service } from 'src/services/entities/service.entity';
 import { UserService } from 'src/user-services/entities/user-service.entity';
 import { Schedule } from 'src/schedules/entities/schedule.entity';
+import {
+  WeekScheduleInput,
+  lockProfessionalSchedule,
+  planScheduleChanges,
+  scheduleViews,
+} from 'src/schedules/week-schedule';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
 import {
@@ -119,31 +125,8 @@ export class EmployeesService {
         }
 
         if (schedule && typeof schedule === 'object') {
-          // Horario por día (formato de la app).
-          const userSchedules = [];
-          for (const [day, hours] of Object.entries(schedule)) {
-            if (
-              DAY_NUMBERS[day] &&
-              hours &&
-              typeof hours === 'object' &&
-              'start' in hours &&
-              'end' in hours
-            ) {
-              userSchedules.push(
-                manager.create(Schedule, {
-                  user: newEmployee,
-                  day_of_week: DAY_NUMBERS[day],
-                  start_time: hours.start as string,
-                  end_time: hours.end as string,
-                  is_available: true,
-                }),
-              );
-            }
-          }
-
-          if (userSchedules.length > 0) {
-            await manager.save(userSchedules);
-          }
+          // Horario por día (formato de la app; varias franjas, 13.04).
+          await applySchedule(manager, newEmployee.id, [], schedule);
         } else if (schedules && schedules.length > 0) {
           // Horarios en arreglo (`CreateEmployeeWithDetailsDto`).
           const userSchedules = schedules.map((item) => {
@@ -167,8 +150,12 @@ export class EmployeesService {
         });
 
         // Sin `token`: el Owner no debe recibir una sesión del empleado (2.12).
+        // Con el horario como en la lista (13.04).
         return {
-          user: toUserResponse(employeeWithRelations),
+          user: {
+            ...toUserResponse(employeeWithRelations),
+            ...scheduleViews(employeeWithRelations.schedules),
+          },
         };
       });
     } catch (error) {
@@ -244,28 +231,21 @@ export class EmployeesService {
 
         await manager.save(employee);
 
-        // Horario: si llega, sustituye al anterior.
+        // Horario: si llega, sustituye a las franjas disponibles (13.04:
+        // varias por día; solo se borran y crean las que cambian, y el
+        // formato anterior no borra la franja de la tarde).
         if (updateData.schedule && typeof updateData.schedule === 'object') {
-          await manager.delete(Schedule, { user: { id: employeeId } });
-
-          const schedules = [];
-          for (const [day, hours] of Object.entries(updateData.schedule)) {
-            if (DAY_NUMBERS[day] && hours && hours.start && hours.end) {
-              schedules.push(
-                manager.create(Schedule, {
-                  user: { id: employeeId },
-                  day_of_week: DAY_NUMBERS[day],
-                  start_time: hours.start,
-                  end_time: hours.end,
-                  is_available: true,
-                }),
-              );
-            }
-          }
-
-          if (schedules.length > 0) {
-            await manager.save(schedules);
-          }
+          // Mismo lock que `/schedules` (2.17): no se cruzan escrituras.
+          await lockProfessionalSchedule(manager, employeeId);
+          const existing = await manager.find(Schedule, {
+            where: { user: { id: employeeId } },
+          });
+          await applySchedule(
+            manager,
+            employeeId,
+            existing,
+            updateData.schedule,
+          );
         }
 
         // Servicios: si llegan, sustituyen a los anteriores.
@@ -445,7 +425,8 @@ export class EmployeesService {
     }
 
     return [owner, ...employees].map((user) => {
-      const { services, schedule, ...userData } = employeeResponse(user);
+      const { services, schedule, schedule_slots, ...userData } =
+        employeeResponse(user);
       return {
         ...userData,
         isOwner: user.id === ownerId,
@@ -454,6 +435,7 @@ export class EmployeesService {
         deletionReason: user.deletionReason,
         services,
         schedule,
+        schedule_slots,
       };
     });
   }
@@ -480,6 +462,7 @@ export class EmployeesService {
       .filter((employee) => employee.deletedAt)
       .map((user) => ({
         ...toUserResponse(user),
+        ...scheduleViews(user.schedules),
         isDeleted: true,
         deletedAt: user.deletedAt,
         deletionReason: user.deletionReason,
@@ -592,20 +575,30 @@ export class EmployeesService {
   }
 }
 
-/** Día de la app → `schedules.day_of_week` (ISO: lunes = 1). */
-const DAY_NUMBERS: Record<string, number> = {
-  monday: 1,
-  tuesday: 2,
-  wednesday: 3,
-  thursday: 4,
-  friday: 5,
-  saturday: 6,
-  sunday: 7,
-};
-
-const DAY_NAMES: Record<number, string> = Object.fromEntries(
-  Object.entries(DAY_NUMBERS).map(([name, number]) => [number, name]),
-);
+/**
+ * Deja las franjas disponibles del profesional como pide `input`
+ * (`planScheduleChanges`): borra las que sobran y crea las que faltan.
+ */
+async function applySchedule(
+  manager: EntityManager,
+  employeeId: string,
+  existing: Schedule[],
+  input: WeekScheduleInput,
+): Promise<void> {
+  const { deleteIds, insert } = planScheduleChanges(existing, input);
+  if (deleteIds.length) await manager.delete(Schedule, deleteIds);
+  if (insert.length) {
+    await manager.save(
+      insert.map((slot) =>
+        manager.create(Schedule, {
+          ...slot,
+          user: { id: employeeId } as User,
+          is_available: true,
+        }),
+      ),
+    );
+  }
+}
 
 function userServiceRows(
   manager: EntityManager,
@@ -630,18 +623,13 @@ function userServiceRows(
 }
 
 /**
- * Empleado para la app: datos sin secretos, servicios asignados y horario por
- * día (`{ monday: { start, end } }`). `user` trae `userServices.service` y
- * `schedules`.
+ * Empleado para la app: datos sin secretos, servicios asignados y horario
+ * (13.04, `scheduleViews`): `schedule_slots` con todas las franjas
+ * disponibles por día y `schedule` (formato anterior, primera franja).
+ * `user` trae `userServices.service` y `schedules`.
  */
 function employeeResponse(user: User) {
-  const schedule = {};
-  for (const item of user.schedules ?? []) {
-    const day = DAY_NAMES[item.day_of_week];
-    if (day) {
-      schedule[day] = { start: item.start_time, end: item.end_time };
-    }
-  }
+  const { schedule, schedule_slots } = scheduleViews(user.schedules);
   return {
     ...toUserResponse(user),
     services:
@@ -658,6 +646,7 @@ function employeeResponse(user: User) {
         isActive: us.isActive,
       })) || [],
     schedule,
+    schedule_slots,
   };
 }
 

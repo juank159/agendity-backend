@@ -2,13 +2,14 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   IsArray,
   IsNumber,
-  IsObject,
   IsOptional,
   IsUUID,
   Max,
   Min,
 } from 'class-validator';
 import { CreateAuthDto } from './create-auth.dto';
+import { IsWeekSchedule } from 'src/schedules/dto/is-week-schedule.decorator';
+import { WeekScheduleInput } from 'src/schedules/week-schedule';
 
 export class CreateEmployeeDto extends CreateAuthDto {
   @ApiProperty({
@@ -22,15 +23,26 @@ export class CreateEmployeeDto extends CreateAuthDto {
   @IsOptional()
   serviceIds?: string[];
 
+  /**
+   * Horario por día (13.04): lista de franjas `HH:mm` (varias por día, sin
+   * solaparse) o, en el formato anterior, una sola `{ start, end }`. Un día
+   * que no viene queda sin franjas. Ver `schedules/week-schedule.ts`.
+   */
   @ApiProperty({
-    description: 'Horario del empleado',
+    description:
+      'Horario por día: lista de franjas {start, end} en HH:mm (o una sola franja, formato anterior)',
     example: {
-      monday: { start: '09:00', end: '18:00' },
+      monday: [
+        { start: '09:00', end: '13:00' },
+        { start: '14:00', end: '18:00' },
+      ],
+      tuesday: { start: '09:00', end: '18:00' },
     },
+    required: false,
   })
-  @IsObject()
   @IsOptional()
-  schedule?: Record<string, { start: string; end: string }>;
+  @IsWeekSchedule()
+  schedule?: WeekScheduleInput;
 
   /**
    * Comisión general del empleado (8.02, D-16): % de cada servicio que

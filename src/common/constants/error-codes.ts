@@ -80,3 +80,29 @@ export function isErrorCode(value: unknown): value is ErrorCode {
     Object.prototype.hasOwnProperty.call(ERROR_CODE_STATUS, value)
   );
 }
+
+/**
+ * Motivo de un `SLOT_UNAVAILABLE` (13.04), en `details.reason`. El `code` y el
+ * HTTP no cambian: la app decide por `code` y, si quiere explicar el porqué,
+ * por este motivo (nunca por el texto).
+ */
+export const SlotUnavailableReason = {
+  /** La cita no cabe en las franjas `is_available` del profesional ese día. */
+  PROFESSIONAL_OFF_SCHEDULE: 'PROFESSIONAL_OFF_SCHEDULE',
+  /** Se cruza con un bloqueo de tiempo (`time_block`) del profesional. */
+  TIME_BLOCK: 'TIME_BLOCK',
+  /** Se cruza con otra cita que ocupa hueco (o un bloqueo, con una cita). */
+  APPOINTMENT_OVERLAP: 'APPOINTMENT_OVERLAP',
+} as const;
+export type SlotUnavailableReason =
+  (typeof SlotUnavailableReason)[keyof typeof SlotUnavailableReason];
+
+/** Motivo de un `OUTSIDE_BUSINESS_HOURS` (13.04), en `details.reason`. */
+export const OutsideBusinessHoursReason = {
+  /** El negocio no abre ese día (ninguna franja de apertura). */
+  BUSINESS_CLOSED_DAY: 'BUSINESS_CLOSED_DAY',
+  /** Abre ese día, pero la cita no cabe entera en sus franjas. */
+  OUTSIDE_OPENING_HOURS: 'OUTSIDE_OPENING_HOURS',
+} as const;
+export type OutsideBusinessHoursReason =
+  (typeof OutsideBusinessHoursReason)[keyof typeof OutsideBusinessHoursReason];

@@ -17,6 +17,7 @@ import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { UsersService } from '../users/users.service';
 import { tenantMembersWhere } from 'src/users/user-access';
 import { timeToMinutes } from 'src/appointments/appointment-slot';
+import { lockProfessionalSchedule } from './week-schedule';
 
 /**
  * Los horarios no tienen `owner_id`: pertenecen a un profesional (`user`), que es
@@ -42,10 +43,7 @@ export class SchedulesService {
     work: (manager: EntityManager) => Promise<T>,
   ): Promise<T> {
     return this.dataSource.transaction(async (manager) => {
-      await manager.query(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [`schedule:${professionalId}`],
-      );
+      await lockProfessionalSchedule(manager, professionalId);
       return work(manager);
     });
   }

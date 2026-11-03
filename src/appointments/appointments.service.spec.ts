@@ -1727,3 +1727,110 @@ describe('AppointmentsService: servicio desactivado (2026-10-31)', () => {
     expect(txRepo.save).toHaveBeenCalled();
   });
 });
+
+describe('AppointmentsService: motivo del error de hueco (13.04)', () => {
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  // 2030-01-01 es martes; la cita del `dto` es a las 10:00 (Bogotá), 30 min.
+  const split = [
+    { day_of_week: 2, start_time: '14:00:00', end_time: '18:00:00' },
+    { day_of_week: 2, start_time: '07:00:00', end_time: '09:00:00' },
+    { day_of_week: 2, start_time: '09:00:00', end_time: '12:00:00' },
+  ].map((row, i) => ({ ...row, is_available: i !== 2 }));
+  const bodyOf = (error: any) => error?.getResponse?.();
+
+  it('fuera del horario del profesional: PROFESSIONAL_OFF_SCHEDULE con sus franjas disponibles del día', async () => {
+    const { service, db } = build();
+    db.schedules = split;
+    const error = await service.create(dto, TENANT).catch((e) => e);
+    expect(error.getStatus()).toBe(409);
+    expect(bodyOf(error)).toEqual({
+      statusCode: 409,
+      code: 'SLOT_UNAVAILABLE',
+      message: 'Horario no disponible',
+      details: {
+        reason: 'PROFESSIONAL_OFF_SCHEDULE',
+        // La de 09-12 no está disponible: no sale (y por eso no cabe).
+        hours: [
+          { start: '07:00', end: '09:00' },
+          { start: '14:00', end: '18:00' },
+        ],
+      },
+    });
+  });
+
+  it('bloqueo de tiempo: TIME_BLOCK', async () => {
+    const { service, db } = build();
+    db.blocks = [{ '?column?': 1 }];
+    const error = await service.create(dto, TENANT).catch((e) => e);
+    expect(bodyOf(error)).toMatchObject({
+      code: 'SLOT_UNAVAILABLE',
+      details: { reason: 'TIME_BLOCK' },
+    });
+  });
+
+  it('cruce con otra cita: APPOINTMENT_OVERLAP (también al mover)', async () => {
+    const { service, db } = build();
+    db.overlaps = [{ id: 'otra' }];
+    const error = await service.create(dto, TENANT).catch((e) => e);
+    expect(bodyOf(error)).toMatchObject({
+      code: 'SLOT_UNAVAILABLE',
+      details: { reason: 'APPOINTMENT_OVERLAP' },
+    });
+  });
+
+  it('un bloqueo encima de una cita: APPOINTMENT_OVERLAP', async () => {
+    const { service, manager, db } = build();
+    db.overlaps = [{ id: 'cita' }];
+    const error = await service
+      .assertNoAppointmentOverlap(manager as any, {
+        tenantId: TENANT,
+        professionalId: EMPLOYEE,
+        start: new Date('2030-01-07T10:00:00-05:00'),
+        end: new Date('2030-01-07T11:00:00-05:00'),
+      })
+      .catch((e) => e);
+    expect(error.details).toEqual({ reason: 'APPOINTMENT_OVERLAP' });
+  });
+
+  it('OUTSIDE_BUSINESS_HOURS: día cerrado o fuera de las franjas, con las horas del día', async () => {
+    const { service, hours } = build();
+    hours[TENANT] = [
+      { day_of_week: 2, start_time: '14:00', end_time: '18:00' },
+      { day_of_week: 2, start_time: '08:00', end_time: '09:30' },
+    ];
+    const outside = await service.create(dto, TENANT).catch((e) => e);
+    expect(bodyOf(outside)).toMatchObject({
+      code: 'OUTSIDE_BUSINESS_HOURS',
+      message: 'El negocio está cerrado a esa hora',
+      details: {
+        reason: 'OUTSIDE_OPENING_HOURS',
+        hours: [
+          { start: '08:00', end: '09:30' },
+          { start: '14:00', end: '18:00' },
+        ],
+      },
+    });
+
+    hours[TENANT] = [
+      { day_of_week: 1, start_time: '09:00', end_time: '18:00' },
+    ];
+    const closed = await service.create(dto, TENANT).catch((e) => e);
+    expect(bodyOf(closed)).toMatchObject({
+      code: 'OUTSIDE_BUSINESS_HOURS',
+      details: { reason: 'BUSINESS_CLOSED_DAY', hours: [] },
+    });
+  });
+
+  it('sin conexión (flagConflicts): la cita se guarda en conflicto y lleva el motivo (no es columna)', async () => {
+    const { service, db, txRepo } = build();
+    db.blocks = [{ '?column?': 1 }];
+    const saved = await service.create(dto, TENANT, { flagConflicts: true });
+    expect(saved.syncConflict).toBe('SLOT_UNAVAILABLE');
+    expect(saved.syncConflictDetails).toEqual({ reason: 'TIME_BLOCK' });
+    expect(txRepo.save.mock.calls[0][0]).not.toHaveProperty(
+      'syncConflictDetails',
+    );
+  });
+});
