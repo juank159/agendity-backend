@@ -1,4 +1,8 @@
 import { toCents } from 'src/payments/payment-rules';
+import {
+  AppointmentPaymentStatus,
+  AppointmentStatus,
+} from 'src/common/enums/status.enum';
 import { centsToDecimal } from './appointment-pricing';
 
 /**
@@ -32,7 +36,11 @@ export function commissionCents(price: Percent, percent: Percent): number {
   return Math.round((toCents(price ?? 0) * hundredths) / 10_000);
 }
 
-/** Línea de una cita COMPLETED para la liquidación. */
+/**
+ * Línea de una cita para la liquidación: COMPLETED (lo ganado) o
+ * PENDING/CONFIRMED (lo por ganar, D-27). El estado, el de pago y lo pagado
+ * son de la cita (se repiten en cada línea).
+ */
 export interface SettlementLine {
   appointmentId: string;
   date: Date;
@@ -44,6 +52,10 @@ export interface SettlementLine {
   serviceName: string;
   price: string;
   commissionPercentage: string;
+  status?: AppointmentStatus;
+  paymentStatus?: AppointmentPaymentStatus;
+  /** Pagado neto de la cita (pagos COMPLETED, `amount − refund_amount`). */
+  paidAmount?: string | number;
 }
 
 export interface SettlementAmounts {
@@ -58,6 +70,10 @@ export interface SettlementAppointment extends SettlementAmounts {
   /** Zona de la cita (6.03): su `date` sale con ese offset. */
   timezone: string;
   client_name: string;
+  /** Solo en `pending` (D-27): estado, estado de pago y pagado neto. */
+  status?: AppointmentStatus;
+  payment_status?: AppointmentPaymentStatus;
+  paid_amount?: number;
   lines: {
     service_id: string;
     service_name: string;
@@ -79,14 +95,33 @@ export interface CommissionSettlement {
   professionals: SettlementProfessional[];
 }
 
+/** Sin la parte del negocio (D-27): lo que recibe el Employee. */
+type WithoutBusiness<T> = Omit<T, 'business_total'>;
+
+export type EmployeeSettlementAppointment =
+  WithoutBusiness<SettlementAppointment>;
+
+export interface EmployeeSettlementProfessional
+  extends WithoutBusiness<Omit<SettlementProfessional, 'appointments'>> {
+  appointments: EmployeeSettlementAppointment[];
+}
+
+export interface EmployeeCommissionSettlement {
+  totals: WithoutBusiness<CommissionSettlement['totals']>;
+  professionals: EmployeeSettlementProfessional[];
+}
+
 const money = (cents: number) => Number(centsToDecimal(cents));
 
 /**
  * Agrupa las líneas por profesional y cita y suma en centavos (sin errores de
  * coma flotante). Profesionales por nombre; citas por fecha.
+ * `withState` (D-27, citas por ganar): cada cita lleva además `status`,
+ * `payment_status` y `paid_amount`.
  */
 export function settleCommissions(
   lines: SettlementLine[],
+  options: { withState?: boolean } = {},
 ): CommissionSettlement {
   type Acc = { total: number; commission: number };
   const professionals = new Map<
@@ -154,6 +189,13 @@ export function settleCommissions(
           date: appt.line.date,
           timezone: appt.line.timezone,
           client_name: appt.line.clientName,
+          ...(options.withState
+            ? {
+                status: appt.line.status,
+                payment_status: appt.line.paymentStatus,
+                paid_amount: money(toCents(appt.line.paidAmount ?? 0)),
+              }
+            : {}),
           ...amounts(appt.acc),
           lines: appt.items,
         }))
@@ -167,5 +209,27 @@ export function settleCommissions(
       appointment_count: result.reduce((n, p) => n + p.appointment_count, 0),
     },
     professionals: result,
+  };
+}
+
+/**
+ * D-27: lo que le queda al negocio no se le envía al Employee. Quita
+ * `business_total` (la clave, no la pone a null) de los totales, de cada
+ * profesional y de cada cita.
+ */
+export function withoutBusinessShare(
+  settlement: CommissionSettlement,
+): EmployeeCommissionSettlement {
+  const strip = <T extends SettlementAmounts>(value: T): WithoutBusiness<T> => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { business_total, ...rest } = value;
+    return rest;
+  };
+  return {
+    totals: strip(settlement.totals),
+    professionals: settlement.professionals.map((pro) => ({
+      ...strip(pro),
+      appointments: pro.appointments.map(strip),
+    })),
   };
 }

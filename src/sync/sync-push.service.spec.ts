@@ -2,6 +2,7 @@ import { Logger, NotFoundException } from '@nestjs/common';
 import { SyncPushService } from './sync-push.service';
 import { BusinessException } from 'src/common/exceptions/business.exception';
 import { ErrorCode } from 'src/common/constants/error-codes';
+import { assertCanComplete } from 'src/appointments/appointment-status';
 
 // Transacción simulada: el `work` recibe el mismo `ds`; si lanza, la tabla
 // en memoria vuelve a como estaba (rollback). La real: test/sync-push.e2e.
@@ -29,7 +30,10 @@ const OWNER = {
 const EMPLOYEE = { ...OWNER, id: 'emp', roles: ['Employee'] };
 const CLIENT = 'c0000000-0000-4000-8000-000000000001';
 
-function build(clients: Record<string, jest.Mock> = {}) {
+function build(
+  clients: Record<string, jest.Mock> = {},
+  appointments: Record<string, jest.Mock> = {},
+) {
   const stored = new Map<string, any>();
   const query = jest.fn(async (sql: string, params: any[]) => {
     if (sql.startsWith('SELECT tenant_id, user_id, status, result')) {
@@ -73,7 +77,7 @@ function build(clients: Record<string, jest.Mock> = {}) {
   const service = new SyncPushService(
     ds as any,
     { update: jest.fn(async () => ({})), remove: jest.fn(), ...clients } as any,
-    {} as any,
+    appointments as any,
     {} as any,
     {} as any,
     {} as any,
@@ -126,6 +130,44 @@ describe('SyncPushService (10.01b)', () => {
       ['rejected', 'FORBIDDEN'],
       ['rejected', 'VALIDATION_ERROR'],
     ]);
+  });
+
+  it('D-27: un Employee que completa por la bandeja → esa operación rechazada (FORBIDDEN); la tanda sigue', async () => {
+    // `complete` con la regla real del service (el alcance del Employee
+    // lleva `professionalId`); el camino completo está en el e2e.
+    const complete = jest.fn(async (_id: string, scope: any) => {
+      assertCanComplete(!!scope.professionalId);
+      return {};
+    });
+    const APPT = 'a0000000-0000-4000-8000-000000000001';
+    const { service } = build({}, { complete });
+    const asEmployee = await service.push(EMPLOYEE, {
+      mutations: [
+        mutation({
+          type: 'appointment.complete',
+          entity_id: APPT,
+          payload: {},
+        }),
+        mutation(),
+      ],
+    } as any);
+    expect(asEmployee.results.map((r) => [r.status, r.code])).toEqual([
+      ['rejected', 'FORBIDDEN'],
+      ['applied', undefined],
+    ]);
+    expect(asEmployee.results[0].message).toBe(
+      'Solo el dueño del negocio puede completar una cita',
+    );
+    const asOwner = await service.push(OWNER, {
+      mutations: [
+        mutation({
+          type: 'appointment.complete',
+          entity_id: APPT,
+          payload: {},
+        }),
+      ],
+    } as any);
+    expect(asOwner.results[0].status).toBe('applied');
   });
 
   it('idempotente: la misma mutación no se vuelve a aplicar', async () => {

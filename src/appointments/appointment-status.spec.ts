@@ -3,6 +3,8 @@ import { ErrorCode } from 'src/common/constants/error-codes';
 import {
   APPOINTMENT_TRANSITIONS,
   assertCancellable,
+  assertCanComplete,
+  COMPLETE_OWNER_ONLY_MESSAGE,
   assertDeletable,
   assertTransition,
   canTransition,
@@ -99,5 +101,25 @@ describe('Borrar una cita (2.25)', () => {
       code: ErrorCode.APPOINTMENT_PAID,
     });
     expect(() => assertDeletable(false)).not.toThrow();
+  });
+});
+
+describe('Completar una cita: solo el Owner (D-27)', () => {
+  it('Employee → 403 FORBIDDEN con mensaje claro; Owner, sí', () => {
+    let error: any;
+    try {
+      assertCanComplete(true);
+    } catch (e) {
+      error = e;
+    }
+    expect(error.getStatus()).toBe(403);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.FORBIDDEN,
+      message: COMPLETE_OWNER_ONLY_MESSAGE,
+    });
+    expect(COMPLETE_OWNER_ONLY_MESSAGE).toBe(
+      'Solo el dueño del negocio puede completar una cita',
+    );
+    expect(() => assertCanComplete(false)).not.toThrow();
   });
 });

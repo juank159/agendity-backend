@@ -187,7 +187,11 @@ export class AppointmentsController {
 
   /**
    * Completa la cita desde PENDING (sin pagar, 2.15) o CONFIRMED; COMPLETED
-   * es un no-op y CANCELLED, 409. Mismo alcance que cancelar.
+   * es un no-op y CANCELLED, 409. Solo el Owner (D-27): el Employee recibe
+   * 403 `FORBIDDEN` "Solo el dueño del negocio puede completar una cita". La
+   * regla vive en el service (`assertCanComplete`) para que `/sync/push`
+   * responda igual; por eso aquí se deja pasar al Employee (con
+   * `@hasRoles(Owner)` el guard daría su mensaje genérico).
    */
   @Patch(':id/complete')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)

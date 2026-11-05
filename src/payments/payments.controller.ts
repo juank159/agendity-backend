@@ -113,7 +113,9 @@ export class PaymentsController {
    * Liquidación de comisiones (8.02, D-16): por profesional, precio de las
    * líneas de las citas COMPLETED del periodo, comisión del profesional y
    * parte del negocio, con el detalle por cita. Owner: todos (o
-   * `professionalId`); Employee: solo lo suyo.
+   * `professionalId`); Employee: solo lo suyo. D-27: `pending` = lo por
+   * ganar (citas PENDING/CONFIRMED del periodo, misma forma, con `status`,
+   * `payment_status` y `paid_amount`); el Employee no recibe `business_total`.
    */
   @Get('stats/commissions')
   @hasRoles(JwtRoles.Owner, JwtRoles.Employee)

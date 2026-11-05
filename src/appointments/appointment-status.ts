@@ -108,6 +108,26 @@ export function assertCancellable(hasCompletedPayment: boolean): void {
   }
 }
 
+/** Mensaje del 403 al completar una cita sin ser el dueño (D-27). */
+export const COMPLETE_OWNER_ONLY_MESSAGE =
+  'Solo el dueño del negocio puede completar una cita';
+
+/**
+ * D-27 (decisión del usuario, 2026-11-05): completar una cita es cosa del
+ * Owner (el trabajo pudo quedar mal, el cliente no estar de acuerdo o no
+ * pagar); al completarla, la comisión aparece al profesional. Un Employee
+ * (alcance con `professionalId`) recibe 403 `FORBIDDEN`, por la API y por
+ * `/sync/push` (ahí como rechazo de esa operación).
+ */
+export function assertCanComplete(isOnlyEmployee: boolean): void {
+  if (isOnlyEmployee) {
+    throw new BusinessException(
+      ErrorCode.FORBIDDEN,
+      COMPLETE_OWNER_ONLY_MESSAGE,
+    );
+  }
+}
+
 /**
  * 2.25: una cita con pagos registrados (en cualquier estado, también los ya
  * reembolsados) no se borra: el pago es historial financiero y su FK lo

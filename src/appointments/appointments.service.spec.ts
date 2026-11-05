@@ -727,6 +727,22 @@ describe('AppointmentsService (estados: cancelar y completar, 2.06)', () => {
     }
   });
 
+  it('Employee: completar → 403 FORBIDDEN sin leer ni escribir la cita, también la suya (D-27)', async () => {
+    const { service, repo, txRepo } = build();
+    repo.findOne.mockResolvedValue(at(AppointmentStatus.CONFIRMED));
+    const error = await service
+      .complete('cita-1', employeeScope)
+      .catch((e) => e);
+    expect(error.getStatus()).toBe(403);
+    expect(error.getResponse()).toMatchObject({
+      code: ErrorCode.FORBIDDEN,
+      message: 'Solo el dueño del negocio puede completar una cita',
+    });
+    expect(txRepo.findOne).not.toHaveBeenCalled();
+    expect(repo.findOne).not.toHaveBeenCalled();
+    expect(txRepo.update).not.toHaveBeenCalled();
+  });
+
   it('cancelar una cita con pago COMPLETED: 409 APPOINTMENT_PAID, consultado bajo el lock (2.15)', async () => {
     for (const via of ['cancel', 'patch'] as const) {
       const { service, repo, txRepo } = build();

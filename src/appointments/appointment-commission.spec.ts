@@ -3,6 +3,7 @@ import {
   effectiveCommission,
   settleCommissions,
   SettlementLine,
+  withoutBusinessShare,
 } from './appointment-commission';
 
 describe('comisiones (8.02, D-16)', () => {
@@ -70,5 +71,68 @@ describe('comisiones (8.02, D-16)', () => {
       professional_total: 80000,
       business_total: 80000,
     });
+  });
+});
+
+describe('comisiones por ganar y vista del Employee (D-27)', () => {
+  const line = (overrides: Partial<SettlementLine> = {}): SettlementLine => ({
+    appointmentId: 'a1',
+    date: new Date('2030-01-07T15:00:00Z'),
+    timezone: 'America/Bogota',
+    clientName: 'Cliente',
+    professionalId: 'ana',
+    professionalName: 'Ana',
+    serviceId: 's1',
+    serviceName: 'Corte',
+    price: '50000.00',
+    commissionPercentage: '40.00',
+    status: 'CONFIRMED' as any,
+    paymentStatus: 'PARTIAL' as any,
+    paidAmount: '10000.50',
+    ...overrides,
+  });
+
+  it('withState: cada cita lleva su estado, estado de pago y pagado neto (una vez por cita)', () => {
+    const result = settleCommissions(
+      [line(), line({ serviceId: 's2', serviceName: 'Barba' })],
+      { withState: true },
+    );
+    const [appt] = result.professionals[0].appointments;
+    expect(appt).toMatchObject({
+      status: 'CONFIRMED',
+      payment_status: 'PARTIAL',
+      paid_amount: 10000.5,
+      services_total: 100000,
+      professional_total: 40000,
+      business_total: 60000,
+    });
+    expect(appt.lines).toHaveLength(2);
+    // Sin la opción (lo ganado), la cita sale como siempre.
+    const plain = settleCommissions([line()]).professionals[0].appointments[0];
+    expect(plain).not.toHaveProperty('status');
+    expect(plain).not.toHaveProperty('paid_amount');
+  });
+
+  it('withoutBusinessShare quita la clave business_total en todos los niveles (no la deja null)', () => {
+    const full = settleCommissions([line()], { withState: true });
+    const employee = withoutBusinessShare(full);
+    expect(JSON.stringify(employee)).not.toContain('business_total');
+    expect(employee.totals).toEqual({
+      services_total: 50000,
+      professional_total: 20000,
+      appointment_count: 1,
+    });
+    expect(employee.professionals[0]).toMatchObject({
+      professional_id: 'ana',
+      services_total: 50000,
+      professional_total: 20000,
+    });
+    expect(employee.professionals[0].appointments[0]).toMatchObject({
+      status: 'CONFIRMED',
+      paid_amount: 10000.5,
+      lines: [expect.objectContaining({ commission: 20000 })],
+    });
+    // No muta la liquidación original (la del Owner).
+    expect(full.totals.business_total).toBe(30000);
   });
 });

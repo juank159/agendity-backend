@@ -113,7 +113,7 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
     expect(long.status).toBe(400);
   });
 
-  it('el Employee puede llamar a cancel/complete (404 si no es suya) pero no al PATCH genérico (403)', async () => {
+  it('el Employee puede cancelar (404 si no es suya), pero no completar (D-27) ni usar el PATCH genérico (403)', async () => {
     if (!employeeToken) return;
     const t = auth(employeeToken);
     const cancel = await http
@@ -124,7 +124,12 @@ describe('Estados de cita y pagos: validación y permisos (e2e, sin escrituras)'
     const complete = await http
       .patch(`/api/appointments/${MISSING_ID}/complete`)
       .set(t);
-    expect(complete.status).toBe(404);
+    expect(complete.status).toBe(403);
+    expect(complete.body).toMatchObject({
+      statusCode: 403,
+      code: 'FORBIDDEN',
+      message: 'Solo el dueño del negocio puede completar una cita',
+    });
     const patch = await http
       .patch(`/api/appointments/${MISSING_ID}`)
       .set(t)
@@ -394,6 +399,26 @@ describeWritable(
         .send({ cancellation_reason: 'empleado' });
       expect(ok.status).toBe(200);
       expect(ok.body.status).toBe('CANCELLED');
+    });
+
+    it('D-27: el Employee no completa ni su propia cita (403); el Owner sí', async () => {
+      if (!employeeToken) return;
+      const own = await newAppointment(employeeToken, employee.id);
+      await markStarted(own.id);
+      const denied = await http
+        .patch(`/api/appointments/${own.id}/complete`)
+        .set(auth(employeeToken));
+      expect([denied.status, denied.body.code, denied.body.message]).toEqual([
+        403,
+        'FORBIDDEN',
+        'Solo el dueño del negocio puede completar una cita',
+      ]);
+      expect((await statusOf(own.id))[0]).toBe('PENDING');
+      const done = await http
+        .patch(`/api/appointments/${own.id}/complete`)
+        .set(auth(ownerToken));
+      expect(done.status).toBe(200);
+      expect((await statusOf(own.id))[0]).toBe('COMPLETED');
     });
 
     it('completar sin pagar (PENDING → COMPLETED) y pagar después: el estado no cambia (2.15)', async () => {

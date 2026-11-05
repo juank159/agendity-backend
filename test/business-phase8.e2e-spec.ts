@@ -223,8 +223,33 @@ describeWritable(
       const url = (extra = '') =>
         `/api/payments/stats/commissions?startDate=${day(-1)}&endDate=${day(1)}${extra}`;
 
+      // D-27: una cita PENDING del periodo va a `pending` (lo por ganar).
+      const upcoming = await book(`${monday}T16:00:00`);
+      expect(upcoming.status).toBe(201);
+      await ds.query(
+        `UPDATE appointments SET date = now() + interval '1 hour' WHERE id = $1`,
+        [upcoming.body.id],
+      );
+
       const asOwner = await http.get(url()).set(auth(ownerToken));
       expect(asOwner.status).toBe(200);
+      const findAppt = (settlement: any, id: string) =>
+        settlement.professionals
+          .flatMap((p: any) => p.appointments)
+          .find((a: { appointment_id: string }) => a.appointment_id === id);
+      expect(findAppt(asOwner.body, upcoming.body.id)).toBeUndefined();
+      const pendingAppt = findAppt(asOwner.body.pending, upcoming.body.id);
+      expect(pendingAppt).toMatchObject({
+        status: 'PENDING',
+        payment_status: 'PENDING',
+        paid_amount: 0,
+        services_total: servicePrice,
+      });
+      expect(
+        pendingAppt.professional_total + pendingAppt.business_total,
+      ).toBeCloseTo(servicePrice, 2);
+      expect(asOwner.body.pending.totals).toHaveProperty('business_total');
+      expect(findAppt(asOwner.body.pending, booked.body.id)).toBeUndefined();
       const pro = asOwner.body.professionals.find(
         (p: { professional_id: string }) => p.professional_id === employee.id,
       );
@@ -240,6 +265,14 @@ describeWritable(
 
       const asEmployee = await http.get(url()).set(auth(employeeToken));
       expect(asEmployee.status).toBe(200);
+      // D-27: sin la parte del negocio en ningún nivel (ni en `pending`).
+      expect(JSON.stringify(asEmployee.body)).not.toContain('business_total');
+      expect(findAppt(asEmployee.body, booked.body.id)).toMatchObject({
+        services_total: servicePrice,
+      });
+      expect(findAppt(asEmployee.body.pending, upcoming.body.id)).toMatchObject(
+        { status: 'PENDING', paid_amount: 0 },
+      );
       expect(
         asEmployee.body.professionals.every(
           (p: { professional_id: string }) => p.professional_id === employee.id,

@@ -663,6 +663,33 @@ describeWritable(
       expect([removal.status, removal.code]).toEqual(['rejected', 'FORBIDDEN']);
     });
 
+    it('D-27: la empleada no completa por la bandeja (ni su cita): esa operación se rechaza y la tanda sigue', async () => {
+      const appt = await newAppointment(employeeId, `${MONDAY}T09:00:00`);
+      await ds.query(
+        `UPDATE appointments SET date = now() - interval '1 hour' WHERE id = $1`,
+        [appt.id],
+      );
+      const [complete, other] = await push(employeeToken, [
+        m('appointment.complete', appt.id),
+        m('client.update', clientId, { lastname: 'Tras completar' }),
+      ]);
+      expect(complete).toMatchObject({
+        status: 'rejected',
+        code: 'FORBIDDEN',
+        message: 'Solo el dueño del negocio puede completar una cita',
+      });
+      expect(other.status).toBe('applied');
+      const [row] = await ds.query(
+        'SELECT status FROM appointments WHERE id = $1',
+        [appt.id],
+      );
+      expect(row.status).toBe('PENDING');
+      const [byOwner] = await push(ownerToken, [
+        m('appointment.complete', appt.id),
+      ]);
+      expect(byOwner.status).toBe('applied');
+    });
+
     it('idempotencia: el mismo lote dos veces da los mismos resultados y ninguna fila de más', async () => {
       const batch = [
         m('client.create', randomUUID(), {

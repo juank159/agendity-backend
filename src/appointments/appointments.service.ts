@@ -68,6 +68,7 @@ import {
 } from './appointment-slot';
 import {
   assertCancellable,
+  assertCanComplete,
   assertDeletable,
   assertTransition,
   statusAfterPayment,
@@ -1137,13 +1138,19 @@ export class AppointmentsService {
     });
   }
 
-  /** Completa una cita PENDING o CONFIRMED (→ COMPLETED; sin pagar se paga después, 2.15). */
-  complete(
+  /**
+   * Completa una cita PENDING o CONFIRMED (→ COMPLETED; sin pagar se paga
+   * después, 2.15). Solo el Owner (D-27): un Employee recibe 403 antes de
+   * leer nada. Es el único camino a COMPLETED junto con el PATCH genérico
+   * (`update`, solo Owner); lo usan la API y `/sync/push`.
+   */
+  async complete(
     id: string,
     scope: AppointmentScope,
     // 10.01b: hora del dispositivo si se completó sin conexión.
     now?: Date,
   ): Promise<Appointment> {
+    assertCanComplete(!!scope.professionalId);
     return this.changeStatus(id, scope, AppointmentStatus.COMPLETED, {}, now);
   }
 
